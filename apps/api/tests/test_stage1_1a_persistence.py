@@ -6,7 +6,7 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -179,21 +179,20 @@ async def test_session_budget_is_one_to_one_with_session(db_session: AsyncSessio
 
     assert graph.budget.session_id == graph.interview_session.id
 
-    duplicate_budget = SessionBudget(
-        session_id=graph.interview_session.id,
-        max_duration_seconds=1_800,
-        max_probes=1,
-        max_deep_reasoning_calls=1,
-        max_strong_reasoning_calls=0,
-        max_vision_calls=0,
-        soft_monetary_budget=Decimal("1.0000"),
-        hard_monetary_budget=Decimal("2.0000"),
-        realtime_reserved_budget=Decimal("0.5000"),
-    )
-    db_session.add(duplicate_budget)
-
     with pytest.raises(IntegrityError):
-        await db_session.flush()
+        await db_session.execute(
+            insert(SessionBudget).values(
+                session_id=graph.interview_session.id,
+                max_duration_seconds=1_800,
+                max_probes=1,
+                max_deep_reasoning_calls=1,
+                max_strong_reasoning_calls=0,
+                max_vision_calls=0,
+                soft_monetary_budget=Decimal("1.0000"),
+                hard_monetary_budget=Decimal("2.0000"),
+                realtime_reserved_budget=Decimal("0.5000"),
+            ),
+        )
 
 
 async def test_interview_event_requires_valid_session_provenance(
@@ -252,6 +251,26 @@ async def test_transcript_segment_references_session_and_event_provenance(
     assert segment.interview_event_id == event.id
 
 
+async def test_transcript_segment_rejects_event_from_different_session(
+    db_session: AsyncSession,
+) -> None:
+    session_a = await create_stage1_graph(db_session)
+    session_b = await create_stage1_graph(db_session)
+    event_from_b = await add_event(db_session, session_b, server_sequence=1)
+
+    with pytest.raises(IntegrityError):
+        await ObservationRepository(db_session).add_transcript_segment(
+            session_id=session_a.interview_session.id,
+            event_id=event_from_b.id,
+            speaker="CANDIDATE",
+            sequence=1,
+            started_at=datetime.now(UTC),
+            text="This segment should not cross sessions.",
+            interview_stage="PROBLEM_UNDERSTANDING",
+            interview_state_version=0,
+        )
+
+
 async def test_code_snapshot_references_session_and_event_provenance(
     db_session: AsyncSession,
 ) -> None:
@@ -275,6 +294,30 @@ async def test_code_snapshot_references_session_and_event_provenance(
 
     assert snapshot.interview_session_id == graph.interview_session.id
     assert snapshot.created_from_event_id == event.id
+
+
+async def test_code_snapshot_rejects_created_from_event_from_different_session(
+    db_session: AsyncSession,
+) -> None:
+    session_a = await create_stage1_graph(db_session)
+    session_b = await create_stage1_graph(db_session)
+    event_from_b = await add_event(
+        db_session,
+        session_b,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+
+    with pytest.raises(IntegrityError):
+        await ObservationRepository(db_session).add_code_snapshot(
+            session_id=session_a.interview_session.id,
+            version_number=1,
+            language="cpp",
+            source_code="int main() { return 0; }",
+            content_hash="sha256:cross-session",
+            created_from_event_id=event_from_b.id,
+        )
 
 
 async def test_successive_code_snapshots_are_unambiguous(
@@ -317,6 +360,84 @@ async def test_successive_code_snapshots_are_unambiguous(
     assert first_snapshot.version_number == 1
     assert second_snapshot.version_number == 2
     assert second_snapshot.parent_snapshot_id == first_snapshot.id
+
+
+async def test_event_accepts_code_snapshot_from_same_session(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    snapshot_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    snapshot = await ObservationRepository(db_session).add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:same-session",
+        created_from_event_id=snapshot_event.id,
+    )
+    now = datetime.now(UTC)
+    event = InterviewEvent(
+        interview_session_id=graph.interview_session.id,
+        user_id=graph.user.id,
+        event_type="MEANINGFUL_CODE_CHANGE",
+        source="NATIVE_EDITOR",
+        occurred_at=now,
+        received_at=now,
+        server_sequence=2,
+        interview_state_version=0,
+        code_snapshot_id=snapshot.id,
+        schema_version="interview.event.v1",
+    )
+    db_session.add(event)
+
+    await db_session.flush()
+
+    assert event.code_snapshot_id == snapshot.id
+
+
+async def test_event_rejects_code_snapshot_from_different_session(
+    db_session: AsyncSession,
+) -> None:
+    session_a = await create_stage1_graph(db_session)
+    session_b = await create_stage1_graph(db_session)
+    snapshot_event_from_b = await add_event(
+        db_session,
+        session_b,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    snapshot_from_b = await ObservationRepository(db_session).add_code_snapshot(
+        session_id=session_b.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:session-b",
+        created_from_event_id=snapshot_event_from_b.id,
+    )
+    now = datetime.now(UTC)
+    event = InterviewEvent(
+        interview_session_id=session_a.interview_session.id,
+        user_id=session_a.user.id,
+        event_type="MEANINGFUL_CODE_CHANGE",
+        source="NATIVE_EDITOR",
+        occurred_at=now,
+        received_at=now,
+        server_sequence=1,
+        interview_state_version=0,
+        code_snapshot_id=snapshot_from_b.id,
+        schema_version="interview.event.v1",
+    )
+    db_session.add(event)
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 async def test_user_delete_cascades_session_owned_observations(

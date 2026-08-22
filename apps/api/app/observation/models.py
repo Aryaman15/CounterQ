@@ -50,10 +50,21 @@ class InterviewEvent(Base):
             name="fk_interview_events_session_user",
             ondelete="CASCADE",
         ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "code_snapshot_id"],
+            ["code_snapshots.interview_session_id", "code_snapshots.id"],
+            name="fk_interview_events_session_code_snapshot",
+            ondelete="SET NULL",
+        ),
         CheckConstraint(_in_values("event_type", EVENT_TYPES), name="event_type"),
         CheckConstraint(_in_values("source", EVENT_SOURCES), name="source"),
         CheckConstraint("server_sequence > 0", name="server_sequence_positive"),
         CheckConstraint("interview_state_version >= 0", name="interview_state_version_nonnegative"),
+        UniqueConstraint(
+            "interview_session_id",
+            "id",
+            name="uq_interview_events_session_id",
+        ),
         UniqueConstraint(
             "interview_session_id",
             "server_sequence",
@@ -123,6 +134,7 @@ class InterviewEvent(Base):
     )
     transcript_segment: Mapped[TranscriptSegment | None] = relationship(
         back_populates="interview_event",
+        foreign_keys="TranscriptSegment.interview_event_id",
         uselist=False,
     )
     created_code_snapshot: Mapped[CodeSnapshot | None] = relationship(
@@ -149,6 +161,12 @@ class TranscriptSegment(Base):
             name="provider_confidence_unit_interval",
         ),
         CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_started"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "interview_event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_transcript_segments_session_event",
+            ondelete="CASCADE",
+        ),
         UniqueConstraint("interview_event_id", name="uq_transcript_segments_event"),
         UniqueConstraint(
             "interview_session_id",
@@ -187,13 +205,27 @@ class TranscriptSegment(Base):
     )
 
     interview_session: Mapped[InterviewSession] = relationship(back_populates="transcript_segments")
-    interview_event: Mapped[InterviewEvent] = relationship(back_populates="transcript_segment")
+    interview_event: Mapped[InterviewEvent] = relationship(
+        back_populates="transcript_segment",
+        foreign_keys=[interview_event_id],
+    )
 
 
 class CodeSnapshot(Base):
     __tablename__ = "code_snapshots"
     __table_args__ = (
         CheckConstraint("version_number > 0", name="version_number_positive"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "created_from_event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_code_snapshots_session_created_from_event",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "interview_session_id",
+            "id",
+            name="uq_code_snapshots_session_id",
+        ),
         UniqueConstraint(
             "interview_session_id",
             "version_number",
