@@ -15,4 +15,3 @@ async def check_redis(client: Redis | None = None) -> bool:
     finally:
         if client is None:
             await active_client.aclose()
-

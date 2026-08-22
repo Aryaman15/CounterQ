@@ -1,2 +1,1 @@
 """Future observation module boundary."""
-

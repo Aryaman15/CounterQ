@@ -22,4 +22,3 @@ async def health() -> HealthResponse:
         service=settings.app_name,
         environment=settings.app_env,
     )
-

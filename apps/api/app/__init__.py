@@ -1,2 +1,1 @@
 """CounterQ backend application package."""
-

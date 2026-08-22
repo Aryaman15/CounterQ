@@ -13,4 +13,3 @@ async def test_fastapi_app_starts_and_health_endpoint_succeeds() -> None:
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
     assert "x-request-id" in response.headers
-

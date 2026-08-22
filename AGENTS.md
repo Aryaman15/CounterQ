@@ -3,7 +3,7 @@
 **File:** `AGENTS.md`  
 **Status:** Frozen Phase 1 Repository Instructions  
 **Applies to:** entire CounterQ repository  
-**Current Stage:** Stage 0 — Repository Foundation
+**Current Stage:** Stage 1 — Core Interaction Spike
 
 This file governs how Codex works inside CounterQ.
 
@@ -1449,13 +1449,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 0 — Repository Foundation
+Stage 1 — Core Interaction Spike
 
 Current Goal:
-Establish the repository and local-development foundation required
-for the CounterQ Core Interaction Spike.
-
-Do not implement Stage 1 product behavior unless explicitly tasked.
+Prove that CounterQ can observe candidate speech/code, reason over
+the exact candidate context, wait appropriately, and deliver or suppress
+a relevant technical question with correct causal provenance.
 ```
 
 Update only this small section as implementation progresses.

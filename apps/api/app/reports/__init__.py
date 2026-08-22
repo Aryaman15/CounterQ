@@ -1,2 +1,1 @@
 """Future reports module boundary."""
-

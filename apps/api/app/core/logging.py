@@ -58,4 +58,3 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
             _request_id.reset(token)
         response.headers["x-request-id"] = request_id
         return response
-
