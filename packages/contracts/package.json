@@ -1,0 +1,14 @@
+{
+  "name": "@counterq/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "openapi-typescript ./schemas/openapi.json -o ./generated/openapi.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.10.1",
+    "typescript": "^5.9.3"
+  }
+}
+

@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @counterq/web lint
+      - run: pnpm --filter @counterq/web typecheck
+      - run: pnpm --filter @counterq/web test
+      - run: pnpm --filter @counterq/web build
+
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: counterq
+          POSTGRES_PASSWORD: counterq
+          POSTGRES_DB: counterq
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U counterq -d counterq"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://counterq:counterq@localhost:5432/counterq
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --directory apps/api --locked
+      - run: uv run --directory apps/api ruff check .
+      - run: uv run --directory apps/api mypy app tests
+      - run: uv run --directory apps/api alembic upgrade head
+      - run: uv run --directory apps/api pytest
+
+  contracts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: pnpm
+      - uses: astral-sh/setup-uv@v5
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --directory apps/api --locked
+      - run: pnpm run contracts
+      - run: git diff --exit-code packages/contracts/schemas/openapi.json packages/contracts/generated/openapi.ts
+

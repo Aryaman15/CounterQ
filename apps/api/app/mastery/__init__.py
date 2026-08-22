@@ -1,0 +1,2 @@
+"""Future mastery module boundary."""
+

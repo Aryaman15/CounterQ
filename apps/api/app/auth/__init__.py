@@ -1,0 +1,2 @@
+"""Future auth module boundary."""
+

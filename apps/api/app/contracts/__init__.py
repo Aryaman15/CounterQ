@@ -1,0 +1,2 @@
+"""Contract generation helpers."""
+

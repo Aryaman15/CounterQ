@@ -1,0 +1,2 @@
+"""Future CounterMap module boundary."""
+

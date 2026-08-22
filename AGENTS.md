@@ -1091,53 +1091,45 @@ When permissible, real failures should become regression fixtures.
 
 # 43. Repository commands
 
-**TO BE FILLED DURING STAGE 0.**
-
-Do not invent commands before the repository establishes them.
-
-Stage 0 must update this section immediately when commands exist.
-
 ```text
 Bootstrap:
-TO BE FILLED DURING STAGE 0
+pnpm run bootstrap
 
 Frontend dev:
-TO BE FILLED DURING STAGE 0
+pnpm run dev:web
 
 API dev:
-TO BE FILLED DURING STAGE 0
+pnpm run dev:api
 
 Worker:
-TO BE FILLED DURING STAGE 0
+pnpm run dev:worker
 
 Run all tests:
-TO BE FILLED DURING STAGE 0
+pnpm run test
 
 Frontend tests:
-TO BE FILLED DURING STAGE 0
+pnpm run test:frontend
 
 Backend tests:
-TO BE FILLED DURING STAGE 0
+pnpm run test:backend
 
 Lint:
-TO BE FILLED DURING STAGE 0
+pnpm run lint
 
 Typecheck:
-TO BE FILLED DURING STAGE 0
+pnpm run typecheck
 
 Generate contracts:
-TO BE FILLED DURING STAGE 0
+pnpm run contracts
 
 Run migrations:
-TO BE FILLED DURING STAGE 0
+pnpm run migrate
 
 Create migration:
-TO BE FILLED DURING STAGE 0
+pnpm run migrate:create -- "message"
 ```
 
-Codex must not claim these commands succeeded until they actually exist and were run.
-
-Stage 0 must replace every placeholder with the real command as soon as it is established.
+Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
 
 If repository commands later change, update this section in the same task so `AGENTS.md` never points Codex at stale commands.
 
