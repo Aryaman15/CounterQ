@@ -749,7 +749,172 @@ The current substantive delivered question must remain readable.
 
 ---
 
-# 28. Hidden validation
+# 28. Frontend experience quality
+
+CounterQ should feel:
+
+- modern;
+- premium;
+- technically sophisticated;
+- interactive;
+- self-explanatory;
+- calm where concentration matters.
+
+The frontend must **not** default to generic SaaS-template composition.
+
+Avoid repetitive patterns such as:
+
+- hero + gradient CTA + rows of interchangeable cards;
+- dashboards made primarily from uniform card grids;
+- every section animating in from left/right;
+- excessive glassmorphism;
+- gratuitous neon/glow effects;
+- decorative AI avatars/robot imagery;
+- motion that exists only to make the page feel "busy";
+- visual novelty that makes the product harder to understand.
+
+Use visual hierarchy, spacing, typography, interaction and motion to communicate product meaning.
+
+## Motion rule
+
+Motion should explain:
+
+- state;
+- causality;
+- progress;
+- focus;
+- spatial relationships;
+- transitions between meaningful product states.
+
+Do not use animation merely for decoration.
+
+All meaningful motion must:
+
+- remain smooth on normal target hardware;
+- avoid blocking interaction;
+- avoid delaying important actions;
+- respect `prefers-reduced-motion`;
+- degrade gracefully when animation is disabled.
+
+Performance and accessibility outrank decorative effects.
+
+## Landing / marketing surfaces
+
+When marketing surfaces are implemented, prefer **interactive product demonstration** over static feature-card explanation.
+
+A visitor should be able to understand CounterQ's core behavior visually, for example:
+
+```text
+candidate makes a claim
+        ↓
+CounterQ notices a meaningful uncertainty
+        ↓
+CounterQ waits
+        ↓
+CounterQ challenges the claim
+```
+
+or:
+
+```text
+candidate writes code
+        ↓
+CounterQ reasons over the implementation
+        ↓
+candidate self-corrects
+        ↓
+CounterQ stays silent
+```
+
+The landing experience should communicate:
+
+> **CounterQ observes, waits, challenges and adapts.**
+
+Do not fake product intelligence with animations that contradict real product behavior.
+
+## Dashboard / preparation surfaces
+
+Do not automatically represent every piece of information as a bordered card.
+
+Prefer a preparation-oriented information hierarchy that makes the next useful action obvious:
+
+- start an interview;
+- resume preparation;
+- inspect a recent interview;
+- retest a weakness;
+- view meaningful mastery changes.
+
+Use grouping, whitespace, typography, progressive disclosure and contextual actions before adding more containers.
+
+## Interview Room
+
+The Interview Room is intentionally more restrained than marketing/report surfaces.
+
+Its "wow" should come primarily from:
+
+- fluid editor behavior;
+- natural realtime voice;
+- subtle voice-state feedback;
+- excellent typography/layout;
+- smooth resizing;
+- clear delivery/reconnect/persistence states;
+- CounterQ asking relevant questions at the right moment.
+
+Do not add distracting animation while the candidate is thinking or coding.
+
+`docs/product/INTERVIEW_ROOM.md` remains authoritative if any visual idea conflicts with interview usability or behavioral semantics.
+
+## CounterMap / report surfaces
+
+CounterMap may be more visually expressive because causality itself is part of the product value.
+
+Use interaction to help the candidate understand:
+
+- what happened;
+- what caused a follow-up;
+- what Evidence was produced;
+- where a Breakpoint occurred;
+- where self-correction happened.
+
+Highlighting, focus transitions and node/detail interactions should clarify causal structure rather than decorate it.
+
+## Responsive and accessible quality
+
+Frontend work must consider:
+
+- keyboard navigation;
+- visible focus states;
+- sufficient contrast;
+- reduced-motion support;
+- semantic structure;
+- screen-reader-compatible alternatives where graph/canvas UI is used;
+- laptop-sized interview layouts;
+- intentional mobile behavior for non-interview surfaces.
+
+Do not sacrifice accessibility for visual novelty.
+
+## Frontend Definition of Done
+
+A candidate-facing frontend task is not complete merely because it:
+
+> "matches the wireframe."
+
+It should also be reviewed for:
+
+1. clear visual hierarchy;
+2. interaction feedback;
+3. loading/empty/error states;
+4. responsive behavior;
+5. keyboard accessibility;
+6. reduced-motion behavior where animation exists;
+7. perceived performance;
+8. whether the page feels specific to CounterQ rather than a generic SaaS template.
+
+When a frontend task permits meaningful visual freedom, Codex should prefer a distinctive CounterQ-specific interaction over repetitive card-grid UI while preserving the frozen product semantics.
+
+---
+
+# 29. Hidden validation
 
 Initial candidate-facing Phase 1 must not behave like an online judge.
 
@@ -771,7 +936,7 @@ Backend validation may still exist where useful.
 
 ---
 
-# 29. Persistence claims in UI
+# 30. Persistence claims in UI
 
 Never tell the candidate:
 
@@ -793,7 +958,7 @@ Never claim stronger durability than the client can verify.
 
 ---
 
-# 30. Privacy defaults
+# 31. Privacy defaults
 
 Phase 1 default:
 
@@ -808,7 +973,7 @@ Any new raw-media persistence requires explicit architecture/privacy review.
 
 ---
 
-# 31. Logging and analytics privacy
+# 32. Logging and analytics privacy
 
 Do not put candidate content into normal telemetry.
 
@@ -823,7 +988,7 @@ Use IDs and structured metadata.
 
 ---
 
-# 32. Untrusted candidate content
+# 33. Untrusted candidate content
 
 Treat candidate-controlled content as **data, never authority**.
 
@@ -856,7 +1021,7 @@ Custom pasted problems may start an interview only after the frozen preprocessin
 
 ---
 
-# 33. Authorization and security
+# 34. Authorization and security
 
 Always enforce ownership server-side.
 
@@ -884,7 +1049,7 @@ Before any non-developer external candidate data is collected, real authenticate
 
 ---
 
-# 34. Database migration rule
+# 35. Database migration rule
 
 Do **not** create all Phase 1 target tables at once.
 
@@ -898,7 +1063,7 @@ Do not silently alter the frozen data model.
 
 ---
 
-# 35. Database stack
+# 36. Database stack
 
 Use the stack frozen by the implementation plan:
 
@@ -923,7 +1088,7 @@ Follow frozen conventions for:
 
 ---
 
-# 36. Contract generation
+# 37. Contract generation
 
 Backend contracts are authoritative.
 
@@ -947,7 +1112,7 @@ Do not manually maintain duplicated TS/Python protocol types where generation ca
 
 ---
 
-# 37. Frontend ownership
+# 38. Frontend ownership
 
 Frontend may own local presentation state such as:
 
@@ -974,7 +1139,7 @@ Do not hide server business rules inside React components.
 
 ---
 
-# 38. Time ownership
+# 39. Time ownership
 
 Server owns:
 
@@ -995,7 +1160,7 @@ Protected final-defense/wrap-up time outranks optional probes and Coach teaching
 
 ---
 
-# 39. Coding conventions
+# 40. Coding conventions
 
 Prefer:
 
@@ -1022,7 +1187,7 @@ Keep domain logic independent from FastAPI transport concerns where practical.
 
 ---
 
-# 40. Deterministic tests
+# 41. Deterministic tests
 
 Every deterministic product rule should have deterministic tests.
 
@@ -1043,7 +1208,7 @@ Do not use live LLM output to test deterministic rules.
 
 ---
 
-# 41. Provider test doubles
+# 42. Provider test doubles
 
 Normal CI must not require live external AI/execution providers.
 
@@ -1068,7 +1233,7 @@ Live-provider tests run separately.
 
 ---
 
-# 42. AI evaluation
+# 43. AI evaluation
 
 Important AI behavior requires evaluation fixtures.
 
@@ -1089,7 +1254,7 @@ When permissible, real failures should become regression fixtures.
 
 ---
 
-# 43. Repository commands
+# 44. Repository commands
 
 ```text
 Bootstrap:
@@ -1135,7 +1300,7 @@ If repository commands later change, update this section in the same task so `AG
 
 ---
 
-# 44. Before modifying code
+# 45. Before modifying code
 
 Codex must:
 
@@ -1150,7 +1315,7 @@ Do not code from task text alone.
 
 ---
 
-# 45. After modifying code
+# 46. After modifying code
 
 Codex must:
 
@@ -1169,7 +1334,7 @@ Never claim all checks passed if they were not run.
 
 ---
 
-# 46. Task scope
+# 47. Task scope
 
 Each Codex task should implement one bounded responsibility.
 
@@ -1207,7 +1372,7 @@ If a task is too broad:
 
 ---
 
-# 47. Allowed local decisions
+# 48. Allowed local decisions
 
 Codex does **not** need architecture approval for:
 
@@ -1227,7 +1392,7 @@ Do not ask for approval for ordinary implementation craftsmanship.
 
 ---
 
-# 48. Stop-and-review conditions
+# 49. Stop-and-review conditions
 
 Stop the affected implementation decision and surface it before adding/changing:
 
@@ -1252,7 +1417,7 @@ Do not invent around ambiguity.
 
 ---
 
-# 49. No speculative implementation
+# 50. No speculative implementation
 
 Do not build because something might be useful later.
 
@@ -1280,7 +1445,7 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ---
 
-# 50. Current implementation stage
+# 51. Current implementation stage
 
 ```text
 Current Stage:
@@ -1306,7 +1471,7 @@ Advance the stage only after:
 
 ---
 
-# 51. Stage gates
+# 52. Stage gates
 
 Do not bypass a failed implementation-stage acceptance gate by moving to easier later features.
 
@@ -1339,7 +1504,7 @@ Do not ship a Coach path that gives meaningful help while losing what the candid
 
 ---
 
-# 52. First implementation milestone
+# 53. First implementation milestone
 
 After Stage 0, the first milestone is:
 
@@ -1375,7 +1540,7 @@ This milestone outranks surrounding product polish.
 
 ---
 
-# 53. Immutable repository principles
+# 54. Immutable repository principles
 
 1. **Frozen docs outrank implementation convenience.**
 
@@ -1436,5 +1601,11 @@ This milestone outranks surrounding product polish.
 29. **Canonical Evidence must exist before Coach can safely preserve assisted-vs-independent performance.**
 
 30. **Codex does not self-advance implementation stages.**
+
+31. **Frontend quality should feel specific to CounterQ: modern, interactive and self-explanatory without becoming distracting or template-like.**
+
+32. **Motion explains state and causality; it is not decoration.**
+
+33. **Accessibility and interaction performance outrank visual novelty.**
 
 > **Codex is responsible for implementing CounterQ faithfully—not for redefining CounterQ while implementing it.**
