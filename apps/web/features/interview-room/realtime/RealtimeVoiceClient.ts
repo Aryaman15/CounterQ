@@ -40,6 +40,9 @@ export class RealtimeVoiceClient {
   private dataChannel: RTCDataChannel | null = null;
   private remoteAudio: HTMLAudioElement | null = null;
   private muted = false;
+  private activeResponseId: string | null = null;
+  private activeAssistantItemId: string | null = null;
+  private outputStartedAtMs: number | null = null;
 
   constructor(options: RealtimeVoiceClientOptions) {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, "");
@@ -146,15 +149,46 @@ export class RealtimeVoiceClient {
   }
 
   speakAuthorizedDevelopmentPhrase(
-    phrase = "Walk me through the approach you're considering.",
+    phrase: string,
+    metadata: Record<string, string> = {},
   ): void {
     this.sendProviderEvent({
+      event_id: `counterq-dev-phrase-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
       type: "response.create",
       response: {
         output_modalities: ["audio"],
+        metadata,
         instructions: `Speak exactly this sentence and nothing else: "${phrase}"`,
       },
     });
+  }
+
+  interruptActiveOutputForCandidateSpeech(): void {
+    if (!this.activeResponseId && !this.activeAssistantItemId) {
+      return;
+    }
+
+    if (this.activeResponseId) {
+      this.sendProviderEvent({
+        event_id: this.providerEventId("cancel"),
+        type: "response.cancel",
+        response_id: this.activeResponseId,
+      });
+    }
+    this.sendProviderEvent({
+      event_id: this.providerEventId("clear"),
+      type: "output_audio_buffer.clear",
+    });
+
+    if (this.activeAssistantItemId) {
+      this.sendProviderEvent({
+        event_id: this.providerEventId("truncate"),
+        type: "conversation.item.truncate",
+        item_id: this.activeAssistantItemId,
+        content_index: 0,
+        audio_end_ms: this.elapsedOutputAudioMs(),
+      });
+    }
   }
 
   disconnect(): void {
@@ -183,6 +217,9 @@ export class RealtimeVoiceClient {
     }
     this.remoteAudio = null;
     this.muted = false;
+    this.activeResponseId = null;
+    this.activeAssistantItemId = null;
+    this.outputStartedAtMs = null;
     if (emitDisconnected) {
       this.emit({ type: "disconnected" });
     }
@@ -204,6 +241,7 @@ export class RealtimeVoiceClient {
     try {
       const raw = JSON.parse(String(event.data)) as unknown;
       for (const normalized of normalizeRealtimeEvent(raw)) {
+        this.updateProviderPlaybackState(normalized);
         this.emit(normalized);
       }
     } catch {
@@ -233,6 +271,42 @@ export class RealtimeVoiceClient {
   private handleFatalTransportFailure(message: string): void {
     this.releaseResources({ emitDisconnected: false });
     this.emit({ type: "error", message });
+  }
+
+  private updateProviderPlaybackState(event: NormalizedRealtimeEvent): void {
+    if (event.type === "counterq_response_created") {
+      this.activeResponseId = event.responseId;
+      this.activeAssistantItemId = event.itemId ?? this.activeAssistantItemId;
+      return;
+    }
+    if (event.type === "counterq_output_started") {
+      this.activeResponseId = event.responseId ?? this.activeResponseId;
+      this.activeAssistantItemId = event.itemId ?? this.activeAssistantItemId;
+      if (event.playbackStarted) {
+        this.outputStartedAtMs = this.nowMs();
+      }
+      return;
+    }
+    if (event.type === "counterq_output_ended" || event.type === "counterq_output_interrupted") {
+      this.activeResponseId = null;
+      this.activeAssistantItemId = null;
+      this.outputStartedAtMs = null;
+    }
+  }
+
+  private elapsedOutputAudioMs(): number {
+    if (this.outputStartedAtMs === null) {
+      return 0;
+    }
+    return Math.max(0, Math.floor(this.nowMs() - this.outputStartedAtMs));
+  }
+
+  private nowMs(): number {
+    return globalThis.performance?.now?.() ?? Date.now();
+  }
+
+  private providerEventId(purpose: string): string {
+    return `counterq-${purpose}-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`;
   }
 
   private waitForDataChannelOpen(dataChannel: RTCDataChannel): Promise<void> {

@@ -29,6 +29,27 @@ const observedRealtimeSession = {
   interruptResponse: true,
 };
 
+const observedCanonicalSession = {
+  sessionId: "session-1",
+  controlConnected: true,
+  pendingDurableMessages: 1,
+  lastServerSequence: 17,
+  stateVersion: 3,
+  lastCandidateFinal: {
+    providerItemId: "item-1",
+    eventId: "event-1",
+    transcriptSegmentId: "segment-1",
+    persistence: "ACKNOWLEDGED" as const,
+  },
+  lastDelivery: {
+    promptId: "prompt-1",
+    deliveryId: "delivery-1",
+    deliveryState: "DELIVERED",
+    providerResponseId: "response-1",
+    actualTranscriptId: "segment-2",
+  },
+};
+
 vi.mock("@monaco-editor/react", () => ({
   default: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
     <textarea
@@ -123,6 +144,7 @@ describe("Interview Room demo", () => {
         partialTranscript="I am thinking about"
         lastFinalTranscript="I am thinking about the window."
         sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
         onEnableMicrophone={noop}
         onMute={noop}
@@ -145,6 +167,10 @@ describe("Interview Room demo", () => {
     expect(screen.getByText("I am thinking about the window.")).toBeInTheDocument();
     expect(screen.getByText("realtime / gpt-live-transcribe")).toBeInTheDocument();
     expect(screen.getByText(/semantic_vad; auto response disabled; interruption enabled/i)).toBeInTheDocument();
+    expect(screen.getByText(/session-1; control connected; pending 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/server sequence 17; state version 3/i)).toBeInTheDocument();
+    expect(screen.getByText(/ACKNOWLEDGED; item item-1; event event-1; segment segment-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/prompt prompt-1; delivery delivery-1; state DELIVERED/i)).toBeInTheDocument();
     expect(screen.getByText("Listening")).toBeInTheDocument();
 
     rerender(
@@ -155,6 +181,7 @@ describe("Interview Room demo", () => {
         partialTranscript=""
         lastFinalTranscript="Final transcript arrived."
         sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
         onEnableMicrophone={noop}
         onMute={noop}

@@ -4,10 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MutableRefObject } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
+import {
+  RealtimeControlClient,
+  type CanonicalControlDebug,
+} from "./RealtimeControlClient";
 import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceClient";
 
 type UseRealtimeVoiceOptions = {
   clientFactory?: () => RealtimeVoiceClient;
+  controlClientFactory?: () => RealtimeControlClient;
 };
 
 type RealtimeActivityState = Exclude<VoicePresenceState, "Muted">;
@@ -19,6 +24,7 @@ export type RealtimeVoiceControls = {
   partialTranscript: string;
   lastFinalTranscript: string;
   sessionDebug: RealtimeSessionDebug;
+  canonicalDebug: CanonicalControlDebug;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -38,7 +44,7 @@ export type RealtimeSessionDebug = {
 export function useRealtimeVoice(
   options: UseRealtimeVoiceOptions = {},
 ): RealtimeVoiceControls {
-  const { clientFactory } = options;
+  const { clientFactory, controlClientFactory } = options;
   const [activityState, setActivityState] = useState<RealtimeActivityState>("Ready");
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -52,8 +58,13 @@ export function useRealtimeVoice(
     createResponse: null,
     interruptResponse: null,
   });
+  const [canonicalDebug, setCanonicalDebug] = useState<CanonicalControlDebug>(
+    emptyCanonicalDebug(),
+  );
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
+  const controlClientRef = useRef<RealtimeControlClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const unsubscribeControlRef = useRef<(() => void) | null>(null);
   const transcriptDraftsRef = useRef(new Map<string, string>());
   const activeTranscriptKeyRef = useRef<string | null>(null);
 
@@ -81,6 +92,8 @@ export function useRealtimeVoice(
         setPartialTranscript,
         setLastFinalTranscript,
         setSessionDebug,
+        clientRef,
+        controlClientRef,
         transcriptDraftsRef,
         activeTranscriptKeyRef,
       });
@@ -89,18 +102,48 @@ export function useRealtimeVoice(
     return client;
   }, [clientFactory]);
 
+  const ensureControlClient = useCallback(() => {
+    if (controlClientRef.current) {
+      return controlClientRef.current;
+    }
+    const controlClient =
+      controlClientFactory?.() ??
+      new RealtimeControlClient({
+        apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
+      });
+    unsubscribeControlRef.current = controlClient.on((event) => {
+      if (event.type === "debug_updated") {
+        setCanonicalDebug(event.debug);
+        return;
+      }
+      if (event.type === "authorized_prompt") {
+        clientRef.current?.speakAuthorizedDevelopmentPhrase(event.prompt.text, {
+          counterq_prompt_id: event.prompt.promptId,
+        });
+        return;
+      }
+      if (event.type === "error") {
+        setErrorMessage(event.message);
+      }
+    });
+    controlClientRef.current = controlClient;
+    return controlClient;
+  }, [controlClientFactory]);
+
   const enableMicrophone = useCallback(async () => {
     setErrorMessage(null);
     setActivityState("Connecting");
+    const controlClient = ensureControlClient();
     const client = ensureClient();
     try {
+      await controlClient.connectDevelopmentInterview();
       await client.connect();
     } catch (error) {
       setActivityState("Error");
       setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
-  }, [ensureClient]);
+  }, [ensureClient, ensureControlClient]);
 
   const mute = useCallback(() => {
     clientRef.current?.setMuted(true);
@@ -113,18 +156,23 @@ export function useRealtimeVoice(
   const disconnect = useCallback(() => {
     unsubscribeRef.current?.();
     unsubscribeRef.current = null;
+    unsubscribeControlRef.current?.();
+    unsubscribeControlRef.current = null;
     clientRef.current?.disconnect();
     clientRef.current = null;
+    controlClientRef.current?.disconnect();
+    controlClientRef.current = null;
     setErrorMessage(null);
     setActivityState("Ready");
     setIsMuted(false);
     setPartialTranscript("");
     transcriptDraftsRef.current.clear();
     activeTranscriptKeyRef.current = null;
+    setCanonicalDebug(emptyCanonicalDebug());
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
-    clientRef.current?.speakAuthorizedDevelopmentPhrase();
+    controlClientRef.current?.requestDevelopmentPrompt();
   }, []);
 
   useEffect(() => disconnect, [disconnect]);
@@ -136,6 +184,7 @@ export function useRealtimeVoice(
     partialTranscript,
     lastFinalTranscript,
     sessionDebug,
+    canonicalDebug,
     enableMicrophone,
     mute,
     unmute,
@@ -151,6 +200,8 @@ type RealtimeEventSetters = {
   setPartialTranscript: (text: string) => void;
   setLastFinalTranscript: (text: string) => void;
   setSessionDebug: (debug: RealtimeSessionDebug) => void;
+  clientRef: MutableRefObject<RealtimeVoiceClient | null>;
+  controlClientRef: MutableRefObject<RealtimeControlClient | null>;
   transcriptDraftsRef: MutableRefObject<Map<string, string>>;
   activeTranscriptKeyRef: MutableRefObject<string | null>;
 };
@@ -163,6 +214,8 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setPartialTranscript,
     setLastFinalTranscript,
     setSessionDebug,
+    clientRef,
+    controlClientRef,
     transcriptDraftsRef,
     activeTranscriptKeyRef,
   } = setters;
@@ -177,10 +230,22 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
   }
   if (event.type === "candidate_speech_started") {
     setActivityState("Listening");
+    clientRef.current?.interruptActiveOutputForCandidateSpeech();
+    controlClientRef.current?.sendCandidateSpeechStarted(null);
     return;
   }
   if (event.type === "counterq_output_started") {
     setActivityState("Speaking");
+    if (event.playbackStarted) {
+      controlClientRef.current?.sendDeliveryStarted(
+        event.responseId ?? null,
+        event.itemId ?? null,
+      );
+    }
+    return;
+  }
+  if (event.type === "counterq_response_created") {
+    controlClientRef.current?.noteProviderResponseCreated(event.responseId, event.itemId);
     return;
   }
   if (
@@ -189,6 +254,24 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     event.type === "candidate_speech_stopped"
   ) {
     setActivityState("Listening");
+    if (event.type === "candidate_speech_stopped") {
+      controlClientRef.current?.sendCandidateSpeechStopped(null);
+    }
+    if (event.type === "counterq_output_ended" && event.playbackComplete) {
+      controlClientRef.current?.sendDeliveryCompleted(event.responseId ?? null);
+    }
+    if (
+      event.type === "counterq_output_interrupted" &&
+      event.confirmedBy &&
+      event.confirmedBy !== "input_audio_buffer.speech_started"
+    ) {
+      controlClientRef.current?.sendDeliveryInterrupted(
+        event.responseId ?? null,
+        event.itemId ?? null,
+        event.confirmedBy,
+        event.audioEndMs ?? null,
+      );
+    }
     return;
   }
   if (event.type === "muted") {
@@ -224,6 +307,19 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
       setPartialTranscript("");
     }
     setLastFinalTranscript(event.text);
+    controlClientRef.current?.sendCandidateTranscriptFinal({
+      providerItemId: event.itemId,
+      contentIndex: event.contentIndex,
+      transcript: event.text,
+    });
+    return;
+  }
+  if (event.type === "counterq_output_transcript_delta") {
+    controlClientRef.current?.noteOutputTranscriptDelta(event.responseId, event.text);
+    return;
+  }
+  if (event.type === "counterq_output_transcript_final") {
+    controlClientRef.current?.noteOutputTranscriptFinal(event.responseId, event.text);
     return;
   }
   if (event.type === "transcript_failed") {
@@ -251,9 +347,33 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setErrorMessage(event.message);
     setActivityState("Error");
     setIsMuted(false);
+    controlClientRef.current?.noteRealtimeDisconnected("voice_error");
   }
 }
 
 function transcriptEventKey(itemId: string | null, contentIndex: number | null): string {
   return `${itemId ?? "latest"}:${contentIndex ?? 0}`;
+}
+
+function emptyCanonicalDebug(): CanonicalControlDebug {
+  return {
+    sessionId: null,
+    controlConnected: false,
+    pendingDurableMessages: 0,
+    lastServerSequence: null,
+    stateVersion: null,
+    lastCandidateFinal: {
+      providerItemId: null,
+      eventId: null,
+      transcriptSegmentId: null,
+      persistence: "PENDING",
+    },
+    lastDelivery: {
+      promptId: null,
+      deliveryId: null,
+      deliveryState: null,
+      providerResponseId: null,
+      actualTranscriptId: null,
+    },
+  };
 }

@@ -2,6 +2,10 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  RealtimeControlClient,
+  type RealtimeControlEvent,
+} from "../features/interview-room/realtime/RealtimeControlClient";
+import {
   RealtimeVoiceClient,
   type RealtimeClientEvent,
 } from "../features/interview-room/realtime/RealtimeVoiceClient";
@@ -56,6 +60,46 @@ class FakeDataChannel {
   }
 }
 
+class FakeControlWebSocket {
+  static readonly instances: FakeControlWebSocket[] = [];
+  readyState: number = WebSocket.CONNECTING;
+  readonly send = vi.fn();
+  readonly close = vi.fn(() => {
+    this.readyState = WebSocket.CLOSED;
+    this.emit("close");
+  });
+  private readonly listeners = new Map<string, Set<EventListener>>();
+
+  constructor(readonly url: string) {
+    FakeControlWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const current = this.listeners.get(type) ?? new Set<EventListener>();
+    current.add(listener);
+    this.listeners.set(type, current);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  open(): void {
+    this.readyState = WebSocket.OPEN;
+    this.emit("open");
+  }
+
+  receive(data: unknown): void {
+    this.emit("message", { data: JSON.stringify(data) } as MessageEvent);
+  }
+
+  private emit(type: string, event: Event = new Event(type)): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(event);
+    }
+  }
+}
+
 class FakePeerConnection {
   connectionState: RTCPeerConnectionState = "connected";
   ontrack: ((event: RTCTrackEvent) => void) | null = null;
@@ -98,6 +142,7 @@ class HookFakeClient {
     this.emit({ type: muted ? "muted" : "unmuted" });
   });
   speakAuthorizedDevelopmentPhrase = vi.fn();
+  interruptActiveOutputForCandidateSpeech = vi.fn();
   private readonly listeners = new Set<(event: RealtimeClientEvent) => void>();
   private connectImpl: () => Promise<void> = async () => {
     this.emit({ type: "connected", session: fakeSessionResponse });
@@ -123,6 +168,43 @@ class HookFakeClient {
   }
 }
 
+class HookFakeControlClient {
+  private connectImpl: () => Promise<typeof fakeDevelopmentBootstrap> = async () =>
+    fakeDevelopmentBootstrap;
+  connectDevelopmentInterview = vi.fn(() => this.connectImpl());
+  disconnect = vi.fn(() => {
+    this.emit({ type: "disconnected" });
+  });
+  sendCandidateSpeechStarted = vi.fn();
+  sendCandidateSpeechStopped = vi.fn();
+  sendCandidateTranscriptFinal = vi.fn();
+  requestDevelopmentPrompt = vi.fn();
+  noteProviderResponseCreated = vi.fn();
+  noteOutputTranscriptDelta = vi.fn();
+  noteOutputTranscriptFinal = vi.fn();
+  sendDeliveryStarted = vi.fn();
+  sendDeliveryCompleted = vi.fn();
+  sendDeliveryInterrupted = vi.fn();
+  noteRealtimeDisconnected = vi.fn();
+  noteRealtimeReconnected = vi.fn();
+  private readonly listeners = new Set<(event: RealtimeControlEvent) => void>();
+
+  setConnectImpl(connectImpl: () => Promise<typeof fakeDevelopmentBootstrap>): void {
+    this.connectImpl = connectImpl;
+  }
+
+  on(listener: (event: RealtimeControlEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  emit(event: RealtimeControlEvent): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
+  }
+}
+
 const fakeSessionResponse = {
   provider: "openai" as const,
   client_secret: "ephemeral",
@@ -140,6 +222,15 @@ const fakeSessionResponse = {
   },
 };
 
+const fakeDevelopmentBootstrap = {
+  interview_session_id: "session-1",
+  current_stage: "IMPLEMENTATION",
+  state_version: 0,
+  deadline_at: "2026-08-24T12:30:00Z",
+  control_websocket_path: "/api/realtime/control/session-1",
+  protocol_version: "counterq.realtime.control.v1" as const,
+};
+
 function mediaStreamFor(track: FakeTrack): MediaStream {
   return {
     getAudioTracks: () => [track],
@@ -147,10 +238,14 @@ function mediaStreamFor(track: FakeTrack): MediaStream {
   } as unknown as MediaStream;
 }
 
-function renderRealtimeHarness(client: HookFakeClient) {
+function renderRealtimeHarness(
+  client: HookFakeClient,
+  controlClient = new HookFakeControlClient(),
+) {
   function Harness() {
     const voice = useRealtimeVoice({
       clientFactory: () => client as unknown as RealtimeVoiceClient,
+      controlClientFactory: () => controlClient as unknown as RealtimeControlClient,
     });
     return (
       <div>
@@ -159,6 +254,8 @@ function renderRealtimeHarness(client: HookFakeClient) {
         <p data-testid="partial-transcript">{voice.partialTranscript}</p>
         <p data-testid="final-transcript">{voice.lastFinalTranscript}</p>
         <p data-testid="session-transcription-model">{voice.sessionDebug.transcriptionModel}</p>
+        <p data-testid="canonical-session">{voice.canonicalDebug.sessionId}</p>
+        <p data-testid="pending-durable">{voice.canonicalDebug.pendingDurableMessages}</p>
         {voice.errorMessage ? <p>{voice.errorMessage}</p> : null}
         <button type="button" onClick={() => void voice.enableMicrophone()}>
           enable
@@ -179,7 +276,7 @@ function renderRealtimeHarness(client: HookFakeClient) {
     );
   }
 
-  return render(<Harness />);
+  return { ...render(<Harness />), controlClient };
 }
 
 function createBrowserClient({
@@ -230,6 +327,7 @@ describe("Realtime voice foundation", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    FakeControlWebSocket.instances.length = 0;
   });
 
   it("starts Ready, not falsely Listening", () => {
@@ -254,6 +352,47 @@ describe("Realtime voice foundation", () => {
     expect(await screen.findByTestId("voice-state")).toHaveTextContent("Connecting");
   });
 
+  it("does not show a control rejection while control startup is still pending", async () => {
+    const client = new HookFakeClient();
+    const controlClient = new HookFakeControlClient();
+    controlClient.setConnectImpl(
+      () =>
+        new Promise(() => {
+          // Startup is still waiting for server_hello; this is pending, not rejected.
+        }),
+    );
+    renderRealtimeHarness(client, controlClient);
+
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Connecting");
+    });
+    expect(screen.queryByText("CounterQ control message was rejected.")).not.toBeInTheDocument();
+  });
+
+  it("waits for control ready before connecting realtime voice", async () => {
+    const order: string[] = [];
+    const client = new HookFakeClient();
+    client.setConnectImpl(async () => {
+      order.push("voice-connected");
+      client.emit({ type: "connected", session: fakeSessionResponse });
+    });
+    const controlClient = new HookFakeControlClient();
+    controlClient.setConnectImpl(async () => {
+      order.push("control-ready");
+      return fakeDevelopmentBootstrap;
+    });
+    renderRealtimeHarness(client, controlClient);
+
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+    expect(order).toEqual(["control-ready", "voice-connected"]);
+  });
+
   it("shows a recoverable Error when microphone permission is denied", async () => {
     const client = new HookFakeClient();
     client.setConnectImpl(async () => {
@@ -270,13 +409,14 @@ describe("Realtime voice foundation", () => {
   });
 
   it("reaches Listening after mocked WebRTC connection succeeds", async () => {
-    renderRealtimeHarness(new HookFakeClient());
+    const { controlClient } = renderRealtimeHarness(new HookFakeClient());
 
     fireEvent.click(screen.getByRole("button", { name: "enable" }));
 
     await waitFor(() => {
       expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
     });
+    expect(controlClient.connectDevelopmentInterview).toHaveBeenCalled();
   });
 
   it("keeps microphone mute separate from provider speech state", async () => {
@@ -328,7 +468,7 @@ describe("Realtime voice foundation", () => {
 
   it("exposes transcript deltas and finals without corrupting voice state", async () => {
     const client = new HookFakeClient();
-    renderRealtimeHarness(client);
+    const { controlClient } = renderRealtimeHarness(client);
     fireEvent.click(screen.getByRole("button", { name: "enable" }));
     await waitFor(() => {
       expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
@@ -362,6 +502,11 @@ describe("Realtime voice foundation", () => {
     expect(screen.getByTestId("partial-transcript")).toHaveTextContent("");
     expect(screen.getByTestId("final-transcript")).toHaveTextContent("hash map lookup");
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    expect(controlClient.sendCandidateTranscriptFinal).toHaveBeenCalledWith({
+      providerItemId: "item_1",
+      contentIndex: 0,
+      transcript: "hash map lookup",
+    });
 
     act(() => {
       client.emit({
@@ -380,6 +525,141 @@ describe("Realtime voice foundation", () => {
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
   });
 
+  it("uses backend-authorized dev prompt text before asking the provider to speak", async () => {
+    const client = new HookFakeClient();
+    const { controlClient } = renderRealtimeHarness(client);
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "phrase" }));
+    expect(controlClient.requestDevelopmentPrompt).toHaveBeenCalled();
+
+    act(() => {
+      controlClient.emit({
+        type: "authorized_prompt",
+        prompt: {
+          promptId: "prompt-1",
+          text: "Walk me through the approach you're considering.",
+        },
+      });
+    });
+
+    expect(client.speakAuthorizedDevelopmentPhrase).toHaveBeenCalledWith(
+      "Walk me through the approach you're considering.",
+      { counterq_prompt_id: "prompt-1" },
+    );
+  });
+
+  it("sends delivery controls only after playback lifecycle events", async () => {
+    const client = new HookFakeClient();
+    const { controlClient } = renderRealtimeHarness(client);
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+
+    act(() => {
+      client.emit({ type: "counterq_response_created", responseId: "resp-1", itemId: "item-a" });
+      client.emit({ type: "counterq_output_started", responseId: "resp-1" });
+    });
+    expect(controlClient.sendDeliveryStarted).not.toHaveBeenCalled();
+
+    act(() => {
+      client.emit({
+        type: "counterq_output_started",
+        responseId: "resp-1",
+        itemId: "item-a",
+        playbackStarted: true,
+      });
+      client.emit({
+        type: "counterq_output_transcript_delta",
+        responseId: "resp-1",
+        itemId: "item-a",
+        contentIndex: 0,
+        text: "Walk ",
+      });
+      client.emit({
+        type: "counterq_output_transcript_final",
+        responseId: "resp-1",
+        itemId: "item-a",
+        contentIndex: 0,
+        text: "Walk me through it.",
+      });
+      client.emit({
+        type: "counterq_output_ended",
+        responseId: "resp-1",
+        itemId: "item-a",
+        playbackComplete: true,
+      });
+    });
+
+    expect(controlClient.noteProviderResponseCreated).toHaveBeenCalledWith("resp-1", "item-a");
+    expect(controlClient.sendDeliveryStarted).toHaveBeenCalledWith("resp-1", "item-a");
+    expect(controlClient.noteOutputTranscriptDelta).toHaveBeenCalledWith("resp-1", "Walk ");
+    expect(controlClient.noteOutputTranscriptFinal).toHaveBeenCalledWith(
+      "resp-1",
+      "Walk me through it.",
+    );
+    expect(controlClient.sendDeliveryCompleted).toHaveBeenCalledWith("resp-1");
+  });
+
+  it("reports confirmed interruption semantics without waiting for control ack", async () => {
+    const client = new HookFakeClient();
+    const { controlClient } = renderRealtimeHarness(client);
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+
+    act(() => {
+      client.emit({ type: "counterq_output_started", responseId: "resp-1" });
+      client.emit({
+        type: "counterq_output_interrupted",
+        responseId: "resp-1",
+        itemId: "item-a",
+        confirmedBy: "input_audio_buffer.speech_started",
+      });
+    });
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    expect(controlClient.sendDeliveryInterrupted).not.toHaveBeenCalled();
+
+    act(() => {
+      client.emit({
+        type: "counterq_output_interrupted",
+        responseId: "resp-1",
+        itemId: "item-a",
+        confirmedBy: "output_audio_buffer.cleared",
+        audioEndMs: 900,
+      });
+    });
+    expect(controlClient.sendDeliveryInterrupted).toHaveBeenCalledWith(
+      "resp-1",
+      "item-a",
+      "output_audio_buffer.cleared",
+      900,
+    );
+  });
+
+  it("candidate speech triggers local provider interruption cleanup", async () => {
+    const client = new HookFakeClient();
+    const { controlClient } = renderRealtimeHarness(client);
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+
+    act(() => {
+      client.emit({ type: "counterq_output_started", playbackStarted: true });
+      client.emit({ type: "candidate_speech_started" });
+    });
+
+    expect(client.interruptActiveOutputForCandidateSpeech).toHaveBeenCalledOnce();
+    expect(controlClient.sendCandidateSpeechStarted).toHaveBeenCalled();
+    expect(controlClient.sendDeliveryInterrupted).not.toHaveBeenCalled();
+  });
+
   it("disconnects client resources on component cleanup", async () => {
     const client = new HookFakeClient();
     const { unmount } = renderRealtimeHarness(client);
@@ -396,7 +676,12 @@ describe("Realtime voice foundation", () => {
   it("normalizes current GA response, interruption, speech, transcript, and audio events", () => {
     expect(normalizeRealtimeEvent({ type: "input_audio_buffer.speech_started" })).toEqual([
       { type: "candidate_speech_started" },
-      { type: "counterq_output_interrupted" },
+      {
+        type: "counterq_output_interrupted",
+        itemId: null,
+        confirmedBy: "input_audio_buffer.speech_started",
+        audioEndMs: null,
+      },
     ]);
     expect(normalizeRealtimeEvent({ type: "input_audio_buffer.speech_stopped" })).toEqual([
       { type: "candidate_speech_stopped" },
@@ -462,16 +747,278 @@ describe("Realtime voice foundation", () => {
     expect(normalizeRealtimeEvent({ type: "response.output_audio.delta" })).toEqual([
       { type: "counterq_output_started" },
     ]);
+    expect(
+      normalizeRealtimeEvent({
+        type: "output_audio_buffer.started",
+        event_id: "event-output-start",
+        response_id: "resp_1",
+        item_id: "item_out",
+      }),
+    ).toEqual([
+      {
+        type: "counterq_output_started",
+        responseId: "resp_1",
+        itemId: "item_out",
+        providerEventId: "event-output-start",
+        playbackStarted: true,
+      },
+    ]);
     expect(normalizeRealtimeEvent({ type: "response.output_audio.done" })).toEqual([
       { type: "counterq_output_ended" },
+    ]);
+    expect(normalizeRealtimeEvent({ type: "output_audio_buffer.stopped" })).toEqual([
+      { type: "counterq_output_ended", playbackComplete: true },
+    ]);
+    expect(
+      normalizeRealtimeEvent({
+        type: "response.output_audio_transcript.delta",
+        response_id: "resp_1",
+        item_id: "item_out",
+        content_index: 0,
+        delta: "Walk",
+      }),
+    ).toEqual([
+      {
+        type: "counterq_output_transcript_delta",
+        text: "Walk",
+        responseId: "resp_1",
+        itemId: "item_out",
+        contentIndex: 0,
+      },
+    ]);
+    expect(
+      normalizeRealtimeEvent({
+        type: "response.output_audio_transcript.done",
+        response_id: "resp_1",
+        item_id: "item_out",
+        content_index: 0,
+        transcript: "Walk me through it.",
+      }),
+    ).toEqual([
+      {
+        type: "counterq_output_transcript_final",
+        text: "Walk me through it.",
+        responseId: "resp_1",
+        itemId: "item_out",
+        contentIndex: 0,
+      },
     ]);
     expect(normalizeRealtimeEvent({ type: "response.done", response: { status: "completed" } }))
       .toEqual([{ type: "counterq_output_ended" }]);
     expect(normalizeRealtimeEvent({ type: "response.done", response: { status: "cancelled" } }))
-      .toEqual([{ type: "counterq_output_interrupted" }]);
+      .toEqual([
+        { type: "counterq_output_interrupted", confirmedBy: "response.done:cancelled" },
+      ]);
     expect(normalizeRealtimeEvent({ type: "output_audio_buffer.cleared" })).toEqual([
-      { type: "counterq_output_interrupted" },
+      {
+        type: "counterq_output_interrupted",
+        confirmedBy: "output_audio_buffer.cleared",
+        audioEndMs: null,
+      },
     ]);
+  });
+
+  it("control client bootstraps, queues final transcripts, resends, and acks", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const storage = new Map<string, string>();
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+      },
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => {
+      expect(FakeControlWebSocket.instances.length).toBe(1);
+    });
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await connectPromise;
+
+    client.sendCandidateTranscriptFinal({
+      providerItemId: "item-1",
+      contentIndex: 0,
+      transcript: "final transcript",
+    });
+
+    expect(socket.send).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"candidate_transcript_finalized"'),
+    );
+    expect(client.pendingCount).toBe(1);
+    const sent = JSON.parse(String(socket.send.mock.calls.at(-1)?.[0])) as Record<string, string>;
+
+    socket.close();
+    const reconnectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => {
+      expect(FakeControlWebSocket.instances.length).toBe(2);
+    });
+    const retrySocket = FakeControlWebSocket.instances[1];
+    retrySocket.open();
+    retrySocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await reconnectPromise;
+
+    expect(retrySocket.send).toHaveBeenCalledWith(expect.stringContaining(sent.client_event_id));
+    retrySocket.receive({
+      type: "durable_event_ack",
+      client_event_id: sent.client_event_id,
+      created: true,
+      interview_event_id: "event-1",
+      transcript_segment_id: "segment-1",
+      server_sequence: 1,
+      interview_state_version: 0,
+    });
+
+    expect(client.pendingCount).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "debug_updated",
+        debug: expect.objectContaining({
+          pendingDurableMessages: 0,
+          lastServerSequence: 1,
+        }),
+      }),
+    );
+  });
+
+  it("queues durable control messages until server hello marks the channel ready", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const storage = new Map<string, string>();
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => {
+          storage.set(key, value);
+        },
+      },
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => {
+      expect(FakeControlWebSocket.instances.length).toBe(1);
+    });
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+
+    client.sendCandidateTranscriptFinal({
+      providerItemId: "provider-item-before-ready",
+      contentIndex: 0,
+      transcript: "final transcript",
+    });
+
+    expect(client.pendingCount).toBe(1);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(events).not.toContainEqual(
+      expect.objectContaining({ type: "error" }),
+    );
+
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    const flushed = JSON.parse(String(socket.send.mock.calls[0]?.[0])) as Record<
+      string,
+      unknown
+    >;
+    await connectPromise;
+
+    expect(flushed).toMatchObject({
+      type: "candidate_transcript_finalized",
+      client_event_id: "ctrl-1-stable-id",
+      client_sequence: 1,
+      idempotency_key: "candidate-transcript:provider-item-before-ready:0",
+    });
+    expect(socket.send).toHaveBeenCalledWith(expect.stringContaining('"type":"client_hello"'));
+
+    socket.receive({
+      type: "durable_event_ack",
+      client_event_id: flushed.client_event_id,
+      created: true,
+      interview_event_id: "event-1",
+      transcript_segment_id: "segment-1",
+      server_sequence: 1,
+      interview_state_version: 0,
+    });
+
+    expect(client.pendingCount).toBe(0);
+    expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
+  it("surfaces genuine backend semantic rejection after control is ready", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => {
+      expect(FakeControlWebSocket.instances.length).toBe(1);
+    });
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await connectPromise;
+
+    client.sendCandidateTranscriptFinal({
+      providerItemId: "provider-item-rejected",
+      contentIndex: 0,
+      transcript: "final transcript",
+    });
+    const sent = JSON.parse(String(socket.send.mock.calls.at(-1)?.[0])) as Record<
+      string,
+      unknown
+    >;
+    socket.receive({
+      type: "control_error",
+      client_event_id: sent.client_event_id,
+      category: "control_rejected",
+      message: "Realtime control message conflicts with previously accepted truth",
+    });
+
+    expect(client.pendingCount).toBe(0);
+    expect(events).toContainEqual({
+      type: "error",
+      message: "CounterQ control message was rejected.",
+    });
   });
 
   it("connects WebRTC only after the realtime data channel is open", async () => {
@@ -509,6 +1056,41 @@ describe("Realtime voice foundation", () => {
     );
     expect(peerConnection.addTrack).toHaveBeenCalledWith(track, expect.anything());
     expect(events.map((event) => event.type)).toContain("connected");
+  });
+
+  it("sends OpenAI cancel, clear, and truncate events for active output interruption", async () => {
+    const nowSpy = vi
+      .spyOn(performance, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_420);
+    const { client, dataChannel } = createBrowserClient();
+
+    await client.connect();
+    dataChannel.emitMessage({
+      type: "response.created",
+      response: { id: "resp-1", output: [{ id: "assistant-item-1" }] },
+    });
+    dataChannel.emitMessage({
+      type: "output_audio_buffer.started",
+      response_id: "resp-1",
+      item_id: "assistant-item-1",
+    });
+
+    client.interruptActiveOutputForCandidateSpeech();
+
+    const sent = dataChannel.send.mock.calls.map((call) => JSON.parse(String(call[0])));
+    expect(sent).toEqual([
+      expect.objectContaining({ type: "response.cancel", response_id: "resp-1" }),
+      expect.objectContaining({ type: "output_audio_buffer.clear" }),
+      expect.objectContaining({
+        type: "conversation.item.truncate",
+        item_id: "assistant-item-1",
+        content_index: 0,
+        audio_end_ms: 420,
+      }),
+    ]);
+    client.disconnect();
+    nowSpy.mockRestore();
   });
 
   it("times out and releases resources when the data channel never becomes ready", async () => {

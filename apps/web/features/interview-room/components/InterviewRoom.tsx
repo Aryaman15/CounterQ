@@ -171,6 +171,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
         partialTranscript={realtimeVoice.partialTranscript}
         lastFinalTranscript={realtimeVoice.lastFinalTranscript}
         sessionDebug={realtimeVoice.sessionDebug}
+        canonicalDebug={realtimeVoice.canonicalDebug}
         currentTurn={fixture.currentDeliveredTurn}
         onEnableMicrophone={realtimeVoice.enableMicrophone}
         onMute={realtimeVoice.mute}

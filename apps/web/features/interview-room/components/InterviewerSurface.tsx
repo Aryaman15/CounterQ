@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
+import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
 import type { RealtimeSessionDebug } from "../realtime/useRealtimeVoice";
 import { renderDeliveredText } from "./deliveredText";
 import { VoicePresence } from "./VoicePresence";
@@ -15,6 +16,7 @@ type InterviewerSurfaceProps = {
   partialTranscript: string;
   lastFinalTranscript: string;
   sessionDebug: RealtimeSessionDebug;
+  canonicalDebug: CanonicalControlDebug;
   currentTurn: DeliveredInterviewerTurn;
   onEnableMicrophone: () => Promise<void>;
   onMute: () => void;
@@ -31,6 +33,7 @@ export function InterviewerSurface({
   partialTranscript,
   lastFinalTranscript,
   sessionDebug,
+  canonicalDebug,
   currentTurn,
   onEnableMicrophone,
   onMute,
@@ -187,6 +190,56 @@ export function InterviewerSurface({
                           sessionDebug.interruptResponse === true ? "enabled" : "not confirmed"
                         }`
                       : "Turn detection not observed"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>CounterQ session</dt>
+                  <dd>
+                    {canonicalDebug.sessionId
+                      ? `${canonicalDebug.sessionId}; control ${
+                          canonicalDebug.controlConnected ? "connected" : "disconnected"
+                        }; pending ${canonicalDebug.pendingDurableMessages}`
+                      : "No canonical session yet"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Server ordering</dt>
+                  <dd>
+                    {canonicalDebug.lastServerSequence
+                      ? `server sequence ${canonicalDebug.lastServerSequence}; state version ${
+                          canonicalDebug.stateVersion ?? "unknown"
+                        }`
+                      : "No durable event acknowledged"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last candidate final</dt>
+                  <dd>
+                    {canonicalDebug.lastCandidateFinal.providerItemId
+                      ? `${canonicalDebug.lastCandidateFinal.persistence}; item ${
+                          canonicalDebug.lastCandidateFinal.providerItemId
+                        }; event ${
+                          canonicalDebug.lastCandidateFinal.eventId ?? "pending"
+                        }; segment ${
+                          canonicalDebug.lastCandidateFinal.transcriptSegmentId ?? "pending"
+                        }`
+                      : "No candidate final persisted"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last delivery</dt>
+                  <dd>
+                    {canonicalDebug.lastDelivery.promptId
+                      ? `prompt ${canonicalDebug.lastDelivery.promptId}; delivery ${
+                          canonicalDebug.lastDelivery.deliveryId ?? "pending"
+                        }; state ${
+                          canonicalDebug.lastDelivery.deliveryState ?? "pending"
+                        }; response ${
+                          canonicalDebug.lastDelivery.providerResponseId ?? "pending"
+                        }; actual transcript ${
+                          canonicalDebug.lastDelivery.actualTranscriptId ?? "none"
+                        }`
+                      : "No canonical delivery yet"}
                   </dd>
                 </div>
               </dl>

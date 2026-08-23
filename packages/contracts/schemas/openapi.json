@@ -112,6 +112,59 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "RealtimeDevelopmentBootstrapRequest": {
+        "properties": {
+          "purpose": {
+            "const": "interview_demo",
+            "default": "interview_demo",
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "title": "RealtimeDevelopmentBootstrapRequest",
+        "type": "object"
+      },
+      "RealtimeDevelopmentBootstrapResponse": {
+        "properties": {
+          "control_websocket_path": {
+            "title": "Control Websocket Path",
+            "type": "string"
+          },
+          "current_stage": {
+            "title": "Current Stage",
+            "type": "string"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "protocol_version": {
+            "const": "counterq.realtime.control.v1",
+            "default": "counterq.realtime.control.v1",
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "current_stage",
+          "state_version",
+          "deadline_at",
+          "control_websocket_path"
+        ],
+        "title": "RealtimeDevelopmentBootstrapResponse",
+        "type": "object"
+      },
       "RealtimeTurnDetectionConfig": {
         "properties": {
           "create_response": {
@@ -193,6 +246,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/realtime/development-interview": {
+      "post": {
+        "operationId": "create_realtime_development_interview_api_realtime_development_interview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RealtimeDevelopmentBootstrapRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeDevelopmentBootstrapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Realtime Development Interview",
+        "tags": [
+          "realtime"
+        ]
+      }
+    },
     "/api/realtime/session": {
       "post": {
         "operationId": "create_realtime_session_api_realtime_session_post",

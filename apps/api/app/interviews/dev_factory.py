@@ -26,7 +26,12 @@ class DevelopmentInterview:
     budget: SessionBudget
 
 
-async def create_development_interview(session: AsyncSession) -> DevelopmentInterview:
+async def create_development_interview(
+    session: AsyncSession,
+    *,
+    initial_stage: str = "SETUP",
+    state_version: int = 0,
+) -> DevelopmentInterview:
     now = datetime.now(UTC)
     suffix = uuid7()
     user = await UserRepository(session).add(
@@ -74,8 +79,8 @@ async def create_development_interview(session: AsyncSession) -> DevelopmentInte
         configuration_id=configuration.id,
         problem_version_id=problem_version.id,
         interview_pack_version_id=pack_version.id,
-        current_stage="SETUP",
-        state_version=0,
+        current_stage=initial_stage,
+        state_version=state_version,
         status="ACTIVE",
         started_at=now,
         deadline_at=now + timedelta(minutes=30),

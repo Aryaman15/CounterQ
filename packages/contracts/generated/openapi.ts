@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/realtime/development-interview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Realtime Development Interview */
+        post: operations["create_realtime_development_interview_api_realtime_development_interview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/session": {
         parameters: {
             query?: never;
@@ -94,6 +111,40 @@ export interface components {
              */
             status: "ok";
         };
+        /** RealtimeDevelopmentBootstrapRequest */
+        RealtimeDevelopmentBootstrapRequest: {
+            /**
+             * Purpose
+             * @default interview_demo
+             * @constant
+             */
+            purpose: "interview_demo";
+        };
+        /** RealtimeDevelopmentBootstrapResponse */
+        RealtimeDevelopmentBootstrapResponse: {
+            /** Control Websocket Path */
+            control_websocket_path: string;
+            /** Current Stage */
+            current_stage: string;
+            /**
+             * Deadline At
+             * Format: date-time
+             */
+            deadline_at: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Protocol Version
+             * @default counterq.realtime.control.v1
+             * @constant
+             */
+            protocol_version: "counterq.realtime.control.v1";
+            /** State Version */
+            state_version: number;
+        };
         /** RealtimeTurnDetectionConfig */
         RealtimeTurnDetectionConfig: {
             /**
@@ -139,6 +190,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    create_realtime_development_interview_api_realtime_development_interview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RealtimeDevelopmentBootstrapRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeDevelopmentBootstrapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_realtime_session_api_realtime_session_post: {
         parameters: {
             query?: never;
