@@ -14,10 +14,16 @@ type RawRealtimeEvent = {
   text?: unknown;
   transcript?: unknown;
   error?: unknown;
+  response?: unknown;
+  reason?: unknown;
 };
 
 function stringField(value: unknown): string | null {
   return typeof value === "string" ? value : null;
+}
+
+function objectField(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
 
 export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] {
@@ -32,7 +38,7 @@ export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] 
   }
 
   if (rawType === "input_audio_buffer.speech_started") {
-    return [{ type: "candidate_speech_started" }];
+    return [{ type: "candidate_speech_started" }, { type: "counterq_output_interrupted" }];
   }
 
   if (rawType === "input_audio_buffer.speech_stopped") {
@@ -43,16 +49,26 @@ export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] 
     return [{ type: "counterq_output_started" }];
   }
 
-  if (
-    rawType === "response.output_audio.done" ||
-    rawType === "response.audio.done" ||
-    rawType === "response.done"
-  ) {
+  if (rawType === "response.output_audio.done" || rawType === "response.audio.done") {
     return [{ type: "counterq_output_ended" }];
   }
 
-  if (rawType === "response.cancelled" || rawType === "response.output_audio.cancelled") {
+  if (
+    rawType === "response.cancelled" ||
+    rawType === "response.output_audio.cancelled" ||
+    rawType === "output_audio_buffer.cleared" ||
+    rawType === "output_audio_buffer.clear"
+  ) {
     return [{ type: "counterq_output_interrupted" }];
+  }
+
+  if (rawType === "response.done") {
+    const response = objectField(event.response);
+    const status = stringField(response?.status);
+    if (status === "cancelled" || status === "incomplete" || status === "failed") {
+      return [{ type: "counterq_output_interrupted" }];
+    }
+    return [{ type: "counterq_output_ended" }];
   }
 
   if (rawType.includes("transcription") && rawType.endsWith(".delta")) {

@@ -8,7 +8,10 @@ import { VoicePresence } from "./VoicePresence";
 
 type InterviewerSurfaceProps = {
   voiceState: VoicePresenceState;
+  isMuted: boolean;
   voiceError: string | null;
+  partialTranscript: string;
+  lastFinalTranscript: string;
   currentTurn: DeliveredInterviewerTurn;
   onEnableMicrophone: () => Promise<void>;
   onMute: () => void;
@@ -20,7 +23,10 @@ type InterviewerSurfaceProps = {
 
 export function InterviewerSurface({
   voiceState,
+  isMuted,
   voiceError,
+  partialTranscript,
+  lastFinalTranscript,
   currentTurn,
   onEnableMicrophone,
   onMute,
@@ -30,6 +36,9 @@ export function InterviewerSurface({
   onOpenConversation,
 }: InterviewerSurfaceProps) {
   const connected = voiceState === "Listening" || voiceState === "Speaking" || voiceState === "Muted";
+  const showTranscriptInspector =
+    process.env.NODE_ENV !== "production" &&
+    (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0);
 
   return (
     <section className="interviewer-surface" aria-labelledby="current-question-title">
@@ -49,7 +58,7 @@ export function InterviewerSurface({
           )}
           {connected && (
             <>
-              {voiceState === "Muted" ? (
+              {isMuted ? (
                 <button type="button" className="voice-control-button" onClick={onUnmute}>
                   <Mic size={14} aria-hidden="true" />
                   <span>Unmute</span>
@@ -75,6 +84,21 @@ export function InterviewerSurface({
           )}
         </div>
         {voiceError ? <p className="voice-error">{voiceError}</p> : null}
+        {showTranscriptInspector ? (
+          <details className="voice-dev-transcript">
+            <summary>Development transcript</summary>
+            <dl>
+              <div>
+                <dt>Partial</dt>
+                <dd>{partialTranscript || "No partial transcript"}</dd>
+              </div>
+              <div>
+                <dt>Final</dt>
+                <dd>{lastFinalTranscript || "No final transcript"}</dd>
+              </div>
+            </dl>
+          </details>
+        ) : null}
       </div>
       <div className="active-prompt">
         <p id="current-question-title" className="active-prompt-label">

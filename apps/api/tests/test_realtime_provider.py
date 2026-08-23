@@ -7,7 +7,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.config.settings import Settings, create_settings, find_repository_root
+from app.config.settings import Settings, create_settings, find_repository_root, get_settings
 from app.main import create_app
 from app.realtime.openai_provider import (
     OPENAI_REALTIME_CLIENT_SECRETS_URL,
@@ -16,9 +16,10 @@ from app.realtime.openai_provider import (
 from app.realtime.provider import (
     RealtimeBrowserSession,
     RealtimeConfigurationError,
+    RealtimeMalformedResponseError,
     RealtimeUpstreamError,
 )
-from app.realtime.routes import get_realtime_voice_provider
+from app.realtime.routes import get_realtime_voice_provider_builder
 
 
 class RecordingPostClient:
@@ -43,7 +44,11 @@ class RecordingPostClient:
 
 
 class FakeRealtimeProvider:
+    def __init__(self) -> None:
+        self.create_calls = 0
+
     async def create_browser_session(self) -> RealtimeBrowserSession:
+        self.create_calls += 1
         return RealtimeBrowserSession(
             provider="openai",
             client_secret="ephemeral-test-secret",
@@ -59,6 +64,11 @@ class FakeRealtimeProvider:
 def response(status_code: int, body: dict[str, Any]) -> httpx.Response:
     request = httpx.Request("POST", OPENAI_REALTIME_CLIENT_SECRETS_URL)
     return httpx.Response(status_code, json=body, request=request)
+
+
+def text_response(status_code: int, body: str) -> httpx.Response:
+    request = httpx.Request("POST", OPENAI_REALTIME_CLIENT_SECRETS_URL)
+    return httpx.Response(status_code, text=body, request=request)
 
 
 def settings_with_fake_openai_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
@@ -167,9 +177,34 @@ async def test_openai_provider_errors_normalize_without_secret(
 
 
 @pytest.mark.asyncio
-async def test_realtime_endpoint_response_contains_only_candidate_safe_fields() -> None:
+async def test_malformed_successful_openai_response_normalizes_safely(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    settings = settings_with_fake_openai_key(tmp_path, monkeypatch)
+    provider = OpenAIRealtimeVoiceProvider(
+        settings,
+        http_client=RecordingPostClient(text_response(200, "not-json")),
+    )
+
+    with pytest.raises(RealtimeMalformedResponseError) as exc_info:
+        await provider.create_browser_session()
+
+    assert exc_info.value.category == "malformed_response"
+    assert "not-json" not in exc_info.value.safe_message
+
+
+@pytest.mark.asyncio
+async def test_local_environment_can_mint_candidate_safe_realtime_session(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("COUNTERQ_APP_ENV=local\n")
+    settings = create_settings(env_file=env_file)
+    fake_provider = FakeRealtimeProvider()
     app = create_app()
-    app.dependency_overrides[get_realtime_voice_provider] = lambda: FakeRealtimeProvider()
+    app.dependency_overrides[get_realtime_voice_provider_builder] = lambda: (
+        lambda _settings: fake_provider
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
     transport = ASGITransport(app=app)
 
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
@@ -184,5 +219,31 @@ async def test_realtime_endpoint_response_contains_only_candidate_safe_fields() 
     assert body["turn_detection"]["create_response"] is False
     assert "instructions" not in body
     assert "Authorization" not in str(body)
+    assert fake_provider.create_calls == 1
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_non_development_environment_blocks_realtime_mint_before_provider_call(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("COUNTERQ_APP_ENV=production\n")
+    settings = create_settings(env_file=env_file)
+    fake_provider = FakeRealtimeProvider()
+    app = create_app()
+    app.dependency_overrides[get_realtime_voice_provider_builder] = lambda: (
+        lambda _settings: fake_provider
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        result = await client.post("/api/realtime/session", json={"purpose": "interview_demo"})
+
+    assert result.status_code == 403
+    assert result.json()["detail"]["category"] == "development_only"
+    assert fake_provider.create_calls == 0
 
     app.dependency_overrides.clear()

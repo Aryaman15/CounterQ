@@ -23,6 +23,7 @@ export type RealtimeVoiceClientOptions = {
   mediaDevices?: BrowserMediaDevices;
   peerConnectionFactory?: () => RTCPeerConnection;
   audioElementFactory?: () => HTMLAudioElement;
+  connectionTimeoutMs?: number;
 };
 
 export class RealtimeVoiceClient {
@@ -31,7 +32,9 @@ export class RealtimeVoiceClient {
   private readonly mediaDevices: BrowserMediaDevices | undefined;
   private readonly peerConnectionFactory: () => RTCPeerConnection;
   private readonly audioElementFactory: () => HTMLAudioElement;
+  private readonly connectionTimeoutMs: number;
   private readonly listeners = new Set<RealtimeClientListener>();
+  private readonly cleanupCallbacks: Array<() => void> = [];
   private localStream: MediaStream | null = null;
   private peerConnection: RTCPeerConnection | null = null;
   private dataChannel: RTCDataChannel | null = null;
@@ -45,6 +48,7 @@ export class RealtimeVoiceClient {
     this.peerConnectionFactory =
       options.peerConnectionFactory ?? (() => new RTCPeerConnection());
     this.audioElementFactory = options.audioElementFactory ?? (() => new Audio());
+    this.connectionTimeoutMs = options.connectionTimeoutMs ?? 12_000;
   }
 
   on(listener: RealtimeClientListener): () => void {
@@ -53,6 +57,7 @@ export class RealtimeVoiceClient {
   }
 
   async connect(): Promise<void> {
+    this.releaseResources({ emitDisconnected: false });
     this.emit({ type: "connecting" });
 
     if (!this.mediaDevices?.getUserMedia) {
@@ -67,15 +72,12 @@ export class RealtimeVoiceClient {
       this.remoteAudio = this.audioElementFactory();
       this.remoteAudio.autoplay = true;
 
-      peerConnection.addEventListener("connectionstatechange", () => {
+      this.addManagedListener(peerConnection, "connectionstatechange", () => {
         if (
           peerConnection.connectionState === "failed" ||
           peerConnection.connectionState === "disconnected"
         ) {
-          this.emit({
-            type: "error",
-            message: "Realtime voice connection was interrupted.",
-          });
+          this.handleFatalTransportFailure("Realtime voice connection was interrupted.");
         }
       });
 
@@ -84,10 +86,9 @@ export class RealtimeVoiceClient {
         if (this.remoteAudio) {
           this.remoteAudio.srcObject = stream;
           void this.remoteAudio.play().catch(() => {
-            this.emit({
-              type: "error",
-              message: "Browser blocked realtime audio playback.",
-            });
+            this.handleFatalTransportFailure(
+              "Browser blocked realtime audio playback. Re-enable voice after allowing audio.",
+            );
           });
         }
       };
@@ -98,9 +99,14 @@ export class RealtimeVoiceClient {
 
       const dataChannel = peerConnection.createDataChannel("oai-events");
       this.dataChannel = dataChannel;
-      dataChannel.addEventListener("message", (event) => this.handleProviderMessage(event));
-      dataChannel.addEventListener("error", () => {
-        this.emit({ type: "error", message: "Realtime event channel failed." });
+      this.addManagedListener(dataChannel, "message", (event) => this.handleProviderMessage(event));
+      this.addManagedListener(dataChannel, "error", () => {
+        this.handleFatalTransportFailure("Realtime event channel failed.");
+      });
+      this.addManagedListener(dataChannel, "close", () => {
+        if (this.dataChannel === dataChannel) {
+          this.handleFatalTransportFailure("Realtime event channel closed unexpectedly.");
+        }
       });
 
       const offer = await peerConnection.createOffer();
@@ -120,9 +126,10 @@ export class RealtimeVoiceClient {
 
       const answerSdp = await sdpResponse.text();
       await peerConnection.setRemoteDescription({ type: "answer", sdp: answerSdp });
+      await this.waitForDataChannelOpen(dataChannel);
       this.emit({ type: "connected", session });
     } catch (error) {
-      this.disconnect();
+      this.releaseResources({ emitDisconnected: false });
       if (error instanceof RealtimeClientFailure) {
         throw error;
       }
@@ -151,6 +158,14 @@ export class RealtimeVoiceClient {
   }
 
   disconnect(): void {
+    this.releaseResources({ emitDisconnected: true });
+  }
+
+  private releaseResources({ emitDisconnected }: { emitDisconnected: boolean }): void {
+    while (this.cleanupCallbacks.length > 0) {
+      this.cleanupCallbacks.pop()?.();
+    }
+
     this.dataChannel?.close();
     this.dataChannel = null;
 
@@ -168,7 +183,9 @@ export class RealtimeVoiceClient {
     }
     this.remoteAudio = null;
     this.muted = false;
-    this.emit({ type: "disconnected" });
+    if (emitDisconnected) {
+      this.emit({ type: "disconnected" });
+    }
   }
 
   private async createCounterQRealtimeSession(): Promise<RealtimeSessionResponse> {
@@ -211,6 +228,65 @@ export class RealtimeVoiceClient {
   private fail(message: string): RealtimeClientFailure {
     this.emit({ type: "error", message });
     return new RealtimeClientFailure(message);
+  }
+
+  private handleFatalTransportFailure(message: string): void {
+    this.releaseResources({ emitDisconnected: false });
+    this.emit({ type: "error", message });
+  }
+
+  private waitForDataChannelOpen(dataChannel: RTCDataChannel): Promise<void> {
+    if (dataChannel.readyState === "open") {
+      return Promise.resolve();
+    }
+    if (dataChannel.readyState === "closing" || dataChannel.readyState === "closed") {
+      return Promise.reject(new Error("Realtime event channel closed before it was ready."));
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        cleanup();
+        reject(new Error("Realtime voice connection timed out."));
+      }, this.connectionTimeoutMs);
+
+      const handleOpen = () => {
+        cleanup();
+        resolve();
+      };
+      const handleFailure = () => {
+        cleanup();
+        reject(new Error("Realtime event channel failed before it was ready."));
+      };
+      const cleanup = () => {
+        window.clearTimeout(timeoutId);
+        dataChannel.removeEventListener("open", handleOpen);
+        dataChannel.removeEventListener("error", handleFailure);
+        dataChannel.removeEventListener("close", handleFailure);
+      };
+
+      dataChannel.addEventListener("open", handleOpen);
+      dataChannel.addEventListener("error", handleFailure);
+      dataChannel.addEventListener("close", handleFailure);
+    });
+  }
+
+  private addManagedListener<K extends keyof RTCPeerConnectionEventMap>(
+    target: RTCPeerConnection,
+    type: K,
+    listener: (event: RTCPeerConnectionEventMap[K]) => void,
+  ): void;
+  private addManagedListener<K extends keyof RTCDataChannelEventMap>(
+    target: RTCDataChannel,
+    type: K,
+    listener: (event: RTCDataChannelEventMap[K]) => void,
+  ): void;
+  private addManagedListener(
+    target: RTCPeerConnection | RTCDataChannel,
+    type: string,
+    listener: EventListener,
+  ): void {
+    target.addEventListener(type, listener);
+    this.cleanupCallbacks.push(() => target.removeEventListener(type, listener));
   }
 }
 

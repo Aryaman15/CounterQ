@@ -1,7 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { MutableRefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
 import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceClient";
@@ -10,9 +9,14 @@ type UseRealtimeVoiceOptions = {
   clientFactory?: () => RealtimeVoiceClient;
 };
 
+type RealtimeActivityState = Exclude<VoicePresenceState, "Muted">;
+
 export type RealtimeVoiceControls = {
   voiceState: VoicePresenceState;
+  isMuted: boolean;
   errorMessage: string | null;
+  partialTranscript: string;
+  lastFinalTranscript: string;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -24,11 +28,20 @@ export function useRealtimeVoice(
   options: UseRealtimeVoiceOptions = {},
 ): RealtimeVoiceControls {
   const { clientFactory } = options;
-  const [voiceState, setVoiceState] = useState<VoicePresenceState>("Ready");
+  const [activityState, setActivityState] = useState<RealtimeActivityState>("Ready");
+  const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [partialTranscript, setPartialTranscript] = useState("");
+  const [lastFinalTranscript, setLastFinalTranscript] = useState("");
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
-  const connectedBeforeMuteRef = useRef<VoicePresenceState>("Listening");
+
+  const voiceState = useMemo<VoicePresenceState>(() => {
+    if (isMuted && activityState === "Listening") {
+      return "Muted";
+    }
+    return activityState;
+  }, [activityState, isMuted]);
 
   const ensureClient = useCallback(() => {
     if (clientRef.current) {
@@ -40,7 +53,13 @@ export function useRealtimeVoice(
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
       });
     unsubscribeRef.current = client.on((event) => {
-      applyRealtimeEvent(event, setVoiceState, setErrorMessage, connectedBeforeMuteRef);
+      applyRealtimeEvent(event, {
+        setActivityState,
+        setErrorMessage,
+        setIsMuted,
+        setPartialTranscript,
+        setLastFinalTranscript,
+      });
     });
     clientRef.current = client;
     return client;
@@ -48,12 +67,13 @@ export function useRealtimeVoice(
 
   const enableMicrophone = useCallback(async () => {
     setErrorMessage(null);
-    setVoiceState("Connecting");
+    setActivityState("Connecting");
     const client = ensureClient();
     try {
       await client.connect();
     } catch (error) {
-      setVoiceState("Error");
+      setActivityState("Error");
+      setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
   }, [ensureClient]);
@@ -72,7 +92,9 @@ export function useRealtimeVoice(
     clientRef.current?.disconnect();
     clientRef.current = null;
     setErrorMessage(null);
-    setVoiceState("Ready");
+    setActivityState("Ready");
+    setIsMuted(false);
+    setPartialTranscript("");
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -83,7 +105,10 @@ export function useRealtimeVoice(
 
   return {
     voiceState,
+    isMuted,
     errorMessage,
+    partialTranscript,
+    lastFinalTranscript,
     enableMicrophone,
     mute,
     unmute,
@@ -92,29 +117,37 @@ export function useRealtimeVoice(
   };
 }
 
-function applyRealtimeEvent(
-  event: RealtimeClientEvent,
-  setVoiceState: (state: VoicePresenceState) => void,
-  setErrorMessage: (message: string | null) => void,
-  connectedBeforeMuteRef: MutableRefObject<VoicePresenceState>,
-): void {
+type RealtimeEventSetters = {
+  setActivityState: (state: RealtimeActivityState) => void;
+  setErrorMessage: (message: string | null) => void;
+  setIsMuted: (muted: boolean) => void;
+  setPartialTranscript: (text: string) => void;
+  setLastFinalTranscript: (text: string) => void;
+};
+
+function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSetters): void {
+  const {
+    setActivityState,
+    setErrorMessage,
+    setIsMuted,
+    setPartialTranscript,
+    setLastFinalTranscript,
+  } = setters;
+
   if (event.type === "connecting") {
-    setVoiceState("Connecting");
+    setActivityState("Connecting");
     return;
   }
   if (event.type === "connected") {
-    connectedBeforeMuteRef.current = "Listening";
-    setVoiceState("Listening");
+    setActivityState("Listening");
     return;
   }
   if (event.type === "candidate_speech_started") {
-    connectedBeforeMuteRef.current = "Listening";
-    setVoiceState("Listening");
+    setActivityState("Listening");
     return;
   }
   if (event.type === "counterq_output_started") {
-    connectedBeforeMuteRef.current = "Speaking";
-    setVoiceState("Speaking");
+    setActivityState("Speaking");
     return;
   }
   if (
@@ -122,24 +155,36 @@ function applyRealtimeEvent(
     event.type === "counterq_output_interrupted" ||
     event.type === "candidate_speech_stopped"
   ) {
-    connectedBeforeMuteRef.current = "Listening";
-    setVoiceState("Listening");
+    setActivityState("Listening");
     return;
   }
   if (event.type === "muted") {
-    setVoiceState("Muted");
+    setIsMuted(true);
     return;
   }
   if (event.type === "unmuted") {
-    setVoiceState(connectedBeforeMuteRef.current);
+    setIsMuted(false);
     return;
   }
   if (event.type === "disconnected") {
-    setVoiceState("Ready");
+    setActivityState("Ready");
+    setIsMuted(false);
+    setPartialTranscript("");
+    setErrorMessage(null);
+    return;
+  }
+  if (event.type === "transcript_delta") {
+    setPartialTranscript(event.text);
+    return;
+  }
+  if (event.type === "transcript_final") {
+    setLastFinalTranscript(event.text);
+    setPartialTranscript("");
     return;
   }
   if (event.type === "error" || event.type === "provider_error") {
     setErrorMessage(event.message);
-    setVoiceState("Error");
+    setActivityState("Error");
+    setIsMuted(false);
   }
 }

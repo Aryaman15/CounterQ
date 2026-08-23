@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import Home from "../app/page";
 import InterviewDemoPage from "../app/interview/demo/page";
 import { InterviewRoom } from "../features/interview-room/components/InterviewRoom";
+import { InterviewerSurface } from "../features/interview-room/components/InterviewerSurface";
 import {
   demoInterviewFixture,
   hiddenInternalFixtureFields,
@@ -101,6 +102,29 @@ describe("Interview Room demo", () => {
     expect(screen.queryByText(hiddenInternalFixtureFields.examinerDecisionRationale)).not.toBeInTheDocument();
     expect(screen.queryByText(hiddenInternalFixtureFields.probeStrategy)).not.toBeInTheDocument();
     expect(screen.queryByText(hiddenInternalFixtureFields.intendedUndeliveredPromptText)).not.toBeInTheDocument();
+  });
+
+  it("shows realtime transcript only in the development voice inspector", () => {
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="I am thinking about"
+        lastFinalTranscript="I am thinking about the window."
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("Development transcript")).toBeInTheDocument();
+    expect(screen.getByText("I am thinking about")).toBeInTheDocument();
+    expect(screen.getByText("I am thinking about the window.")).toBeInTheDocument();
   });
 
   it("opens and closes recent conversation accessibly", () => {

@@ -603,6 +603,39 @@ a:focus-visible,
   line-height: 1.35;
 }
 
+.voice-dev-transcript {
+  max-width: 210px;
+  color: var(--quiet);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.voice-dev-transcript summary {
+  cursor: pointer;
+  color: #f5d88f;
+  font-weight: 800;
+}
+
+.voice-dev-transcript dl {
+  display: grid;
+  gap: 5px;
+  margin: 6px 0 0;
+}
+
+.voice-dev-transcript div {
+  display: grid;
+  gap: 2px;
+}
+
+.voice-dev-transcript dt {
+  font-weight: 800;
+}
+
+.voice-dev-transcript dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .active-prompt {
   min-width: 0;
 }

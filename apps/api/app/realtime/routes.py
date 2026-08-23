@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -9,6 +10,7 @@ from app.realtime.openai_provider import OpenAIRealtimeVoiceProvider
 from app.realtime.provider import RealtimeProviderError, RealtimeVoiceProvider
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
+DEVELOPMENT_REALTIME_ENVS = frozenset({"local", "dev", "development", "test"})
 
 
 class CreateRealtimeSessionRequest(BaseModel):
@@ -34,9 +36,11 @@ class CreateRealtimeSessionResponse(BaseModel):
     turn_detection: RealtimeTurnDetectionConfig
 
 
-def get_realtime_voice_provider(
-    settings: Annotated[Settings, Depends(get_settings)],
-) -> RealtimeVoiceProvider:
+def realtime_credential_minting_allowed(settings: Settings) -> bool:
+    return settings.app_env.lower() in DEVELOPMENT_REALTIME_ENVS
+
+
+def build_realtime_voice_provider(settings: Settings) -> RealtimeVoiceProvider:
     if settings.realtime_provider != "openai":
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -48,12 +52,30 @@ def get_realtime_voice_provider(
     return OpenAIRealtimeVoiceProvider(settings)
 
 
+def get_realtime_voice_provider_builder() -> Callable[[Settings], RealtimeVoiceProvider]:
+    return build_realtime_voice_provider
+
+
 @router.post("/session", response_model=CreateRealtimeSessionResponse)
 async def create_realtime_session(
     _request: CreateRealtimeSessionRequest,
-    provider: Annotated[RealtimeVoiceProvider, Depends(get_realtime_voice_provider)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    provider_builder: Annotated[
+        Callable[[Settings], RealtimeVoiceProvider],
+        Depends(get_realtime_voice_provider_builder),
+    ],
 ) -> CreateRealtimeSessionResponse:
+    if not realtime_credential_minting_allowed(settings):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "category": "development_only",
+                "message": "Realtime credential minting is enabled only for local development",
+            },
+        )
+
     try:
+        provider = provider_builder(settings)
         session = await provider.create_browser_session()
     except RealtimeProviderError as exc:
         raise HTTPException(

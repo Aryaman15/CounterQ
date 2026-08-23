@@ -55,11 +55,11 @@ class OpenAIRealtimeVoiceProvider:
             if self._http_client is None:
                 async with httpx.AsyncClient() as client:
                     response = await client.post(
-                    OPENAI_REALTIME_CLIENT_SECRETS_URL,
-                    headers=headers,
-                    json=payload,
-                    timeout=12.0,
-                )
+                        OPENAI_REALTIME_CLIENT_SECRETS_URL,
+                        headers=headers,
+                        json=payload,
+                        timeout=12.0,
+                    )
             else:
                 response = await self._http_client.post(
                     OPENAI_REALTIME_CLIENT_SECRETS_URL,
@@ -84,7 +84,15 @@ class OpenAIRealtimeVoiceProvider:
             )
             raise RealtimeUpstreamError() from exc
 
-        return self._parse_client_secret_response(response.json())
+        try:
+            response_body = response.json()
+        except ValueError as exc:
+            raise RealtimeMalformedResponseError() from exc
+
+        if not isinstance(response_body, Mapping):
+            raise RealtimeMalformedResponseError()
+
+        return self._parse_client_secret_response(response_body)
 
     def _build_client_secret_payload(self) -> dict[str, Any]:
         return {

@@ -166,7 +166,10 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
 
       <InterviewerSurface
         voiceState={realtimeVoice.voiceState}
+        isMuted={realtimeVoice.isMuted}
         voiceError={realtimeVoice.errorMessage}
+        partialTranscript={realtimeVoice.partialTranscript}
+        lastFinalTranscript={realtimeVoice.lastFinalTranscript}
         currentTurn={fixture.currentDeliveredTurn}
         onEnableMicrophone={realtimeVoice.enableMicrophone}
         onMute={realtimeVoice.mute}

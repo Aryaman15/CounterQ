@@ -187,7 +187,7 @@
     }
   },
   "info": {
-    "summary": "Stage 0 infrastructure foundation for CounterQ.",
+    "summary": "Stage 1 Core Interaction Spike API for CounterQ.",
     "title": "CounterQ API",
     "version": "0.0.0"
   },
