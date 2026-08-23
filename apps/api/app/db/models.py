@@ -1,18 +1,35 @@
 """Import all ORM models so Alembic sees complete metadata."""
 
-from app.ai_gateway.models import AIPolicyVersion
+from app.ai_gateway.models import AIInvocation, AIPolicyVersion
 from app.auth.models import User
-from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
-from app.observation.models import CodeSnapshot, InterviewEvent, TranscriptSegment
+from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.interviews.models import (
+    CandidateResponse,
+    CandidateResponseSource,
+    InterviewConfiguration,
+    InterviewerPrompt,
+    InterviewerPromptDelivery,
+    InterviewSession,
+    SessionBudget,
+)
+from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
 from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
 
 __all__ = [
     "AIPolicyVersion",
+    "AIInvocation",
+    "CandidateClaim",
+    "CandidateResponse",
+    "CandidateResponseSource",
+    "CodeDiff",
     "CodeSnapshot",
+    "ExaminerDecision",
     "InterviewConfiguration",
     "InterviewEvent",
     "InterviewPackVersion",
     "InterviewSession",
+    "InterviewerPrompt",
+    "InterviewerPromptDelivery",
     "Problem",
     "ProblemVersion",
     "SessionBudget",

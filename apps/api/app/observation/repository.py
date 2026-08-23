@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.observation.models import CodeSnapshot, TranscriptSegment
+from app.observation.models import CodeDiff, CodeSnapshot, TranscriptSegment
 
 
 class ObservationRepository:
@@ -70,3 +70,29 @@ class ObservationRepository:
         self._session.add(snapshot)
         await self._session.flush()
         return snapshot
+
+    async def add_code_diff(
+        self,
+        *,
+        session_id: UUID,
+        from_snapshot_id: UUID,
+        to_snapshot_id: UUID,
+        diff_format: str,
+        diff_content: str,
+        created_from_event_id: UUID,
+        change_summary: str | None = None,
+        significance: str | None = None,
+    ) -> CodeDiff:
+        diff = CodeDiff(
+            interview_session_id=session_id,
+            from_snapshot_id=from_snapshot_id,
+            to_snapshot_id=to_snapshot_id,
+            diff_format=diff_format,
+            diff_content=diff_content,
+            change_summary=change_summary,
+            significance=significance,
+            created_from_event_id=created_from_event_id,
+        )
+        self._session.add(diff)
+        await self._session.flush()
+        return diff

@@ -170,6 +170,11 @@ class TranscriptSegment(Base):
         UniqueConstraint("interview_event_id", name="uq_transcript_segments_event"),
         UniqueConstraint(
             "interview_session_id",
+            "id",
+            name="uq_transcript_segments_session_id",
+        ),
+        UniqueConstraint(
+            "interview_session_id",
             "sequence",
             name="uq_transcript_segments_session_sequence",
         ),
@@ -286,3 +291,67 @@ class CodeSnapshot(Base):
         back_populates="code_snapshot",
         foreign_keys="InterviewEvent.code_snapshot_id",
     )
+
+
+class CodeDiff(Base):
+    __tablename__ = "code_diffs"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["interview_session_id", "from_snapshot_id"],
+            ["code_snapshots.interview_session_id", "code_snapshots.id"],
+            name="fk_code_diffs_session_from_snapshot",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "to_snapshot_id"],
+            ["code_snapshots.interview_session_id", "code_snapshots.id"],
+            name="fk_code_diffs_session_to_snapshot",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "created_from_event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_code_diffs_session_created_from_event",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint("interview_session_id", "id", name="uq_code_diffs_session_id"),
+        Index(
+            "ix_code_diffs_session_created_at", "interview_session_id", sql_text("created_at DESC")
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    from_snapshot_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("code_snapshots.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    to_snapshot_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("code_snapshots.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    diff_format: Mapped[str] = mapped_column(String(32), nullable=False)
+    diff_content: Mapped[str] = mapped_column(Text, nullable=False)
+    change_summary: Mapped[str | None] = mapped_column(Text)
+    significance: Mapped[str | None] = mapped_column(String(64))
+    created_from_event_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=sql_text("CURRENT_TIMESTAMP"),
+    )
+
+    interview_session: Mapped[InterviewSession] = relationship()
+    from_snapshot: Mapped[CodeSnapshot] = relationship(foreign_keys=[from_snapshot_id])
+    to_snapshot: Mapped[CodeSnapshot] = relationship(foreign_keys=[to_snapshot_id])
+    created_from_event: Mapped[InterviewEvent] = relationship(foreign_keys=[created_from_event_id])

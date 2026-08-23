@@ -10,10 +10,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     text,
 )
@@ -22,15 +24,24 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.constants import (
+    DELIVERY_STATES,
     INTERVIEW_LEVELS,
     INTERVIEW_MODES,
     INTERVIEW_SESSION_STATUSES,
     INTERVIEW_STAGES,
+    PROBE_STRATEGIES,
+    PROMPT_KINDS,
+    PROMPT_ORIGINS,
+    PROMPT_STATUSES,
+    RESPONSE_COMPLETION_REASONS,
+    RESPONSE_SOURCE_ROLES,
 )
 from app.db.ids import uuid7
 
 if TYPE_CHECKING:
+    from app.ai_gateway.models import AIInvocation
     from app.auth.models import User
+    from app.examiner.models import CandidateClaim, ExaminerDecision
     from app.observation.models import CodeSnapshot, InterviewEvent, TranscriptSegment
     from app.problems.models import InterviewPackVersion, ProblemVersion
 
@@ -196,3 +207,252 @@ class SessionBudget(Base):
     )
 
     interview_session: Mapped[InterviewSession] = relationship(back_populates="budget")
+
+
+class InterviewerPrompt(Base):
+    __tablename__ = "interviewer_prompts"
+    __table_args__ = (
+        CheckConstraint(_in_values("origin", PROMPT_ORIGINS), name="origin"),
+        CheckConstraint(_in_values("kind", PROMPT_KINDS), name="kind"),
+        CheckConstraint(
+            f"probe_strategy IS NULL OR {_in_values('probe_strategy', PROBE_STRATEGIES)}",
+            name="probe_strategy",
+        ),
+        CheckConstraint(
+            "(kind = 'PROBE' AND probe_strategy IS NOT NULL) OR "
+            "(kind <> 'PROBE' AND probe_strategy IS NULL)",
+            name="probe_strategy_matches_kind",
+        ),
+        CheckConstraint(_in_values("status", PROMPT_STATUSES), name="status"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "examiner_decision_id"],
+            ["examiner_decisions.interview_session_id", "examiner_decisions.id"],
+            name="fk_interviewer_prompts_session_examiner_decision",
+            ondelete="SET NULL (examiner_decision_id)",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "target_claim_id"],
+            ["candidate_claims.interview_session_id", "candidate_claims.id"],
+            name="fk_interviewer_prompts_session_claim",
+            ondelete="SET NULL (target_claim_id)",
+        ),
+        UniqueConstraint("interview_session_id", "id", name="uq_interviewer_prompts_session_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    examiner_decision_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("examiner_decisions.id", ondelete="SET NULL"),
+    )
+    origin: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    probe_strategy: Mapped[str | None] = mapped_column(String(64))
+    source_stage_transition_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    target_claim_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("candidate_claims.id", ondelete="SET NULL"),
+    )
+    target_concept_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    target_skill_dimension_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    intent: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(64), nullable=False)
+    authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    interview_session: Mapped[InterviewSession] = relationship()
+    examiner_decision: Mapped[ExaminerDecision | None] = relationship(
+        foreign_keys=[examiner_decision_id],
+    )
+    target_claim: Mapped[CandidateClaim | None] = relationship(foreign_keys=[target_claim_id])
+    deliveries: Mapped[list[InterviewerPromptDelivery]] = relationship(
+        back_populates="interviewer_prompt",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="InterviewerPromptDelivery.interviewer_prompt_id",
+    )
+    responses: Mapped[list[CandidateResponse]] = relationship(
+        back_populates="interviewer_prompt",
+        foreign_keys="CandidateResponse.interviewer_prompt_id",
+    )
+
+
+class InterviewerPromptDelivery(Base):
+    __tablename__ = "interviewer_prompt_deliveries"
+    __table_args__ = (
+        CheckConstraint("delivery_attempt > 0", name="delivery_attempt_positive"),
+        CheckConstraint(_in_values("delivery_state", DELIVERY_STATES), name="delivery_state"),
+        CheckConstraint(
+            "completed_at IS NULL OR completed_at >= started_at", name="completed_after_started"
+        ),
+        CheckConstraint(
+            "interrupted_at IS NULL OR interrupted_at >= started_at",
+            name="interrupted_after_started",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "interviewer_prompt_id"],
+            ["interviewer_prompts.interview_session_id", "interviewer_prompts.id"],
+            name="fk_prompt_deliveries_session_prompt",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "actual_transcript_segment_id"],
+            ["transcript_segments.interview_session_id", "transcript_segments.id"],
+            name="fk_prompt_deliveries_session_transcript",
+            ondelete="SET NULL (actual_transcript_segment_id)",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "ai_invocation_id"],
+            ["ai_invocations.interview_session_id", "ai_invocations.id"],
+            name="fk_prompt_deliveries_session_ai_invocation",
+            ondelete="SET NULL (ai_invocation_id)",
+        ),
+        UniqueConstraint(
+            "interviewer_prompt_id",
+            "delivery_attempt",
+            name="uq_prompt_deliveries_prompt_attempt",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    interviewer_prompt_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interviewer_prompts.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    delivery_attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    intended_text: Mapped[str] = mapped_column(Text, nullable=False)
+    actual_transcript_segment_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("transcript_segments.id", ondelete="SET NULL"),
+    )
+    delivery_state: Mapped[str] = mapped_column(String(64), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    realtime_provider_event_id: Mapped[str | None] = mapped_column(String(256))
+    ai_invocation_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("ai_invocations.id", ondelete="SET NULL"),
+    )
+
+    interviewer_prompt: Mapped[InterviewerPrompt] = relationship(
+        back_populates="deliveries",
+        foreign_keys=[interviewer_prompt_id],
+    )
+    actual_transcript_segment: Mapped[TranscriptSegment | None] = relationship(
+        foreign_keys=[actual_transcript_segment_id],
+    )
+    ai_invocation: Mapped[AIInvocation | None] = relationship(foreign_keys=[ai_invocation_id])
+
+
+class CandidateResponse(Base):
+    __tablename__ = "candidate_responses"
+    __table_args__ = (
+        CheckConstraint("ended_at IS NULL OR ended_at >= started_at", name="ended_after_started"),
+        CheckConstraint(
+            _in_values("completion_reason", RESPONSE_COMPLETION_REASONS),
+            name="completion_reason",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "interviewer_prompt_id"],
+            ["interviewer_prompts.interview_session_id", "interviewer_prompts.id"],
+            name="fk_candidate_responses_session_prompt",
+            ondelete="SET NULL (interviewer_prompt_id)",
+        ),
+        UniqueConstraint("interview_session_id", "id", name="uq_candidate_responses_session_id"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    interviewer_prompt_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interviewer_prompts.id", ondelete="SET NULL"),
+    )
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completion_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    interview_session: Mapped[InterviewSession] = relationship()
+    interviewer_prompt: Mapped[InterviewerPrompt | None] = relationship(
+        back_populates="responses",
+        foreign_keys=[interviewer_prompt_id],
+    )
+    sources: Mapped[list[CandidateResponseSource]] = relationship(
+        back_populates="candidate_response",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="CandidateResponseSource.candidate_response_id",
+    )
+
+
+class CandidateResponseSource(Base):
+    __tablename__ = "candidate_response_sources"
+    __table_args__ = (
+        CheckConstraint(_in_values("source_role", RESPONSE_SOURCE_ROLES), name="source_role"),
+        CheckConstraint("sequence > 0", name="sequence_positive"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "candidate_response_id"],
+            ["candidate_responses.interview_session_id", "candidate_responses.id"],
+            name="fk_candidate_response_sources_session_response",
+            ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "interview_event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_candidate_response_sources_session_event",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "candidate_response_id",
+            "sequence",
+            name="uq_candidate_response_sources_response_sequence",
+        ),
+    )
+
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    candidate_response_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("candidate_responses.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    interview_event_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_events.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    source_role: Mapped[str] = mapped_column(String(64), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    candidate_response: Mapped[CandidateResponse] = relationship(
+        back_populates="sources",
+        foreign_keys=[candidate_response_id],
+    )
+    interview_event: Mapped[InterviewEvent] = relationship(foreign_keys=[interview_event_id])
