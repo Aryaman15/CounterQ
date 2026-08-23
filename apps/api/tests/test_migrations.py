@@ -9,14 +9,14 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage1_1b_head() -> None:
+def test_alembic_configuration_has_stage1_2_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202608230104"
+    assert script.get_current_head() == "202608230105"
 
 
-def test_stage1_1b_migration_downgrades_and_upgrades_cleanly() -> None:
+def test_stage1_2_migration_downgrades_and_upgrades_cleanly() -> None:
     config = Config(str(Path("alembic.ini")))
 
     try:
@@ -29,7 +29,7 @@ def test_stage1_1b_migration_downgrades_and_upgrades_cleanly() -> None:
         command.upgrade(config, "head")
 
 
-def test_stage1_1b_table_boundary_is_explicit() -> None:
+def test_stage1_2_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -44,6 +44,7 @@ def test_stage1_1b_table_boundary_is_explicit() -> None:
         "interview_configurations",
         "interview_events",
         "interview_pack_versions",
+        "interview_stage_transitions",
         "interviewer_prompt_deliveries",
         "interviewer_prompts",
         "interview_sessions",

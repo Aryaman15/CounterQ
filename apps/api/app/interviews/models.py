@@ -159,6 +159,12 @@ class InterviewSession(Base):
         passive_deletes=True,
         foreign_keys="CodeSnapshot.interview_session_id",
     )
+    stage_transitions: Mapped[list[InterviewStageTransition]] = relationship(
+        back_populates="interview_session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        foreign_keys="InterviewStageTransition.interview_session_id",
+    )
 
 
 class SessionBudget(Base):
@@ -209,6 +215,67 @@ class SessionBudget(Base):
     interview_session: Mapped[InterviewSession] = relationship(back_populates="budget")
 
 
+class InterviewStageTransition(Base):
+    __tablename__ = "interview_stage_transitions"
+    __table_args__ = (
+        CheckConstraint(_in_values("from_stage", INTERVIEW_STAGES), name="from_stage"),
+        CheckConstraint(_in_values("to_stage", INTERVIEW_STAGES), name="to_stage"),
+        CheckConstraint("state_version > 0", name="state_version_positive"),
+        CheckConstraint("from_stage <> to_stage", name="stage_changed"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_stage_transitions_session_event",
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "interview_session_id",
+            "id",
+            name="uq_stage_transitions_session_id",
+        ),
+        UniqueConstraint(
+            "interview_session_id",
+            "state_version",
+            name="uq_stage_transitions_session_state_version",
+        ),
+        UniqueConstraint("event_id", name="uq_stage_transitions_event"),
+        Index(
+            "ix_stage_transitions_session_state_version",
+            "interview_session_id",
+            "state_version",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    from_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_stage: Mapped[str] = mapped_column(String(64), nullable=False)
+    state_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    trigger: Mapped[str] = mapped_column(String(96), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    event_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_events.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    transition_policy_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP"),
+    )
+
+    interview_session: Mapped[InterviewSession] = relationship(
+        back_populates="stage_transitions",
+        foreign_keys=[interview_session_id],
+    )
+    event: Mapped[InterviewEvent] = relationship(foreign_keys=[event_id])
+
+
 class InterviewerPrompt(Base):
     __tablename__ = "interviewer_prompts"
     __table_args__ = (
@@ -223,12 +290,26 @@ class InterviewerPrompt(Base):
             "(kind <> 'PROBE' AND probe_strategy IS NULL)",
             name="probe_strategy_matches_kind",
         ),
+        CheckConstraint(
+            "(origin = 'EXAMINER_DECISION' AND examiner_decision_id IS NOT NULL) OR "
+            "(origin <> 'EXAMINER_DECISION' AND examiner_decision_id IS NULL)",
+            name="examiner_decision_matches_origin",
+        ),
         CheckConstraint(_in_values("status", PROMPT_STATUSES), name="status"),
         ForeignKeyConstraint(
             ["interview_session_id", "examiner_decision_id"],
             ["examiner_decisions.interview_session_id", "examiner_decisions.id"],
             name="fk_interviewer_prompts_session_examiner_decision",
             ondelete="SET NULL (examiner_decision_id)",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "source_stage_transition_id"],
+            [
+                "interview_stage_transitions.interview_session_id",
+                "interview_stage_transitions.id",
+            ],
+            name="fk_interviewer_prompts_session_stage_transition",
+            ondelete="SET NULL (source_stage_transition_id)",
         ),
         ForeignKeyConstraint(
             ["interview_session_id", "target_claim_id"],
@@ -271,6 +352,9 @@ class InterviewerPrompt(Base):
     interview_session: Mapped[InterviewSession] = relationship()
     examiner_decision: Mapped[ExaminerDecision | None] = relationship(
         foreign_keys=[examiner_decision_id],
+    )
+    source_stage_transition: Mapped[InterviewStageTransition | None] = relationship(
+        foreign_keys=[source_stage_transition_id],
     )
     target_claim: Mapped[CandidateClaim | None] = relationship(foreign_keys=[target_claim_id])
     deliveries: Mapped[list[InterviewerPromptDelivery]] = relationship(

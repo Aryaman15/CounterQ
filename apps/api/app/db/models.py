@@ -10,6 +10,7 @@ from app.interviews.models import (
     InterviewerPrompt,
     InterviewerPromptDelivery,
     InterviewSession,
+    InterviewStageTransition,
     SessionBudget,
 )
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
@@ -27,6 +28,7 @@ __all__ = [
     "InterviewConfiguration",
     "InterviewEvent",
     "InterviewPackVersion",
+    "InterviewStageTransition",
     "InterviewSession",
     "InterviewerPrompt",
     "InterviewerPromptDelivery",
