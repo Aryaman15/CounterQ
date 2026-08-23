@@ -12,6 +12,7 @@ import {
 import { useDemoDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { DemoInterviewRoomFixture } from "../models/candidate-visible";
+import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
 import { ExecutionPanel } from "./ExecutionPanel";
 import { InterviewHeader } from "./InterviewHeader";
@@ -35,6 +36,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const draggingRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
   const remainingLabel = useDemoDeadlineTimer(fixture.serverNowIso, fixture.deadlineAtIso);
+  const realtimeVoice = useRealtimeVoice();
 
   useEffect(() => {
     setProblemWidth(readStoredProblemWidth(window.localStorage));
@@ -116,7 +118,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       <InterviewHeader
         mode={fixture.mode}
         remainingLabel={remainingLabel}
-        voiceState={fixture.voiceState}
+        voiceState={realtimeVoice.voiceState}
         onEndInterview={() => setEndDialogOpen(true)}
       />
 
@@ -163,8 +165,14 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       </div>
 
       <InterviewerSurface
-        voiceState={fixture.voiceState}
+        voiceState={realtimeVoice.voiceState}
+        voiceError={realtimeVoice.errorMessage}
         currentTurn={fixture.currentDeliveredTurn}
+        onEnableMicrophone={realtimeVoice.enableMicrophone}
+        onMute={realtimeVoice.mute}
+        onUnmute={realtimeVoice.unmute}
+        onDisconnectVoice={realtimeVoice.disconnect}
+        onSpeakDevelopmentPhrase={realtimeVoice.speakDevelopmentPhrase}
         onOpenConversation={() => setConversationOpen(true)}
       />
       <RecentConversationDrawer

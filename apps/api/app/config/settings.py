@@ -1,12 +1,25 @@
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def find_repository_root(start: Path | None = None) -> Path:
+    current = (start or Path(__file__)).resolve()
+    candidates = [current, *current.parents]
+    for candidate in candidates:
+        if (candidate / "AGENTS.md").is_file() and (candidate / "package.json").is_file():
+            return candidate
+    raise RuntimeError("Unable to locate CounterQ repository root")
+
+
+REPOSITORY_ROOT = find_repository_root()
+REPOSITORY_ENV_FILE = REPOSITORY_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
         env_prefix="COUNTERQ_",
         extra="ignore",
     )
@@ -23,8 +36,45 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/0",
         validation_alias="REDIS_URL",
     )
+    local_web_origin: str = Field(
+        default="http://127.0.0.1:3000",
+        validation_alias="COUNTERQ_LOCAL_WEB_ORIGIN",
+    )
+
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="OPENAI_API_KEY",
+    )
+    realtime_provider: str = Field(
+        default="openai",
+        validation_alias="COUNTERQ_REALTIME_PROVIDER",
+    )
+    realtime_model: str = Field(
+        default="gpt-realtime-2.1",
+        validation_alias="COUNTERQ_REALTIME_MODEL",
+    )
+    realtime_voice: str = Field(
+        default="marin",
+        validation_alias="COUNTERQ_REALTIME_VOICE",
+    )
+    realtime_transcription_model: str = Field(
+        default="gpt-live-transcribe",
+        validation_alias="COUNTERQ_REALTIME_TRANSCRIPTION_MODEL",
+    )
+    realtime_reasoning_effort: str = Field(
+        default="low",
+        validation_alias="COUNTERQ_REALTIME_REASONING_EFFORT",
+    )
+    realtime_client_secret_ttl_seconds: int = Field(
+        default=600,
+        validation_alias="COUNTERQ_REALTIME_CLIENT_SECRET_TTL_SECONDS",
+    )
+
+
+def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:
+    return Settings(_env_file=env_file)
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    return Settings()
+    return create_settings()

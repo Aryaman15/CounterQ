@@ -68,7 +68,8 @@ describe("Interview Room demo", () => {
     expect(screen.getByLabelText("CounterQ Interview Room")).toHaveTextContent("CounterQ");
     expect(screen.getByText("SIMULATION")).toBeInTheDocument();
     expect(screen.getByText("21:42")).toBeInTheDocument();
-    expect(screen.getAllByText("Listening").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Ready").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "Enable microphone" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "End Interview" })).toBeInTheDocument();
 
     expect(screen.queryByText("IMPLEMENTATION")).not.toBeInTheDocument();

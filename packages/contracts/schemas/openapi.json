@@ -1,6 +1,93 @@
 {
   "components": {
     "schemas": {
+      "CreateRealtimeSessionRequest": {
+        "properties": {
+          "purpose": {
+            "const": "interview_demo",
+            "default": "interview_demo",
+            "title": "Purpose",
+            "type": "string"
+          }
+        },
+        "title": "CreateRealtimeSessionRequest",
+        "type": "object"
+      },
+      "CreateRealtimeSessionResponse": {
+        "properties": {
+          "client_secret": {
+            "description": "Short-lived browser credential for OpenAI WebRTC.",
+            "title": "Client Secret",
+            "type": "string"
+          },
+          "expires_after_seconds": {
+            "title": "Expires After Seconds",
+            "type": "integer"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "provider": {
+            "const": "openai",
+            "title": "Provider",
+            "type": "string"
+          },
+          "transcription_model": {
+            "title": "Transcription Model",
+            "type": "string"
+          },
+          "turn_detection": {
+            "$ref": "#/components/schemas/RealtimeTurnDetectionConfig"
+          },
+          "voice": {
+            "title": "Voice",
+            "type": "string"
+          },
+          "webrtc_url": {
+            "title": "Webrtc Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "client_secret",
+          "webrtc_url",
+          "model",
+          "voice",
+          "transcription_model",
+          "expires_at",
+          "expires_after_seconds",
+          "turn_detection"
+        ],
+        "title": "CreateRealtimeSessionResponse",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "environment": {
@@ -24,6 +111,78 @@
         ],
         "title": "HealthResponse",
         "type": "object"
+      },
+      "RealtimeTurnDetectionConfig": {
+        "properties": {
+          "create_response": {
+            "const": false,
+            "title": "Create Response",
+            "type": "boolean"
+          },
+          "eagerness": {
+            "const": "low",
+            "title": "Eagerness",
+            "type": "string"
+          },
+          "interrupt_response": {
+            "const": true,
+            "title": "Interrupt Response",
+            "type": "boolean"
+          },
+          "type": {
+            "const": "semantic_vad",
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "eagerness",
+          "create_response",
+          "interrupt_response"
+        ],
+        "title": "RealtimeTurnDetectionConfig",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
       }
     }
   },
@@ -34,6 +193,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/realtime/session": {
+      "post": {
+        "operationId": "create_realtime_session_api_realtime_session_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRealtimeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateRealtimeSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Realtime Session",
+        "tags": [
+          "realtime"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "operationId": "health_health_get",

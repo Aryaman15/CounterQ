@@ -484,7 +484,9 @@ a:focus-visible,
 }
 
 .interviewer-presence {
-  padding-left: 42px;
+  display: grid;
+  gap: 8px;
+  padding-left: 20px;
 }
 
 .voice-presence {
@@ -526,12 +528,79 @@ a:focus-visible,
 }
 
 .voice-dot-muted,
-.voice-dot-reconnecting {
+.voice-dot-reconnecting,
+.voice-dot-connecting {
   background: var(--amber);
 }
 
 .voice-dot-speaking {
   background: var(--blue);
+}
+
+.voice-dot-ready {
+  background: var(--quiet);
+}
+
+.voice-dot-error {
+  background: var(--red);
+}
+
+.voice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.voice-control-button,
+.voice-icon-button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #151920;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease;
+}
+
+.voice-control-button {
+  padding: 0 9px;
+}
+
+.voice-icon-button {
+  width: 30px;
+}
+
+.voice-control-button:hover,
+.voice-icon-button:hover {
+  border-color: var(--amber);
+  background: #222933;
+}
+
+.voice-dev-button {
+  color: #f5d88f;
+}
+
+.voice-control-note,
+.voice-error {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.voice-error {
+  margin: 0;
+  color: #f1a4a0;
+  line-height: 1.35;
 }
 
 .active-prompt {

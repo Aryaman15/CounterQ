@@ -18,7 +18,6 @@ export const demoInterviewFixture: DemoInterviewRoomFixture = {
   languageLabel: "C++17",
   serverNowIso: "2026-08-23T10:08:18.000Z",
   deadlineAtIso: "2026-08-23T10:30:00.000Z",
-  voiceState: "Listening",
   persistenceState: "LOCAL_PENDING",
   starterCode: demoStarterCode,
   problem: {

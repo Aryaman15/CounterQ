@@ -1,6 +1,8 @@
 # CounterQ
 
-CounterQ is in Stage 0: repository foundation for the future Core Interaction Spike. This scaffold intentionally contains no Stage 1 interview behavior, no CounterQ domain tables, and no AI/provider integrations.
+CounterQ is in Stage 1: Core Interaction Spike development. The repository now contains the canonical Stage 1 persistence/runtime foundation, the `/interview/demo` Interview Room preview with Monaco, and the first realtime voice transport foundation.
+
+The current realtime path is a development spike: FastAPI mints short-lived OpenAI Realtime browser credentials, and the browser connects directly to OpenAI over WebRTC. It does not implement Examiner reasoning, adaptive probes, canonical realtime transcript persistence, reports, Evidence, CounterMap, or Mastery.
 
 ## Prerequisites
 
@@ -9,6 +11,26 @@ CounterQ is in Stage 0: repository foundation for the future Core Interaction Sp
 - Python 3.12+
 - uv
 - Docker Desktop
+- OpenAI API key with Realtime access for live voice testing
+
+## Local Secrets
+
+Local monorepo secrets live in the repository-root `.env` file:
+
+```sh
+cp .env.example .env
+```
+
+Set `OPENAI_API_KEY` in `.env` for live realtime testing. The key is server-only: do not put it in `NEXT_PUBLIC_*`, frontend code, generated contracts, or committed files.
+
+Useful realtime defaults are documented in `.env.example`:
+
+```sh
+COUNTERQ_REALTIME_PROVIDER=openai
+COUNTERQ_REALTIME_MODEL=gpt-realtime-2.1
+COUNTERQ_REALTIME_VOICE=marin
+COUNTERQ_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
+```
 
 ## Bootstrap
 
@@ -33,7 +55,15 @@ pnpm run dev:api
 pnpm run dev:worker
 ```
 
-The frontend uses Next.js at `http://localhost:3000`. The API uses FastAPI at `http://127.0.0.1:8000`; `GET /health` is the basic liveness endpoint.
+The frontend uses Next.js at `http://127.0.0.1:3000`. The API uses FastAPI at `http://127.0.0.1:8000`; `GET /health` is the basic liveness endpoint.
+
+Open the Stage 1 Interview Room preview at:
+
+```text
+http://127.0.0.1:3000/interview/demo
+```
+
+For live realtime voice, start web and API, open the demo route, then use **Enable microphone**. Real provider testing consumes OpenAI API credit.
 
 ## Tests
 
@@ -70,4 +100,3 @@ pnpm run contracts
 ```
 
 This writes `packages/contracts/schemas/openapi.json` and `packages/contracts/generated/openapi.ts`.
-

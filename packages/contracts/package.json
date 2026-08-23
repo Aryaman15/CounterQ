@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "exports": {
+    "./openapi": "./generated/openapi.ts"
+  },
   "scripts": {
     "generate": "openapi-typescript ./schemas/openapi.json -o ./generated/openapi.ts"
   },
@@ -11,4 +14,3 @@
     "typescript": "^5.9.3"
   }
 }
-

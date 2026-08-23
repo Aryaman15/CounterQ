@@ -1,4 +1,11 @@
-export type VoicePresenceState = "Ready" | "Listening" | "Speaking" | "Reconnecting" | "Muted";
+export type VoicePresenceState =
+  | "Ready"
+  | "Connecting"
+  | "Listening"
+  | "Speaking"
+  | "Reconnecting"
+  | "Muted"
+  | "Error";
 
 export type DemoPersistenceState = "LOCAL_PENDING";
 
@@ -40,7 +47,6 @@ export type DemoInterviewRoomFixture = {
   languageLabel: "C++17";
   serverNowIso: string;
   deadlineAtIso: string;
-  voiceState: VoicePresenceState;
   persistenceState: DemoPersistenceState;
   problem: DemoProblem;
   starterCode: string;
