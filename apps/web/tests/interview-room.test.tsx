@@ -20,6 +20,15 @@ import {
 } from "../features/interview-room/hooks/localPersistence";
 import { reducedMotionQuery } from "../features/interview-room/hooks/usePrefersReducedMotion";
 
+const observedRealtimeSession = {
+  eventType: "session.created" as const,
+  sessionType: "realtime",
+  transcriptionModel: "gpt-live-transcribe",
+  turnDetectionType: "semantic_vad",
+  createResponse: false,
+  interruptResponse: true,
+};
+
 vi.mock("@monaco-editor/react", () => ({
   default: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
     <textarea
@@ -113,6 +122,7 @@ describe("Interview Room demo", () => {
         voiceError={null}
         partialTranscript="I am thinking about"
         lastFinalTranscript="I am thinking about the window."
+        sessionDebug={observedRealtimeSession}
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
         onEnableMicrophone={noop}
         onMute={noop}
@@ -133,6 +143,8 @@ describe("Interview Room demo", () => {
     expect(within(popover).getByText("DEVELOPMENT TRANSCRIPT")).toBeInTheDocument();
     expect(screen.getByText("I am thinking about")).toBeInTheDocument();
     expect(screen.getByText("I am thinking about the window.")).toBeInTheDocument();
+    expect(screen.getByText("realtime / gpt-live-transcribe")).toBeInTheDocument();
+    expect(screen.getByText(/semantic_vad; auto response disabled; interruption enabled/i)).toBeInTheDocument();
     expect(screen.getByText("Listening")).toBeInTheDocument();
 
     rerender(
@@ -142,6 +154,7 @@ describe("Interview Room demo", () => {
         voiceError={null}
         partialTranscript=""
         lastFinalTranscript="Final transcript arrived."
+        sessionDebug={observedRealtimeSession}
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
         onEnableMicrophone={noop}
         onMute={noop}

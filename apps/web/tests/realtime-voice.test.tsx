@@ -158,6 +158,7 @@ function renderRealtimeHarness(client: HookFakeClient) {
         <p data-testid="muted-state">{String(voice.isMuted)}</p>
         <p data-testid="partial-transcript">{voice.partialTranscript}</p>
         <p data-testid="final-transcript">{voice.lastFinalTranscript}</p>
+        <p data-testid="session-transcription-model">{voice.sessionDebug.transcriptionModel}</p>
         {voice.errorMessage ? <p>{voice.errorMessage}</p> : null}
         <button type="button" onClick={() => void voice.enableMicrophone()}>
           enable
@@ -334,16 +335,48 @@ describe("Realtime voice foundation", () => {
     });
 
     act(() => {
-      client.emit({ type: "transcript_delta", text: "hash map" });
+      client.emit({
+        type: "transcript_delta",
+        text: "hash ",
+        itemId: "item_1",
+        contentIndex: 0,
+      });
+      client.emit({
+        type: "transcript_delta",
+        text: "map",
+        itemId: "item_1",
+        contentIndex: 0,
+      });
     });
     expect(screen.getByTestId("partial-transcript")).toHaveTextContent("hash map");
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
 
     act(() => {
-      client.emit({ type: "transcript_final", text: "hash map lookup" });
+      client.emit({
+        type: "transcript_final",
+        text: "hash map lookup",
+        itemId: "item_1",
+        contentIndex: 0,
+      });
     });
     expect(screen.getByTestId("partial-transcript")).toHaveTextContent("");
     expect(screen.getByTestId("final-transcript")).toHaveTextContent("hash map lookup");
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+
+    act(() => {
+      client.emit({
+        type: "realtime_session_observed",
+        eventType: "session.updated",
+        sessionType: "realtime",
+        transcriptionModel: "gpt-live-transcribe",
+        turnDetectionType: "semantic_vad",
+        createResponse: false,
+        interruptResponse: true,
+      });
+    });
+    expect(screen.getByTestId("session-transcription-model")).toHaveTextContent(
+      "gpt-live-transcribe",
+    );
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
   });
 
@@ -371,15 +404,61 @@ describe("Realtime voice foundation", () => {
     expect(
       normalizeRealtimeEvent({
         type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item_1",
+        content_index: 0,
         delta: "hash",
       }),
-    ).toEqual([{ type: "transcript_delta", text: "hash" }]);
+    ).toEqual([{ type: "transcript_delta", text: "hash", itemId: "item_1", contentIndex: 0 }]);
     expect(
       normalizeRealtimeEvent({
         type: "conversation.item.input_audio_transcription.completed",
+        item_id: "item_1",
+        content_index: 0,
         transcript: "final text",
       }),
-    ).toEqual([{ type: "transcript_final", text: "final text" }]);
+    ).toEqual([
+      { type: "transcript_final", text: "final text", itemId: "item_1", contentIndex: 0 },
+    ]);
+    expect(
+      normalizeRealtimeEvent({
+        type: "conversation.item.input_audio_transcription.failed",
+        item_id: "item_1",
+      }),
+    ).toEqual([
+      {
+        type: "transcript_failed",
+        itemId: "item_1",
+        message: "Realtime transcription failed for the current audio turn.",
+      },
+    ]);
+    expect(
+      normalizeRealtimeEvent({
+        type: "session.created",
+        session: {
+          type: "realtime",
+          audio: {
+            input: {
+              transcription: { model: "gpt-live-transcribe" },
+              turn_detection: {
+                type: "semantic_vad",
+                create_response: false,
+                interrupt_response: true,
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        type: "realtime_session_observed",
+        eventType: "session.created",
+        sessionType: "realtime",
+        transcriptionModel: "gpt-live-transcribe",
+        turnDetectionType: "semantic_vad",
+        createResponse: false,
+        interruptResponse: true,
+      },
+    ]);
     expect(normalizeRealtimeEvent({ type: "response.output_audio.delta" })).toEqual([
       { type: "counterq_output_started" },
     ]);

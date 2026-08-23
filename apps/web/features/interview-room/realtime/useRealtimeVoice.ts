@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MutableRefObject } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
 import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceClient";
@@ -17,11 +18,21 @@ export type RealtimeVoiceControls = {
   errorMessage: string | null;
   partialTranscript: string;
   lastFinalTranscript: string;
+  sessionDebug: RealtimeSessionDebug;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
   disconnect: () => void;
   speakDevelopmentPhrase: () => void;
+};
+
+export type RealtimeSessionDebug = {
+  eventType: "session.created" | "session.updated" | null;
+  sessionType: string | null;
+  transcriptionModel: string | null;
+  turnDetectionType: string | null;
+  createResponse: boolean | null;
+  interruptResponse: boolean | null;
 };
 
 export function useRealtimeVoice(
@@ -33,8 +44,18 @@ export function useRealtimeVoice(
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [partialTranscript, setPartialTranscript] = useState("");
   const [lastFinalTranscript, setLastFinalTranscript] = useState("");
+  const [sessionDebug, setSessionDebug] = useState<RealtimeSessionDebug>({
+    eventType: null,
+    sessionType: null,
+    transcriptionModel: null,
+    turnDetectionType: null,
+    createResponse: null,
+    interruptResponse: null,
+  });
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const transcriptDraftsRef = useRef(new Map<string, string>());
+  const activeTranscriptKeyRef = useRef<string | null>(null);
 
   const voiceState = useMemo<VoicePresenceState>(() => {
     if (isMuted && activityState === "Listening") {
@@ -59,6 +80,9 @@ export function useRealtimeVoice(
         setIsMuted,
         setPartialTranscript,
         setLastFinalTranscript,
+        setSessionDebug,
+        transcriptDraftsRef,
+        activeTranscriptKeyRef,
       });
     });
     clientRef.current = client;
@@ -95,6 +119,8 @@ export function useRealtimeVoice(
     setActivityState("Ready");
     setIsMuted(false);
     setPartialTranscript("");
+    transcriptDraftsRef.current.clear();
+    activeTranscriptKeyRef.current = null;
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -109,6 +135,7 @@ export function useRealtimeVoice(
     errorMessage,
     partialTranscript,
     lastFinalTranscript,
+    sessionDebug,
     enableMicrophone,
     mute,
     unmute,
@@ -123,6 +150,9 @@ type RealtimeEventSetters = {
   setIsMuted: (muted: boolean) => void;
   setPartialTranscript: (text: string) => void;
   setLastFinalTranscript: (text: string) => void;
+  setSessionDebug: (debug: RealtimeSessionDebug) => void;
+  transcriptDraftsRef: MutableRefObject<Map<string, string>>;
+  activeTranscriptKeyRef: MutableRefObject<string | null>;
 };
 
 function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSetters): void {
@@ -132,6 +162,9 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setIsMuted,
     setPartialTranscript,
     setLastFinalTranscript,
+    setSessionDebug,
+    transcriptDraftsRef,
+    activeTranscriptKeyRef,
   } = setters;
 
   if (event.type === "connecting") {
@@ -170,16 +203,48 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setActivityState("Ready");
     setIsMuted(false);
     setPartialTranscript("");
+    transcriptDraftsRef.current.clear();
+    activeTranscriptKeyRef.current = null;
     setErrorMessage(null);
     return;
   }
   if (event.type === "transcript_delta") {
-    setPartialTranscript(event.text);
+    const transcriptKey = transcriptEventKey(event.itemId, event.contentIndex);
+    const nextText = `${transcriptDraftsRef.current.get(transcriptKey) ?? ""}${event.text}`;
+    transcriptDraftsRef.current.set(transcriptKey, nextText);
+    activeTranscriptKeyRef.current = transcriptKey;
+    setPartialTranscript(nextText);
     return;
   }
   if (event.type === "transcript_final") {
+    const transcriptKey = transcriptEventKey(event.itemId, event.contentIndex);
+    transcriptDraftsRef.current.delete(transcriptKey);
+    if (activeTranscriptKeyRef.current === transcriptKey) {
+      activeTranscriptKeyRef.current = null;
+      setPartialTranscript("");
+    }
     setLastFinalTranscript(event.text);
-    setPartialTranscript("");
+    return;
+  }
+  if (event.type === "transcript_failed") {
+    const transcriptKey = transcriptEventKey(event.itemId, null);
+    transcriptDraftsRef.current.delete(transcriptKey);
+    if (activeTranscriptKeyRef.current === transcriptKey) {
+      activeTranscriptKeyRef.current = null;
+      setPartialTranscript("");
+    }
+    setErrorMessage(event.message);
+    return;
+  }
+  if (event.type === "realtime_session_observed") {
+    setSessionDebug({
+      eventType: event.eventType,
+      sessionType: event.sessionType,
+      transcriptionModel: event.transcriptionModel,
+      turnDetectionType: event.turnDetectionType,
+      createResponse: event.createResponse,
+      interruptResponse: event.interruptResponse,
+    });
     return;
   }
   if (event.type === "error" || event.type === "provider_error") {
@@ -187,4 +252,8 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setActivityState("Error");
     setIsMuted(false);
   }
+}
+
+function transcriptEventKey(itemId: string | null, contentIndex: number | null): string {
+  return `${itemId ?? "latest"}:${contentIndex ?? 0}`;
 }

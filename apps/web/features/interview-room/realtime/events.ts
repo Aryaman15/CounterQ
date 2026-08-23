@@ -4,8 +4,18 @@ export type NormalizedRealtimeEvent =
   | { type: "counterq_output_started" }
   | { type: "counterq_output_ended" }
   | { type: "counterq_output_interrupted" }
-  | { type: "transcript_delta"; text: string }
-  | { type: "transcript_final"; text: string }
+  | { type: "transcript_delta"; text: string; itemId: string | null; contentIndex: number | null }
+  | { type: "transcript_final"; text: string; itemId: string | null; contentIndex: number | null }
+  | { type: "transcript_failed"; itemId: string | null; message: string }
+  | {
+      type: "realtime_session_observed";
+      eventType: "session.created" | "session.updated";
+      sessionType: string | null;
+      transcriptionModel: string | null;
+      turnDetectionType: string | null;
+      createResponse: boolean | null;
+      interruptResponse: boolean | null;
+    }
   | { type: "provider_error"; message: string };
 
 type RawRealtimeEvent = {
@@ -16,6 +26,9 @@ type RawRealtimeEvent = {
   error?: unknown;
   response?: unknown;
   reason?: unknown;
+  session?: unknown;
+  item_id?: unknown;
+  content_index?: unknown;
 };
 
 function stringField(value: unknown): string | null {
@@ -24,6 +37,14 @@ function stringField(value: unknown): string | null {
 
 function objectField(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function numberField(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
+}
+
+function booleanField(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
 }
 
 export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] {
@@ -71,9 +92,37 @@ export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] 
     return [{ type: "counterq_output_ended" }];
   }
 
+  if (rawType === "session.created" || rawType === "session.updated") {
+    const session = objectField(event.session);
+    const audio = objectField(session?.audio);
+    const input = objectField(audio?.input);
+    const transcription = objectField(input?.transcription);
+    const turnDetection = objectField(input?.turn_detection);
+    return [
+      {
+        type: "realtime_session_observed",
+        eventType: rawType,
+        sessionType: stringField(session?.type),
+        transcriptionModel: stringField(transcription?.model),
+        turnDetectionType: stringField(turnDetection?.type),
+        createResponse: booleanField(turnDetection?.create_response),
+        interruptResponse: booleanField(turnDetection?.interrupt_response),
+      },
+    ];
+  }
+
   if (rawType.includes("transcription") && rawType.endsWith(".delta")) {
     const text = stringField(event.delta) ?? stringField(event.text) ?? stringField(event.transcript);
-    return text ? [{ type: "transcript_delta", text }] : [];
+    return text
+      ? [
+          {
+            type: "transcript_delta",
+            text,
+            itemId: stringField(event.item_id),
+            contentIndex: numberField(event.content_index),
+          },
+        ]
+      : [];
   }
 
   if (
@@ -81,7 +130,26 @@ export function normalizeRealtimeEvent(raw: unknown): NormalizedRealtimeEvent[] 
     (rawType.endsWith(".completed") || rawType.endsWith(".done"))
   ) {
     const text = stringField(event.transcript) ?? stringField(event.text) ?? stringField(event.delta);
-    return text ? [{ type: "transcript_final", text }] : [];
+    return text
+      ? [
+          {
+            type: "transcript_final",
+            text,
+            itemId: stringField(event.item_id),
+            contentIndex: numberField(event.content_index),
+          },
+        ]
+      : [];
+  }
+
+  if (rawType.includes("transcription") && rawType.endsWith(".failed")) {
+    return [
+      {
+        type: "transcript_failed",
+        itemId: stringField(event.item_id),
+        message: "Realtime transcription failed for the current audio turn.",
+      },
+    ];
   }
 
   if (rawType === "error") {

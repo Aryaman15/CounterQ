@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
+import type { RealtimeSessionDebug } from "../realtime/useRealtimeVoice";
 import { renderDeliveredText } from "./deliveredText";
 import { VoicePresence } from "./VoicePresence";
 
@@ -13,6 +14,7 @@ type InterviewerSurfaceProps = {
   voiceError: string | null;
   partialTranscript: string;
   lastFinalTranscript: string;
+  sessionDebug: RealtimeSessionDebug;
   currentTurn: DeliveredInterviewerTurn;
   onEnableMicrophone: () => Promise<void>;
   onMute: () => void;
@@ -28,6 +30,7 @@ export function InterviewerSurface({
   voiceError,
   partialTranscript,
   lastFinalTranscript,
+  sessionDebug,
   currentTurn,
   onEnableMicrophone,
   onMute,
@@ -114,48 +117,6 @@ export function InterviewerSurface({
                 <Volume2 size={14} aria-hidden="true" />
                 <span>Dev phrase</span>
               </button>
-              {showTranscriptInspector ? (
-                <div className="voice-dev-transcript-anchor" ref={transcriptPopoverRef}>
-                  <button
-                    type="button"
-                    className="voice-control-button voice-dev-button"
-                    aria-expanded={transcriptOpen}
-                    aria-controls="development-transcript-popover"
-                    onClick={() => setTranscriptOpen((current) => !current)}
-                  >
-                    <span>Dev transcript</span>
-                  </button>
-                  {transcriptOpen ? (
-                    <div
-                      id="development-transcript-popover"
-                      className="voice-dev-transcript-popover"
-                      role="dialog"
-                      aria-labelledby="development-transcript-title"
-                    >
-                      <div className="voice-dev-transcript-header">
-                        <h2 id="development-transcript-title">DEVELOPMENT TRANSCRIPT</h2>
-                        <button
-                          type="button"
-                          className="voice-dev-transcript-close"
-                          onClick={() => setTranscriptOpen(false)}
-                        >
-                          Close
-                        </button>
-                      </div>
-                      <dl>
-                        <div>
-                          <dt>Partial</dt>
-                          <dd>{partialTranscript || "No partial transcript"}</dd>
-                        </div>
-                        <div>
-                          <dt>Final</dt>
-                          <dd>{lastFinalTranscript || "No final transcript"}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
             </>
           )}
         </div>
@@ -171,6 +132,68 @@ export function InterviewerSurface({
         <History size={16} aria-hidden="true" />
         <span>Recent conversation</span>
       </button>
+      {showTranscriptInspector ? (
+        <div className="voice-dev-transcript-anchor" ref={transcriptPopoverRef}>
+          <button
+            type="button"
+            className="voice-control-button voice-dev-button"
+            aria-expanded={transcriptOpen}
+            aria-controls="development-transcript-popover"
+            onClick={() => setTranscriptOpen((current) => !current)}
+          >
+            <span>Dev transcript</span>
+          </button>
+          {transcriptOpen ? (
+            <div
+              id="development-transcript-popover"
+              className="voice-dev-transcript-popover"
+              role="dialog"
+              aria-labelledby="development-transcript-title"
+            >
+              <div className="voice-dev-transcript-header">
+                <h2 id="development-transcript-title">DEVELOPMENT TRANSCRIPT</h2>
+                <button
+                  type="button"
+                  className="voice-dev-transcript-close"
+                  onClick={() => setTranscriptOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+              <dl>
+                <div>
+                  <dt>Partial</dt>
+                  <dd>{partialTranscript || "No partial transcript"}</dd>
+                </div>
+                <div>
+                  <dt>Final</dt>
+                  <dd>{lastFinalTranscript || "No final transcript"}</dd>
+                </div>
+                <div>
+                  <dt>Session</dt>
+                  <dd>
+                    {sessionDebug.transcriptionModel
+                      ? `${sessionDebug.sessionType ?? "session"} / ${sessionDebug.transcriptionModel}`
+                      : "Session transcription not observed"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Turn detection</dt>
+                  <dd>
+                    {sessionDebug.turnDetectionType
+                      ? `${sessionDebug.turnDetectionType}; auto response ${
+                          sessionDebug.createResponse === false ? "disabled" : "not confirmed"
+                        }; interruption ${
+                          sessionDebug.interruptResponse === true ? "enabled" : "not confirmed"
+                        }`
+                      : "Turn detection not observed"}
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }

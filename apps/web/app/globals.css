@@ -473,6 +473,7 @@ a:focus-visible,
 }
 
 .interviewer-surface {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(150px, 220px) minmax(0, 1fr) auto;
   align-items: center;
@@ -604,7 +605,10 @@ a:focus-visible,
 }
 
 .voice-dev-transcript-anchor {
-  position: relative;
+  position: absolute;
+  top: -40px;
+  left: 18px;
+  z-index: 25;
   display: inline-flex;
 }
 
@@ -612,7 +616,7 @@ a:focus-visible,
   position: absolute;
   bottom: calc(100% + 10px);
   left: 0;
-  z-index: 25;
+  z-index: 26;
   width: min(330px, calc(100vw - 36px));
   border: 1px solid var(--line-strong);
   border-radius: 8px;
