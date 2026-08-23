@@ -54,7 +54,7 @@ class InterviewEvent(Base):
             ["interview_session_id", "code_snapshot_id"],
             ["code_snapshots.interview_session_id", "code_snapshots.id"],
             name="fk_interview_events_session_code_snapshot",
-            ondelete="SET NULL",
+            ondelete="SET NULL (code_snapshot_id)",
         ),
         CheckConstraint(_in_values("event_type", EVENT_TYPES), name="event_type"),
         CheckConstraint(_in_values("source", EVENT_SOURCES), name="source"),
@@ -220,6 +220,12 @@ class CodeSnapshot(Base):
             ["interview_events.interview_session_id", "interview_events.id"],
             name="fk_code_snapshots_session_created_from_event",
             ondelete="CASCADE",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "parent_snapshot_id"],
+            ["code_snapshots.interview_session_id", "code_snapshots.id"],
+            name="fk_code_snapshots_session_parent_snapshot",
+            ondelete="SET NULL (parent_snapshot_id)",
         ),
         UniqueConstraint(
             "interview_session_id",

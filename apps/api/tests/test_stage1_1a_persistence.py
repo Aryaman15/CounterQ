@@ -362,6 +362,132 @@ async def test_successive_code_snapshots_are_unambiguous(
     assert second_snapshot.parent_snapshot_id == first_snapshot.id
 
 
+async def test_code_snapshot_accepts_parent_from_same_session(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    parent_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    child_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=2,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    observations = ObservationRepository(db_session)
+    parent = await observations.add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:parent",
+        created_from_event_id=parent_event.id,
+    )
+    child = await observations.add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=2,
+        parent_snapshot_id=parent.id,
+        language="cpp",
+        source_code="int main() { return 1; }",
+        content_hash="sha256:child",
+        created_from_event_id=child_event.id,
+    )
+
+    assert child.interview_session_id == graph.interview_session.id
+    assert child.parent_snapshot_id == parent.id
+
+
+async def test_code_snapshot_rejects_parent_from_different_session(
+    db_session: AsyncSession,
+) -> None:
+    session_a = await create_stage1_graph(db_session)
+    session_b = await create_stage1_graph(db_session)
+    parent_event_from_b = await add_event(
+        db_session,
+        session_b,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    parent_from_b = await ObservationRepository(db_session).add_code_snapshot(
+        session_id=session_b.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:parent-b",
+        created_from_event_id=parent_event_from_b.id,
+    )
+    child_event_from_a = await add_event(
+        db_session,
+        session_a,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+
+    with pytest.raises(IntegrityError):
+        await ObservationRepository(db_session).add_code_snapshot(
+            session_id=session_a.interview_session.id,
+            version_number=1,
+            parent_snapshot_id=parent_from_b.id,
+            language="cpp",
+            source_code="int main() { return 1; }",
+            content_hash="sha256:child-a",
+            created_from_event_id=child_event_from_a.id,
+        )
+
+
+async def test_parent_snapshot_delete_nulls_child_parent_without_moving_child(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    parent_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    child_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=2,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    observations = ObservationRepository(db_session)
+    parent = await observations.add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:parent-delete",
+        created_from_event_id=parent_event.id,
+    )
+    child = await observations.add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=2,
+        parent_snapshot_id=parent.id,
+        language="cpp",
+        source_code="int main() { return 1; }",
+        content_hash="sha256:child-delete",
+        created_from_event_id=child_event.id,
+    )
+
+    await db_session.execute(delete(CodeSnapshot).where(CodeSnapshot.id == parent.id))
+    await db_session.flush()
+    await db_session.refresh(child)
+
+    assert child.interview_session_id == graph.interview_session.id
+    assert child.parent_snapshot_id is None
+
+
 async def test_event_accepts_code_snapshot_from_same_session(
     db_session: AsyncSession,
 ) -> None:
@@ -438,6 +564,50 @@ async def test_event_rejects_code_snapshot_from_different_session(
 
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_snapshot_delete_nulls_event_snapshot_without_moving_event(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    snapshot_event = await add_event(
+        db_session,
+        graph,
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source="NATIVE_EDITOR",
+    )
+    snapshot = await ObservationRepository(db_session).add_code_snapshot(
+        session_id=graph.interview_session.id,
+        version_number=1,
+        language="cpp",
+        source_code="int main() { return 0; }",
+        content_hash="sha256:event-delete",
+        created_from_event_id=snapshot_event.id,
+    )
+    now = datetime.now(UTC)
+    referencing_event = InterviewEvent(
+        interview_session_id=graph.interview_session.id,
+        user_id=graph.user.id,
+        event_type="MEANINGFUL_CODE_CHANGE",
+        source="NATIVE_EDITOR",
+        occurred_at=now,
+        received_at=now,
+        server_sequence=2,
+        interview_state_version=0,
+        code_snapshot_id=snapshot.id,
+        schema_version="interview.event.v1",
+    )
+    db_session.add(referencing_event)
+    await db_session.flush()
+
+    await db_session.execute(delete(CodeSnapshot).where(CodeSnapshot.id == snapshot.id))
+    await db_session.flush()
+    await db_session.refresh(referencing_event)
+
+    assert referencing_event.interview_session_id == graph.interview_session.id
+    assert referencing_event.user_id == graph.user.id
+    assert referencing_event.code_snapshot_id is None
 
 
 async def test_user_delete_cascades_session_owned_observations(
