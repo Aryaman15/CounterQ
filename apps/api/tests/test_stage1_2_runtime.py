@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from test_stage1_1a_persistence import create_stage1_graph
-from test_stage1_1b_causal_persistence import create_ai_context
+from test_stage1_1b_causal_persistence import add_transcript_segment, create_ai_context
 
 from app.auth.models import User
 from app.db.session import build_engine
@@ -25,13 +25,16 @@ from app.interviews.models import (
 from app.interviews.prompt_policy import (
     DeliveryStateInvalid,
     PromptNotDeliverable,
+    candidate_visible_delivery,
     ensure_no_active_delivery,
-    prompt_is_candidate_visible,
     validate_delivery_state,
+    validate_examiner_decision_delivery_eligibility,
+    validate_prompt_delivery_eligibility,
     validate_prompt_origin,
 )
 from app.interviews.runtime import (
     AcceptEventCommand,
+    ActivePromptDeliveryBlocksTransition,
     IdempotencyConflict,
     InterviewRuntime,
     SessionClosed,
@@ -180,6 +183,41 @@ async def test_state_version_rejects_stale_mutations(db_session: AsyncSession) -
         )
 
 
+async def test_transition_idempotency_returns_existing_and_rejects_conflict(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    runtime = InterviewRuntime(db_session)
+    command = TransitionCommand(
+        session_id=graph.interview_session.id,
+        to_stage="INTRODUCTION",
+        trigger="DEPENDENCIES_READY",
+        expected_state_version=0,
+        occurred_at=utcnow(),
+        idempotency_key="transition-introduction",
+    )
+
+    first = await runtime.transition(command)
+    retry = await runtime.transition(command)
+
+    assert first.id == retry.id
+    assert graph.interview_session.current_stage == "INTRODUCTION"
+    assert graph.interview_session.state_version == 1
+    assert graph.interview_session.last_server_sequence == 1
+
+    with pytest.raises(IdempotencyConflict):
+        await runtime.transition(
+            TransitionCommand(
+                session_id=graph.interview_session.id,
+                to_stage="IMPLEMENTATION",
+                trigger="SKIP_AHEAD",
+                expected_state_version=0,
+                occurred_at=utcnow(),
+                idempotency_key="transition-introduction",
+            ),
+        )
+
+
 async def test_server_sequence_allocates_authoritative_values(
     db_session: AsyncSession,
 ) -> None:
@@ -307,6 +345,83 @@ async def test_transition_atomicity_rolls_back_session_event_and_history(
     assert transition_count == 0
 
 
+async def test_normal_transition_rejects_active_prompt_delivery(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=graph.interview_session.id,
+        origin="SYSTEM",
+        kind="BASE_QUESTION",
+        intent="Begin the interview.",
+        status="AUTHORIZED",
+    )
+    await InterviewInteractionRepository(db_session).add_delivery(
+        interview_session_id=graph.interview_session.id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=1,
+        intended_text="Let's begin.",
+        delivery_state="STARTED",
+        started_at=utcnow(),
+    )
+
+    with pytest.raises(ActivePromptDeliveryBlocksTransition):
+        await InterviewRuntime(db_session).transition(
+            TransitionCommand(
+                session_id=graph.interview_session.id,
+                to_stage="INTRODUCTION",
+                trigger="DEPENDENCIES_READY",
+                expected_state_version=0,
+                occurred_at=utcnow(),
+            ),
+        )
+
+    await db_session.refresh(graph.interview_session)
+    assert graph.interview_session.current_stage == "SETUP"
+    assert graph.interview_session.state_version == 0
+
+
+async def test_exceptional_transition_can_bypass_active_delivery_guard(
+    db_session: AsyncSession,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    graph.interview_session.current_stage = "IMPLEMENTATION"
+    graph.interview_session.state_version = 3
+    prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=graph.interview_session.id,
+        origin="SYSTEM",
+        kind="TIME_WARNING",
+        intent="Move to wrap-up at candidate request.",
+        status="AUTHORIZED",
+    )
+    await InterviewInteractionRepository(db_session).add_delivery(
+        interview_session_id=graph.interview_session.id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=1,
+        intended_text="We can wrap up now.",
+        delivery_state="STARTED",
+        started_at=utcnow(),
+    )
+
+    transition = await InterviewRuntime(db_session).transition(
+        TransitionCommand(
+            session_id=graph.interview_session.id,
+            to_stage="WRAP_UP",
+            trigger="CANDIDATE_REQUESTED_FINISH",
+            expected_state_version=3,
+            occurred_at=utcnow(),
+            context=TransitionContext(
+                "CANDIDATE_REQUESTED_FINISH",
+                candidate_requested_finish=True,
+            ),
+        ),
+    )
+
+    assert transition.to_stage == "WRAP_UP"
+    assert graph.interview_session.current_stage == "WRAP_UP"
+    assert graph.interview_session.state_version == 4
+
+
 async def test_deadline_and_completion_reject_ordinary_activity(
     db_session: AsyncSession,
 ) -> None:
@@ -369,7 +484,64 @@ async def test_prompt_causal_validation_blocks_stale_decision_delivery(
 ) -> None:
     graph = await create_stage1_graph(db_session)
     ai = await create_ai_context(db_session, graph, purpose="LIVE_EXAMINER")
-    decision = await ExaminerRepository(db_session).add_examiner_decision(
+    proposed = await ExaminerRepository(db_session).add_examiner_decision(
+        interview_session_id=graph.interview_session.id,
+        action="PROBE",
+        proposed_probe_strategy="ASSUMPTION_CHALLENGE",
+        technical_rationale="Candidate may have made a useful assumption claim.",
+        source_event_watermark=0,
+        source_state_version=0,
+        status="PROPOSED",
+        ai_invocation_id=ai.invocation.id,
+        ai_policy_version_id=ai.policy.id,
+    )
+    proposed_prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=graph.interview_session.id,
+        origin="EXAMINER_DECISION",
+        examiner_decision_id=proposed.id,
+        kind="PROBE",
+        probe_strategy="ASSUMPTION_CHALLENGE",
+        intent="Challenge the assumption.",
+        status="AUTHORIZED",
+    )
+
+    validate_prompt_origin(origin="EXAMINER_DECISION", examiner_decision=proposed)
+    with pytest.raises(PromptNotDeliverable):
+        validate_examiner_decision_delivery_eligibility(proposed)
+    with pytest.raises(PromptNotDeliverable):
+        validate_prompt_delivery_eligibility(
+            prompt=proposed_prompt,
+            examiner_decision=proposed,
+        )
+
+    authorized = await ExaminerRepository(db_session).add_examiner_decision(
+        interview_session_id=graph.interview_session.id,
+        action="PROBE",
+        proposed_probe_strategy="ASSUMPTION_CHALLENGE",
+        technical_rationale="Policy gate authorized a still-useful probe.",
+        source_event_watermark=0,
+        source_state_version=0,
+        status="AUTHORIZED",
+        policy_gate_outcome="AUTHORIZED",
+        ai_invocation_id=ai.invocation.id,
+        ai_policy_version_id=ai.policy.id,
+    )
+    authorized_prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=graph.interview_session.id,
+        origin="EXAMINER_DECISION",
+        examiner_decision_id=authorized.id,
+        kind="PROBE",
+        probe_strategy="ASSUMPTION_CHALLENGE",
+        intent="Challenge the authorized assumption.",
+        status="AUTHORIZED",
+    )
+
+    validate_prompt_delivery_eligibility(
+        prompt=authorized_prompt,
+        examiner_decision=authorized,
+    )
+
+    stale = await ExaminerRepository(db_session).add_examiner_decision(
         interview_session_id=graph.interview_session.id,
         action="PROBE",
         proposed_probe_strategy="ASSUMPTION_CHALLENGE",
@@ -377,18 +549,18 @@ async def test_prompt_causal_validation_blocks_stale_decision_delivery(
         source_event_watermark=0,
         source_state_version=0,
         status="STALE",
+        policy_gate_outcome="STALE",
         ai_invocation_id=ai.invocation.id,
         ai_policy_version_id=ai.policy.id,
     )
-
     with pytest.raises(PromptNotDeliverable):
-        validate_prompt_origin(origin="EXAMINER_DECISION", examiner_decision=decision)
+        validate_examiner_decision_delivery_eligibility(stale)
 
     with pytest.raises(IntegrityError):
         await InterviewInteractionRepository(db_session).add_prompt(
             interview_session_id=graph.interview_session.id,
             origin="SYSTEM",
-            examiner_decision_id=decision.id,
+            examiner_decision_id=stale.id,
             kind="TIME_WARNING",
             intent="Invalid fabricated examiner provenance.",
             status="AUTHORIZED",
@@ -399,6 +571,15 @@ async def test_delivery_state_and_authorization_visibility_policy(
     db_session: AsyncSession,
 ) -> None:
     graph = await create_stage1_graph(db_session)
+    _, delivered_segment = await add_transcript_segment(
+        db_session,
+        graph,
+        server_sequence=1,
+        speaker="COUNTERQ",
+        text="We are almost",
+    )
+    delivered_segment.delivery_state = "INTERRUPTED"
+    delivered_segment.interrupted_at = utcnow() + timedelta(seconds=1)
     interactions = InterviewInteractionRepository(db_session)
     prompt = await interactions.add_prompt(
         interview_session_id=graph.interview_session.id,
@@ -414,18 +595,36 @@ async def test_delivery_state_and_authorization_visibility_policy(
         intended_text="We are almost out of time.",
         delivery_state="INTERRUPTED",
         started_at=utcnow(),
+        actual_transcript_segment_id=delivered_segment.id,
         interrupted_at=utcnow() + timedelta(seconds=1),
     )
 
     validate_delivery_state(delivery)
 
-    assert prompt_is_candidate_visible(prompt) is False
+    prompt.status = "DELIVERED"
+    visible = candidate_visible_delivery(delivery)
+
+    assert visible is not None
+    assert visible.actual_transcript_segment_id == delivered_segment.id
+    assert visible.is_partial is True
+    assert not hasattr(visible, "intended_text")
     assert delivery.delivery_state == "INTERRUPTED"
+
+    no_factual_delivery = InterviewerPromptDelivery(
+        interview_session_id=graph.interview_session.id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=2,
+        intended_text="This must not leak from prompt status.",
+        delivery_state="INTERRUPTED",
+        started_at=utcnow(),
+        interrupted_at=utcnow() + timedelta(seconds=1),
+    )
+    assert candidate_visible_delivery(no_factual_delivery) is None
 
     invalid = InterviewerPromptDelivery(
         interview_session_id=graph.interview_session.id,
         interviewer_prompt_id=prompt.id,
-        delivery_attempt=2,
+        delivery_attempt=3,
         intended_text="Invalid delivered state.",
         delivery_state="DELIVERED",
         started_at=utcnow(),
@@ -457,6 +656,78 @@ async def test_only_one_active_prompt_delivery_may_own_floor(
     with pytest.raises(PromptNotDeliverable):
         await ensure_no_active_delivery(db_session, graph.interview_session.id)
 
+    with pytest.raises(IntegrityError):
+        await InterviewInteractionRepository(db_session).add_delivery(
+            interview_session_id=graph.interview_session.id,
+            interviewer_prompt_id=prompt.id,
+            delivery_attempt=2,
+            intended_text="Second simultaneous delivery.",
+            delivery_state="STARTED",
+            started_at=utcnow(),
+        )
+
+
+async def test_concurrent_delivery_starts_are_backstopped_by_database_index() -> None:
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: UUID | None = None
+    session_id: UUID | None = None
+    prompt_id: UUID | None = None
+    try:
+        async with maker() as setup_session:
+            async with setup_session.begin():
+                dev = await create_development_interview(setup_session)
+                user_id = dev.user.id
+                session_id = dev.interview_session.id
+                prompt = await InterviewInteractionRepository(setup_session).add_prompt(
+                    interview_session_id=session_id,
+                    origin="SYSTEM",
+                    kind="TIME_WARNING",
+                    intent="Warn about time.",
+                    status="AUTHORIZED",
+                )
+                prompt_id = prompt.id
+
+        async def start_delivery(attempt: int) -> UUID:
+            assert session_id is not None
+            assert prompt_id is not None
+            async with maker() as session:
+                async with session.begin():
+                    delivery = await InterviewInteractionRepository(session).add_delivery(
+                        interview_session_id=session_id,
+                        interviewer_prompt_id=prompt_id,
+                        delivery_attempt=attempt,
+                        intended_text=f"Delivery attempt {attempt}.",
+                        delivery_state="STARTED",
+                        started_at=utcnow(),
+                    )
+                    return delivery.id
+
+        results = await asyncio.gather(
+            start_delivery(1),
+            start_delivery(2),
+            return_exceptions=True,
+        )
+
+        assert sum(isinstance(result, UUID) for result in results) == 1
+        assert sum(isinstance(result, IntegrityError) for result in results) == 1
+
+        async with maker() as verify_session:
+            assert session_id is not None
+            delivery_count = await verify_session.scalar(
+                select(func.count())
+                .select_from(InterviewerPromptDelivery)
+                .where(InterviewerPromptDelivery.interview_session_id == session_id)
+                .where(InterviewerPromptDelivery.delivery_state == "STARTED"),
+            )
+            assert delivery_count == 1
+    finally:
+        if user_id is not None:
+            async with maker() as cleanup_session:
+                async with cleanup_session.begin():
+                    await cleanup_session.execute(delete(User).where(User.id == user_id))
+        await engine.dispose()
+
 
 async def test_conversation_floor_candidate_speech_wins_and_blocks_overlap() -> None:
     counterq_speaking = ConversationFloor().try_counterq_speaking("delivery-1")
@@ -464,12 +735,18 @@ async def test_conversation_floor_candidate_speech_wins_and_blocks_overlap() -> 
     assert counterq_speaking is not None
     assert counterq_speaking.try_counterq_speaking("delivery-2") is None
 
-    interrupted = counterq_speaking.candidate_speech_started()
+    candidate_floor = counterq_speaking.candidate_speech_started()
 
-    assert interrupted.state == "INTERRUPTED"
-    assert interrupted.active_prompt_delivery_id is None
-    assert interrupted.candidate_paused().state == "INTERRUPTED"
-    assert ConversationFloor(state="CANDIDATE_SPEAKING").try_counterq_speaking("delivery-3") is None
+    assert candidate_floor.state == "CANDIDATE_SPEAKING"
+    assert candidate_floor.active_prompt_delivery_id is None
+    assert candidate_floor.interrupted_prompt_delivery_id == "delivery-1"
+    assert candidate_floor.try_counterq_speaking("delivery-2") is None
+
+    thinking_floor = candidate_floor.candidate_paused()
+
+    assert thinking_floor.state == "CANDIDATE_THINKING"
+    assert thinking_floor.try_counterq_speaking("delivery-3") is not None
+    assert ConversationFloor(state="CANDIDATE_SPEAKING").try_counterq_speaking("delivery-4") is None
 
 
 async def test_budget_helpers_do_not_consume_probe_for_decision_creation(

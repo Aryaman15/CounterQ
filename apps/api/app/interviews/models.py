@@ -404,6 +404,12 @@ class InterviewerPromptDelivery(Base):
             "delivery_attempt",
             name="uq_prompt_deliveries_prompt_attempt",
         ),
+        Index(
+            "uq_prompt_deliveries_one_started_per_session",
+            "interview_session_id",
+            unique=True,
+            postgresql_where=text("delivery_state = 'STARTED'"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)

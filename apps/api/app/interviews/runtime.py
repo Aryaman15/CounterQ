@@ -11,11 +11,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.ids import uuid7
-from app.interviews.models import InterviewSession, InterviewStageTransition
+from app.interviews.models import (
+    InterviewerPromptDelivery,
+    InterviewSession,
+    InterviewStageTransition,
+)
 from app.interviews.state_machine import (
     STATE_MACHINE_POLICY_VERSION,
     TransitionContext,
     require_transition,
+    transition_may_bypass_active_delivery_guard,
 )
 from app.observation.models import InterviewEvent
 
@@ -43,6 +48,10 @@ class StaleStateVersion(InterviewRuntimeError):
 
 
 class IdempotencyConflict(InterviewRuntimeError):
+    pass
+
+
+class ActivePromptDeliveryBlocksTransition(InterviewRuntimeError):
     pass
 
 
@@ -134,6 +143,7 @@ class InterviewRuntime:
                 raise IdempotencyConflict(
                     "Transition idempotency key belongs to a non-transition event"
                 )
+            self._ensure_idempotent_transition_match(transition, command)
             return transition
 
         self._ensure_session_accepts_activity(
@@ -142,6 +152,7 @@ class InterviewRuntime:
         self._ensure_expected_version(interview, command.expected_state_version)
         context = command.context or TransitionContext(trigger=command.trigger)
         require_transition(interview.current_stage, command.to_stage, context)
+        await self._ensure_transition_not_ambiguous_with_active_delivery(interview.id, context)
 
         new_state_version = interview.state_version + 1
         payload: dict[str, object] = {
@@ -299,3 +310,33 @@ class InterviewRuntime:
             or existing.code_snapshot_id != command.code_snapshot_id
         ):
             raise IdempotencyConflict("Idempotency key conflicts with existing accepted event")
+
+    @staticmethod
+    def _ensure_idempotent_transition_match(
+        existing: InterviewStageTransition,
+        command: TransitionCommand,
+    ) -> None:
+        if (
+            existing.to_stage != command.to_stage
+            or existing.trigger != command.trigger
+            or existing.transition_policy_version != command.transition_policy_version
+        ):
+            raise IdempotencyConflict("Transition idempotency key conflicts with existing history")
+
+    async def _ensure_transition_not_ambiguous_with_active_delivery(
+        self,
+        interview_session_id: UUID,
+        context: TransitionContext,
+    ) -> None:
+        if transition_may_bypass_active_delivery_guard(context):
+            return
+        active_delivery_id = await self._session.scalar(
+            select(InterviewerPromptDelivery.id)
+            .where(InterviewerPromptDelivery.interview_session_id == interview_session_id)
+            .where(InterviewerPromptDelivery.delivery_state == "STARTED")
+            .limit(1),
+        )
+        if active_delivery_id is not None:
+            raise ActivePromptDeliveryBlocksTransition(
+                "Normal stage transition cannot proceed while a PromptDelivery is active"
+            )

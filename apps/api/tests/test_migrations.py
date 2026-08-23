@@ -13,7 +13,7 @@ def test_alembic_configuration_has_stage1_2_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202608230105"
+    assert script.get_current_head() == "202608230106"
 
 
 def test_stage1_2_migration_downgrades_and_upgrades_cleanly() -> None:

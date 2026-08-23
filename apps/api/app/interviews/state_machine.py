@@ -21,6 +21,9 @@ class TransitionContext:
     defense_reserve_reached: bool = False
     wrap_only: bool = False
     candidate_requested_finish: bool = False
+    hard_time_control: bool = False
+    infrastructure_failure: bool = False
+    safety_system_interruption: bool = False
     mutation_skipped: bool = False
     substantive_fix_required: bool = False
 
@@ -84,6 +87,9 @@ def can_transition(from_stage: str, to_stage: str, context: TransitionContext) -
         return (
             context.wrap_only
             or context.candidate_requested_finish
+            or context.hard_time_control
+            or context.infrastructure_failure
+            or context.safety_system_interruption
             or context.trigger in {"WRAP_ONLY", "CANDIDATE_REQUESTED_FINISH"}
         )
     return False
@@ -92,3 +98,12 @@ def can_transition(from_stage: str, to_stage: str, context: TransitionContext) -
 def require_transition(from_stage: str, to_stage: str, context: TransitionContext) -> None:
     if not can_transition(from_stage, to_stage, context):
         raise IllegalStageTransition(f"Illegal interview transition: {from_stage} -> {to_stage}")
+
+
+def transition_may_bypass_active_delivery_guard(context: TransitionContext) -> bool:
+    return (
+        context.hard_time_control
+        or context.candidate_requested_finish
+        or context.infrastructure_failure
+        or context.safety_system_interruption
+    )
