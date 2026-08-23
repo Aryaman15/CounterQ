@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef, useState } from "react";
 import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
@@ -39,6 +40,39 @@ export function InterviewerSurface({
   const showTranscriptInspector =
     process.env.NODE_ENV !== "production" &&
     (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const transcriptPopoverRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!showTranscriptInspector) {
+      setTranscriptOpen(false);
+    }
+  }, [showTranscriptInspector]);
+
+  useEffect(() => {
+    if (!transcriptOpen) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setTranscriptOpen(false);
+      }
+    };
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !transcriptPopoverRef.current?.contains(target)) {
+        setTranscriptOpen(false);
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [transcriptOpen]);
 
   return (
     <section className="interviewer-surface" aria-labelledby="current-question-title">
@@ -80,25 +114,52 @@ export function InterviewerSurface({
                 <Volume2 size={14} aria-hidden="true" />
                 <span>Dev phrase</span>
               </button>
+              {showTranscriptInspector ? (
+                <div className="voice-dev-transcript-anchor" ref={transcriptPopoverRef}>
+                  <button
+                    type="button"
+                    className="voice-control-button voice-dev-button"
+                    aria-expanded={transcriptOpen}
+                    aria-controls="development-transcript-popover"
+                    onClick={() => setTranscriptOpen((current) => !current)}
+                  >
+                    <span>Dev transcript</span>
+                  </button>
+                  {transcriptOpen ? (
+                    <div
+                      id="development-transcript-popover"
+                      className="voice-dev-transcript-popover"
+                      role="dialog"
+                      aria-labelledby="development-transcript-title"
+                    >
+                      <div className="voice-dev-transcript-header">
+                        <h2 id="development-transcript-title">DEVELOPMENT TRANSCRIPT</h2>
+                        <button
+                          type="button"
+                          className="voice-dev-transcript-close"
+                          onClick={() => setTranscriptOpen(false)}
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <dl>
+                        <div>
+                          <dt>Partial</dt>
+                          <dd>{partialTranscript || "No partial transcript"}</dd>
+                        </div>
+                        <div>
+                          <dt>Final</dt>
+                          <dd>{lastFinalTranscript || "No final transcript"}</dd>
+                        </div>
+                      </dl>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           )}
         </div>
         {voiceError ? <p className="voice-error">{voiceError}</p> : null}
-        {showTranscriptInspector ? (
-          <details className="voice-dev-transcript">
-            <summary>Development transcript</summary>
-            <dl>
-              <div>
-                <dt>Partial</dt>
-                <dd>{partialTranscript || "No partial transcript"}</dd>
-              </div>
-              <div>
-                <dt>Final</dt>
-                <dd>{lastFinalTranscript || "No final transcript"}</dd>
-              </div>
-            </dl>
-          </details>
-        ) : null}
       </div>
       <div className="active-prompt">
         <p id="current-question-title" className="active-prompt-label">

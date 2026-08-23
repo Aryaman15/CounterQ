@@ -104,8 +104,9 @@ describe("Interview Room demo", () => {
     expect(screen.queryByText(hiddenInternalFixtureFields.intendedUndeliveredPromptText)).not.toBeInTheDocument();
   });
 
-  it("shows realtime transcript only in the development voice inspector", () => {
-    render(
+  it("opens, updates, and closes the development transcript popover without changing voice state", () => {
+    const noop = vi.fn();
+    const { rerender } = render(
       <InterviewerSurface
         voiceState="Listening"
         isMuted={false}
@@ -113,18 +114,55 @@ describe("Interview Room demo", () => {
         partialTranscript="I am thinking about"
         lastFinalTranscript="I am thinking about the window."
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
-        onEnableMicrophone={vi.fn()}
-        onMute={vi.fn()}
-        onUnmute={vi.fn()}
-        onDisconnectVoice={vi.fn()}
-        onSpeakDevelopmentPhrase={vi.fn()}
-        onOpenConversation={vi.fn()}
+        onEnableMicrophone={noop}
+        onMute={noop}
+        onUnmute={noop}
+        onDisconnectVoice={noop}
+        onSpeakDevelopmentPhrase={noop}
+        onOpenConversation={noop}
       />,
     );
 
-    expect(screen.getByText("Development transcript")).toBeInTheDocument();
+    const transcriptButton = screen.getByRole("button", { name: "Dev transcript" });
+    expect(transcriptButton).toBeInTheDocument();
+    expect(screen.getByText("Listening")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).not.toBeInTheDocument();
+
+    fireEvent.click(transcriptButton);
+    const popover = screen.getByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" });
+    expect(within(popover).getByText("DEVELOPMENT TRANSCRIPT")).toBeInTheDocument();
     expect(screen.getByText("I am thinking about")).toBeInTheDocument();
     expect(screen.getByText("I am thinking about the window.")).toBeInTheDocument();
+    expect(screen.getByText("Listening")).toBeInTheDocument();
+
+    rerender(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript=""
+        lastFinalTranscript="Final transcript arrived."
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={noop}
+        onMute={noop}
+        onUnmute={noop}
+        onDisconnectVoice={noop}
+        onSpeakDevelopmentPhrase={noop}
+        onOpenConversation={noop}
+      />,
+    );
+
+    expect(screen.getByText("No partial transcript")).toBeInTheDocument();
+    expect(screen.getByText("Final transcript arrived.")).toBeInTheDocument();
+    expect(screen.getByText("Listening")).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    expect(screen.getByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    expect(screen.queryByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).not.toBeInTheDocument();
   });
 
   it("opens and closes recent conversation accessibly", () => {
