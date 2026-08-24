@@ -17,6 +17,7 @@ from app.ai_gateway.gateway import (
     AIGateway,
     PolicyVersionConflict,
     ReasoningBudgetExceeded,
+    StructuredOutputSchemaInvalid,
     StructuredOutputValidationFailure,
     get_or_create_policy_version,
     policy_instruction_hash,
@@ -33,6 +34,11 @@ from app.ai_gateway.provider import (
 )
 from app.ai_gateway.providers.openai_reasoning import OPENAI_RESPONSES_URL, OpenAIReasoningProvider
 from app.ai_gateway.routes import get_reasoning_provider_builder
+from app.ai_gateway.structured_output import (
+    StrictReasoningOutputModel,
+    StructuredOutputSchemaError,
+    validate_strict_reasoning_schema,
+)
 from app.config.settings import Settings, create_settings, get_settings
 from app.db.session import build_engine, dispose_engine
 from app.examiner.models import CandidateClaim, ExaminerDecision
@@ -42,10 +48,37 @@ from app.main import create_app
 from app.realtime.control_protocol import RealtimeDevelopmentBootstrapRequest
 
 
-class SmokeResult(BaseModel):
+class SmokeResult(StrictReasoningOutputModel):
     verdict: str
     technical_note: str
     confidence: float = Field(ge=0, le=1)
+
+
+class StrictNestedDetail(StrictReasoningOutputModel):
+    label: str
+
+
+class StrictNestedResult(StrictReasoningOutputModel):
+    verdict: str
+    detail: StrictNestedDetail
+
+
+class PermissiveResult(BaseModel):
+    verdict: str
+
+
+class MissingRequiredResult(StrictReasoningOutputModel):
+    verdict: str
+    optional_note: str | None = None
+
+
+class PermissiveNestedDetail(BaseModel):
+    label: str
+
+
+class IncompatibleNestedResult(StrictReasoningOutputModel):
+    verdict: str
+    detail: PermissiveNestedDetail
 
 
 class FakeReasoningProvider:
@@ -217,6 +250,82 @@ async def test_strict_structured_output_success_and_invalid_output_failure(
                 input_content="Fixed smoke input",
                 output_model=SmokeResult,
             )
+
+
+def test_strict_reasoning_schema_contains_required_additional_properties() -> None:
+    from app.ai_gateway.routes import DevelopmentReasoningSmokeResult
+
+    schema = DevelopmentReasoningSmokeResult.model_json_schema()
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    assert schema["required"] == ["verdict", "technical_note", "confidence"]
+    validate_strict_reasoning_schema(schema)
+
+
+def test_nested_strict_reasoning_schema_is_valid() -> None:
+    schema = StrictNestedResult.model_json_schema()
+
+    assert schema["additionalProperties"] is False
+    nested = schema["$defs"]["StrictNestedDetail"]
+    assert nested["additionalProperties"] is False
+    assert nested["required"] == ["label"]
+    validate_strict_reasoning_schema(schema)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [PermissiveResult, MissingRequiredResult, IncompatibleNestedResult],
+)
+def test_invalid_structured_output_models_fail_preflight(model: type[BaseModel]) -> None:
+    with pytest.raises(StructuredOutputSchemaError):
+        validate_strict_reasoning_schema(model.model_json_schema())
+
+
+def test_top_level_anyof_schema_fails_preflight() -> None:
+    with pytest.raises(StructuredOutputSchemaError):
+        validate_strict_reasoning_schema(
+            {
+                "anyOf": [
+                    {
+                        "type": "object",
+                        "properties": {"value": {"type": "string"}},
+                        "required": ["value"],
+                        "additionalProperties": False,
+                    }
+                ]
+            }
+        )
+
+
+async def test_gateway_schema_preflight_prevents_provider_invocation(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        with pytest.raises(StructuredOutputSchemaInvalid):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("schema preflight policy"),
+                instructions="schema preflight policy",
+                input_content="Fixed smoke input",
+                output_model=PermissiveResult,
+            )
+
+        async with maker() as session:
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+
+        assert provider.calls == 0
+        assert invocation_count == 0
+        assert budget is not None
+        assert budget.deep_reasoning_used == 0
 
 
 async def test_policy_version_hash_reuse_and_conflict(db_session: AsyncSession) -> None:
@@ -474,6 +583,12 @@ async def test_openai_adapter_targets_responses_api_and_structured_output(
     assert client.json["reasoning"] == {"effort": "medium"}
     assert client.json["text"]["format"]["type"] == "json_schema"
     assert client.json["text"]["format"]["strict"] is True
+    assert client.json["text"]["format"]["schema"]["additionalProperties"] is False
+    assert client.json["text"]["format"]["schema"]["required"] == [
+        "verdict",
+        "technical_note",
+        "confidence",
+    ]
     assert result.output_data["verdict"] == "NOT_GUARANTEED"
     assert result.provider_request_id == "resp-1"
 
@@ -506,6 +621,52 @@ async def test_provider_errors_do_not_expose_secret(tmp_path: Path) -> None:
 
     assert exc_info.value.category == "AUTHENTICATION"
     assert "test-key" not in exc_info.value.safe_message
+
+
+@pytest.mark.asyncio
+async def test_openai_error_diagnostics_are_sanitized(tmp_path: Path) -> None:
+    request = httpx.Request("POST", OPENAI_RESPONSES_URL)
+    provider = OpenAIReasoningProvider(
+        settings(tmp_path),
+        http_client=RecordingResponsesClient(
+            httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "type": "invalid_request_error",
+                        "code": "invalid_json_schema",
+                        "param": "text.format.schema",
+                        "message": "Invalid schema: additionalProperties is required.",
+                    }
+                },
+                request=request,
+            )
+        ),
+    )
+
+    with pytest.raises(ReasoningProviderError) as exc_info:
+        await provider.reason_structured(
+            ReasoningRequest(
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("diagnostics policy"),
+                instructions="diagnostics policy",
+                input_content="Fixed smoke input",
+                output_schema_name="SmokeResult",
+                output_json_schema=SmokeResult.model_json_schema(),
+                timeout_seconds=5,
+            ),
+            model="gpt-5.6-terra",
+            reasoning_effort="medium",
+        )
+
+    error = exc_info.value
+    assert error.category == "INVALID_REQUEST"
+    assert error.provider_error_type == "invalid_request_error"
+    assert error.provider_error_code == "invalid_json_schema"
+    assert error.provider_error_param == "text.format.schema"
+    assert error.safe_provider_message == "Invalid schema: additionalProperties is required."
+    assert "test-key" not in error.safe_message
 
 
 async def test_development_smoke_endpoint_blocks_production_and_creates_no_interpretations(

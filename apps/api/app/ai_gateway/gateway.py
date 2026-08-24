@@ -25,6 +25,10 @@ from app.ai_gateway.provider import (
     ReasoningRequest,
     ReasoningUsage,
 )
+from app.ai_gateway.structured_output import (
+    StructuredOutputSchemaError,
+    validate_strict_reasoning_schema,
+)
 from app.config.settings import Settings
 from app.interviews.models import InterviewSession, SessionBudget
 
@@ -53,6 +57,10 @@ class ReasoningSessionNotFound(AIGatewayError):
 
 class StructuredOutputValidationFailure(AIGatewayError):
     category = "STRUCTURED_OUTPUT_INVALID"
+
+
+class StructuredOutputSchemaInvalid(AIGatewayError):
+    category = "STRUCTURED_OUTPUT_SCHEMA_INVALID"
 
 
 @dataclass(frozen=True)
@@ -120,6 +128,11 @@ class AIGateway:
         request_timeout = timeout_seconds or self._settings.reasoning_timeout_seconds
 
         schema = output_model.model_json_schema()
+        try:
+            validate_strict_reasoning_schema(schema)
+        except StructuredOutputSchemaError as exc:
+            raise StructuredOutputSchemaInvalid(str(exc)) from exc
+
         request = ReasoningRequest(
             capability=capability,
             purpose=purpose,

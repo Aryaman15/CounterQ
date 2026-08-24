@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 import httpx
+import structlog
 
 from app.ai_gateway.pricing import estimate_text_token_cost
 from app.ai_gateway.provider import (
@@ -20,6 +21,7 @@ from app.ai_gateway.provider import (
 from app.config.settings import Settings
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+logger = structlog.get_logger(__name__)
 
 
 class AsyncPostClient(Protocol):
@@ -109,9 +111,25 @@ class OpenAIReasoningProvider(ReasoningProvider):
         )
 
         if response.status_code >= 400:
+            error_details = _extract_safe_error_details(response)
+            if self._settings.app_env.lower() in {"local", "dev", "development", "test"}:
+                logger.warning(
+                    "openai_reasoning_provider_rejected_request",
+                    provider="openai",
+                    status_code=response.status_code,
+                    category=_category_for_status(response.status_code),
+                    provider_error_type=error_details.provider_error_type,
+                    provider_error_code=error_details.provider_error_code,
+                    provider_error_param=error_details.provider_error_param,
+                    safe_provider_message=error_details.safe_provider_message,
+                )
             raise ReasoningProviderError(
                 _category_for_status(response.status_code),
                 "Reasoning provider rejected the request",
+                provider_error_type=error_details.provider_error_type,
+                provider_error_code=error_details.provider_error_code,
+                provider_error_param=error_details.provider_error_param,
+                safe_provider_message=error_details.safe_provider_message,
             )
 
         try:
@@ -175,6 +193,43 @@ def _category_for_status(status_code: int) -> ReasoningErrorCategory:
     if status_code >= 500:
         return "PROVIDER_UNAVAILABLE"
     return "UNKNOWN_PROVIDER_ERROR"
+
+
+class SafeProviderErrorDetails:
+    def __init__(
+        self,
+        *,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+        provider_error_param: str | None = None,
+        safe_provider_message: str | None = None,
+    ) -> None:
+        self.provider_error_type = provider_error_type
+        self.provider_error_code = provider_error_code
+        self.provider_error_param = provider_error_param
+        self.safe_provider_message = safe_provider_message
+
+
+def _extract_safe_error_details(response: httpx.Response) -> SafeProviderErrorDetails:
+    try:
+        body = response.json()
+    except json.JSONDecodeError:
+        return SafeProviderErrorDetails()
+    if not isinstance(body, Mapping):
+        return SafeProviderErrorDetails()
+    error = body.get("error")
+    if not isinstance(error, Mapping):
+        return SafeProviderErrorDetails()
+    return SafeProviderErrorDetails(
+        provider_error_type=_safe_str(error.get("type")),
+        provider_error_code=_safe_str(error.get("code")),
+        provider_error_param=_safe_str(error.get("param")),
+        safe_provider_message=_safe_str(error.get("message")),
+    )
+
+
+def _safe_str(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def _extract_output_text(body: Mapping[str, Any]) -> str | None:

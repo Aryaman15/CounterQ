@@ -12,6 +12,7 @@ from app.ai_gateway.gateway import (
     AIGateway,
     AIGatewayError,
     ReasoningBudgetExceeded,
+    StructuredOutputSchemaInvalid,
     StructuredOutputValidationFailure,
 )
 from app.ai_gateway.provider import (
@@ -20,6 +21,7 @@ from app.ai_gateway.provider import (
     ReasoningProviderError,
 )
 from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
+from app.ai_gateway.structured_output import StrictReasoningOutputModel
 from app.config.settings import Settings, get_settings
 from app.db.session import get_sessionmaker
 from app.realtime.routes import realtime_credential_minting_allowed
@@ -40,7 +42,7 @@ class DevelopmentReasoningSmokeRequest(BaseModel):
     interview_session_id: UUID
 
 
-class DevelopmentReasoningSmokeResult(BaseModel):
+class DevelopmentReasoningSmokeResult(StrictReasoningOutputModel):
     verdict: Literal["GUARANTEED", "NOT_GUARANTEED", "UNCERTAIN"]
     technical_note: str = Field(max_length=280)
     confidence: float = Field(ge=0, le=1)
@@ -134,6 +136,11 @@ async def development_reasoning_smoke(
     except StructuredOutputValidationFailure as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"category": exc.category, "message": exc.safe_message},
+        ) from exc
+    except StructuredOutputSchemaInvalid as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"category": exc.category, "message": exc.safe_message},
         ) from exc
     except ReasoningProviderError as exc:

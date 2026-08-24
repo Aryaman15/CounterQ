@@ -76,10 +76,19 @@ class ReasoningProviderError(Exception):
         self,
         category: ReasoningErrorCategory,
         safe_message: str = "Reasoning provider request failed",
+        *,
+        provider_error_type: str | None = None,
+        provider_error_code: str | None = None,
+        provider_error_param: str | None = None,
+        safe_provider_message: str | None = None,
     ) -> None:
         super().__init__(safe_message)
         self.category = category
         self.safe_message = safe_message
+        self.provider_error_type = provider_error_type
+        self.provider_error_code = provider_error_code
+        self.provider_error_param = provider_error_param
+        self.safe_provider_message = safe_provider_message
 
 
 class ReasoningProvider(Protocol):
