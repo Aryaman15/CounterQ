@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/examiner/development-analyze-and-authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Development Analyze And Authorize */
+        post: operations["development_analyze_and_authorize_api_examiner_development_analyze_and_authorize_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/examiner/development-analyze-latest": {
         parameters: {
             query?: never;
@@ -128,6 +145,12 @@ export interface components {
             /** Webrtc Url */
             webrtc_url: string;
         };
+        /** DevelopmentAnalyzeAndAuthorizeResponse */
+        DevelopmentAnalyzeAndAuthorizeResponse: {
+            analysis: components["schemas"]["DevelopmentAnalyzeLatestResponse"];
+            policy_gate: components["schemas"]["DevelopmentPolicyGateResult"] | null;
+            timing: components["schemas"]["DevelopmentPolicyGateTiming"];
+        };
         /** DevelopmentAnalyzeLatestRequest */
         DevelopmentAnalyzeLatestRequest: {
             /**
@@ -231,6 +254,51 @@ export interface components {
             technical_rationale: string;
             /** Urgency */
             urgency: number | null;
+        };
+        /** DevelopmentPolicyGateResult */
+        DevelopmentPolicyGateResult: {
+            /** Candidate Safe Text */
+            candidate_safe_text: string | null;
+            /**
+             * Decision Id
+             * Format: uuid
+             */
+            decision_id: string;
+            /** Decision Status */
+            decision_status: string;
+            /** Disposition */
+            disposition: string;
+            /** Interviewer Prompt Id */
+            interviewer_prompt_id: string | null;
+            /** Policy Gate Outcome */
+            policy_gate_outcome: string | null;
+            /** Probe Strategy */
+            probe_strategy: string | null;
+            /** Prompt Kind */
+            prompt_kind: string | null;
+            /** Reason */
+            reason: string;
+        };
+        /** DevelopmentPolicyGateTiming */
+        DevelopmentPolicyGateTiming: {
+            /** Analysis Completed At */
+            analysis_completed_at: string;
+            /** Authorized At */
+            authorized_at: string | null;
+            /** Decision Deadline At */
+            decision_deadline_at: string | null;
+            /** Delivery Window Expires At */
+            delivery_window_expires_at: string | null;
+            /** Delivery Window Seconds */
+            delivery_window_seconds: number;
+            /** Delivery Window State */
+            delivery_window_state: string | null;
+            /** Gate Evaluated At */
+            gate_evaluated_at: string | null;
+            /** Remaining Usefulness Seconds At Analysis */
+            remaining_usefulness_seconds_at_analysis: number | null;
+            /** Remaining Usefulness Seconds At Gate */
+            remaining_usefulness_seconds_at_gate: number | null;
         };
         /** DevelopmentReasoningSmokeRequest */
         DevelopmentReasoningSmokeRequest: {
@@ -403,6 +471,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DevelopmentReasoningSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_analyze_and_authorize_api_examiner_development_analyze_and_authorize_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentAnalyzeLatestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentAnalyzeAndAuthorizeResponse"];
                 };
             };
             /** @description Validation Error */

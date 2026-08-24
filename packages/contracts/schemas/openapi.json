@@ -75,6 +75,33 @@
         "title": "CreateRealtimeSessionResponse",
         "type": "object"
       },
+      "DevelopmentAnalyzeAndAuthorizeResponse": {
+        "properties": {
+          "analysis": {
+            "$ref": "#/components/schemas/DevelopmentAnalyzeLatestResponse"
+          },
+          "policy_gate": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DevelopmentPolicyGateResult"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timing": {
+            "$ref": "#/components/schemas/DevelopmentPolicyGateTiming"
+          }
+        },
+        "required": [
+          "analysis",
+          "policy_gate",
+          "timing"
+        ],
+        "title": "DevelopmentAnalyzeAndAuthorizeResponse",
+        "type": "object"
+      },
       "DevelopmentAnalyzeLatestRequest": {
         "properties": {
           "interview_session_id": {
@@ -514,6 +541,198 @@
         "title": "DevelopmentExaminerDecision",
         "type": "object"
       },
+      "DevelopmentPolicyGateResult": {
+        "properties": {
+          "candidate_safe_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Candidate Safe Text"
+          },
+          "decision_id": {
+            "format": "uuid",
+            "title": "Decision Id",
+            "type": "string"
+          },
+          "decision_status": {
+            "title": "Decision Status",
+            "type": "string"
+          },
+          "disposition": {
+            "title": "Disposition",
+            "type": "string"
+          },
+          "interviewer_prompt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interviewer Prompt Id"
+          },
+          "policy_gate_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Gate Outcome"
+          },
+          "probe_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Probe Strategy"
+          },
+          "prompt_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Kind"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision_id",
+          "disposition",
+          "decision_status",
+          "policy_gate_outcome",
+          "reason",
+          "interviewer_prompt_id",
+          "prompt_kind",
+          "probe_strategy",
+          "candidate_safe_text"
+        ],
+        "title": "DevelopmentPolicyGateResult",
+        "type": "object"
+      },
+      "DevelopmentPolicyGateTiming": {
+        "properties": {
+          "analysis_completed_at": {
+            "title": "Analysis Completed At",
+            "type": "string"
+          },
+          "authorized_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Authorized At"
+          },
+          "decision_deadline_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Deadline At"
+          },
+          "delivery_window_expires_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Window Expires At"
+          },
+          "delivery_window_seconds": {
+            "title": "Delivery Window Seconds",
+            "type": "number"
+          },
+          "delivery_window_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Window State"
+          },
+          "gate_evaluated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gate Evaluated At"
+          },
+          "remaining_usefulness_seconds_at_analysis": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Usefulness Seconds At Analysis"
+          },
+          "remaining_usefulness_seconds_at_gate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remaining Usefulness Seconds At Gate"
+          }
+        },
+        "required": [
+          "analysis_completed_at",
+          "gate_evaluated_at",
+          "decision_deadline_at",
+          "remaining_usefulness_seconds_at_analysis",
+          "remaining_usefulness_seconds_at_gate",
+          "authorized_at",
+          "delivery_window_expires_at",
+          "delivery_window_seconds",
+          "delivery_window_state"
+        ],
+        "title": "DevelopmentPolicyGateTiming",
+        "type": "object"
+      },
       "DevelopmentReasoningSmokeRequest": {
         "properties": {
           "interview_session_id": {
@@ -876,6 +1095,47 @@
         "summary": "Development Reasoning Smoke",
         "tags": [
           "ai-gateway"
+        ]
+      }
+    },
+    "/api/examiner/development-analyze-and-authorize": {
+      "post": {
+        "operationId": "development_analyze_and_authorize_api_examiner_development_analyze_and_authorize_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentAnalyzeLatestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentAnalyzeAndAuthorizeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Analyze And Authorize",
+        "tags": [
+          "examiner"
         ]
       }
     },

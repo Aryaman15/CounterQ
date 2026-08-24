@@ -407,6 +407,17 @@ describe("Interview Room demo", () => {
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
+    const diagnostics = {
+      ...observedCanonicalSession,
+      lastPolicyGate: {
+        decisionId: null,
+        disposition: null,
+        decisionStatus: null,
+        policyGateOutcome: null,
+        promptId: null,
+        promptKind: null,
+      },
+    };
 
     render(
       <InterviewerSurface
@@ -416,7 +427,7 @@ describe("Interview Room demo", () => {
         partialTranscript="partial"
         lastFinalTranscript="final"
         sessionDebug={observedRealtimeSession}
-        canonicalDebug={observedCanonicalSession}
+        canonicalDebug={diagnostics}
         currentTurn={demoInterviewFixture.currentDeliveredTurn}
         onEnableMicrophone={vi.fn()}
         onMute={vi.fn()}
@@ -451,6 +462,139 @@ describe("Interview Room demo", () => {
     expect(screen.getByText(/absolute hash-table complexity claim/i)).toBeInTheDocument();
     expect(screen.getByText((_, node) => node?.textContent === "What guarantees that left never moves backwards?"))
       .toBeInTheDocument();
+    expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
+  });
+
+  it("runs Analyze + authorize and displays examiner and gate diagnostics without speaking", async () => {
+    const speakDevelopmentPhrase = vi.fn();
+    const deliverAuthorizedPrompt = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        analysis: {
+          status: "PROPOSED",
+          source_kind: "CANDIDATE_TRANSCRIPT_FINALIZED",
+          source_event_id: "event-1",
+          source_event_watermark: 17,
+          source_state_version: 3,
+          code_snapshot_id: "snapshot-2",
+          code_snapshot_version: 2,
+          ai_invocation_id: "invocation-live-1",
+          provider: "fake",
+          model: "gpt-5.6-terra",
+          latency_ms: 4000,
+          input_tokens: 120,
+          cached_input_tokens: 12,
+          output_tokens: 40,
+          estimated_cost: "0.000700",
+          currency: "USD",
+          claims: [
+            {
+              id: "claim-1",
+              normalized_claim: "unordered_map lookup has guaranteed O(1) time complexity",
+              claim_type: "COMPLEXITY",
+              verbatim_excerpt: "lookup is always O(1)",
+              confidence: 0.92,
+            },
+          ],
+          decision: {
+            id: "decision-1",
+            action: "PROBE",
+            target_kind: "CLAIM",
+            target_claim_id: "claim-1",
+            target_code_snapshot_id: null,
+            proposed_probe_strategy: "ASSUMPTION_CHALLENGE",
+            technical_rationale: "The candidate made an absolute hash-table complexity claim.",
+            confidence: 0.9,
+            priority: 4,
+            urgency: 3,
+            status: "PROPOSED",
+            policy_gate_outcome: null,
+            policy_gate_reason: null,
+            deadline_at: "2026-08-24T00:00:08Z",
+          },
+          message: null,
+        },
+        policy_gate: {
+          decision_id: "decision-1",
+          disposition: "AUTHORIZED",
+          decision_status: "AUTHORIZED",
+          policy_gate_outcome: "AUTHORIZED",
+          reason: "Policy gate authorized candidate-safe prompt intent.",
+          interviewer_prompt_id: "prompt-1",
+          prompt_kind: "PROBE",
+          probe_strategy: "ASSUMPTION_CHALLENGE",
+          candidate_safe_text: "You said always. Is that actually guaranteed?",
+        },
+        timing: {
+          analysis_completed_at: "2026-08-24T00:00:04Z",
+          gate_evaluated_at: "2026-08-24T00:00:04Z",
+          decision_deadline_at: "2026-08-24T00:00:08Z",
+          remaining_usefulness_seconds_at_analysis: 4,
+          remaining_usefulness_seconds_at_gate: 4,
+          authorized_at: "2026-08-24T00:00:04Z",
+          delivery_window_expires_at: "2026-08-24T00:00:16Z",
+          delivery_window_seconds: 12,
+          delivery_window_state: "OPEN",
+        },
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const analyzeAuthorizeDiagnostics = {
+      ...observedCanonicalSession,
+      lastPolicyGate: {
+        decisionId: null,
+        disposition: null,
+        decisionStatus: null,
+        policyGateOutcome: null,
+        promptId: null,
+        promptKind: null,
+      },
+    };
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={analyzeAuthorizeDiagnostics}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={speakDevelopmentPhrase}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={deliverAuthorizedPrompt}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyze + authorize" }));
+
+    expect(screen.getByRole("button", { name: "Running..." })).toBeDisabled();
+    await waitFor(() => {
+      expect(screen.getByText("POLICY GATE RESULT")).toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/examiner/development-analyze-and-authorize",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ interview_session_id: "session-1" }),
+      }),
+    );
+    expect(screen.getByText("LIVE EXAMINER RESULT")).toBeInTheDocument();
+    expect(screen.getByText(/AUTHORIZED; decision AUTHORIZED; outcome AUTHORIZED/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/usefulness at analysis 4.0s; at gate 4.0s/i)).toBeInTheDocument();
+    expect(screen.getByText(/delivery window OPEN until 2026-08-24T00:00:16Z/i))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Deliver authorized prompt" }));
+    expect(deliverAuthorizedPrompt).toHaveBeenCalledWith("prompt-1");
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
 

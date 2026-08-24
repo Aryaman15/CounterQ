@@ -5,8 +5,14 @@ import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
 import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
-import type { DevelopmentAnalyzeLatestResponse } from "../realtime/liveExaminer";
-import { requestDevelopmentLiveExaminerAnalysis } from "../realtime/liveExaminer";
+import type {
+  DevelopmentAnalyzeAndAuthorizeResponse,
+  DevelopmentAnalyzeLatestResponse,
+} from "../realtime/liveExaminer";
+import {
+  requestDevelopmentAnalyzeAndAuthorize,
+  requestDevelopmentLiveExaminerAnalysis,
+} from "../realtime/liveExaminer";
 import type { DevelopmentReasoningSmokeResponse } from "../realtime/reasoningSmoke";
 import { requestDevelopmentReasoningSmoke } from "../realtime/reasoningSmoke";
 import { CODE_EDIT_BURST_IDLE_MS } from "../realtime/useCodeObservationCollector";
@@ -61,8 +67,11 @@ export function InterviewerSurface({
     useState<DevelopmentReasoningSmokeResponse | null>(null);
   const [reasoningSmokeError, setReasoningSmokeError] = useState<string | null>(null);
   const [liveExaminerPending, setLiveExaminerPending] = useState(false);
+  const [analyzeAuthorizePending, setAnalyzeAuthorizePending] = useState(false);
   const [liveExaminerResult, setLiveExaminerResult] =
     useState<DevelopmentAnalyzeLatestResponse | null>(null);
+  const [analyzeAuthorizeResult, setAnalyzeAuthorizeResult] =
+    useState<DevelopmentAnalyzeAndAuthorizeResponse | null>(null);
   const [liveExaminerError, setLiveExaminerError] = useState<string | null>(null);
   const transcriptPopoverRef = useRef<HTMLDivElement>(null);
 
@@ -114,11 +123,12 @@ export function InterviewerSurface({
   };
 
   const handleLiveExaminerAnalysis = async () => {
-    if (!canonicalDebug.sessionId || liveExaminerPending) {
+    if (!canonicalDebug.sessionId || liveExaminerPending || analyzeAuthorizePending) {
       return;
     }
     setLiveExaminerPending(true);
     setLiveExaminerError(null);
+    setAnalyzeAuthorizeResult(null);
     try {
       const result = await requestDevelopmentLiveExaminerAnalysis(canonicalDebug.sessionId);
       setLiveExaminerResult(result);
@@ -126,6 +136,23 @@ export function InterviewerSurface({
       setLiveExaminerError("Live Examiner analysis request failed");
     } finally {
       setLiveExaminerPending(false);
+    }
+  };
+
+  const handleAnalyzeAndAuthorize = async () => {
+    if (!canonicalDebug.sessionId || liveExaminerPending || analyzeAuthorizePending) {
+      return;
+    }
+    setAnalyzeAuthorizePending(true);
+    setLiveExaminerError(null);
+    try {
+      const result = await requestDevelopmentAnalyzeAndAuthorize(canonicalDebug.sessionId);
+      setAnalyzeAuthorizeResult(result);
+      setLiveExaminerResult(result.analysis);
+    } catch {
+      setLiveExaminerError("Live Examiner analyze-and-authorize request failed");
+    } finally {
+      setAnalyzeAuthorizePending(false);
     }
   };
 
@@ -368,9 +395,25 @@ export function InterviewerSurface({
                       type="button"
                       className="voice-control-button voice-dev-button"
                       onClick={handleLiveExaminerAnalysis}
-                      disabled={!canonicalDebug.sessionId || liveExaminerPending}
+                      disabled={
+                        !canonicalDebug.sessionId ||
+                        liveExaminerPending ||
+                        analyzeAuthorizePending
+                      }
                     >
                       {liveExaminerPending ? "Analyzing..." : "Analyze latest observation"}
+                    </button>
+                    <button
+                      type="button"
+                      className="voice-control-button voice-dev-button"
+                      onClick={handleAnalyzeAndAuthorize}
+                      disabled={
+                        !canonicalDebug.sessionId ||
+                        liveExaminerPending ||
+                        analyzeAuthorizePending
+                      }
+                    >
+                      {analyzeAuthorizePending ? "Running..." : "Analyze + authorize"}
                     </button>
                     {liveExaminerError ? (
                       <span className="voice-dev-inline-error">{liveExaminerError}</span>
@@ -393,6 +436,9 @@ export function InterviewerSurface({
                           code snapshot {liveExaminerResult.code_snapshot_id ?? "none"}; version{" "}
                           {liveExaminerResult.code_snapshot_version ?? "none"}
                         </span>
+                        {liveExaminerResult.decision?.deadline_at ? (
+                          <span>decision deadline {liveExaminerResult.decision.deadline_at}</span>
+                        ) : null}
                         <p>Claims</p>
                         {liveExaminerResult.claims.length ? (
                           liveExaminerResult.claims.map((claim) => (
@@ -426,6 +472,69 @@ export function InterviewerSurface({
                         ) : (
                           <span>{liveExaminerResult.message ?? "No decision persisted"}</span>
                         )}
+                        {analyzeAuthorizeResult ? (
+                          <>
+                            <p>POLICY GATE RESULT</p>
+                            {analyzeAuthorizeResult.policy_gate ? (
+                              <>
+                                <span>
+                                  {analyzeAuthorizeResult.policy_gate.disposition}; decision{" "}
+                                  {analyzeAuthorizeResult.policy_gate.decision_status}; outcome{" "}
+                                  {analyzeAuthorizeResult.policy_gate.policy_gate_outcome ??
+                                    "transient"}
+                                </span>
+                                <span>{analyzeAuthorizeResult.policy_gate.reason}</span>
+                                <span>
+                                  prompt{" "}
+                                  {analyzeAuthorizeResult.policy_gate.interviewer_prompt_id ??
+                                    "none"}
+                                  ; kind{" "}
+                                  {analyzeAuthorizeResult.policy_gate.prompt_kind ?? "none"};
+                                  strategy{" "}
+                                  {analyzeAuthorizeResult.policy_gate.probe_strategy ?? "none"}
+                                </span>
+                                <span>
+                                  usefulness at analysis{" "}
+                                  {formatSeconds(
+                                    analyzeAuthorizeResult.timing
+                                      .remaining_usefulness_seconds_at_analysis,
+                                  )}
+                                  ; at gate{" "}
+                                  {formatSeconds(
+                                    analyzeAuthorizeResult.timing
+                                      .remaining_usefulness_seconds_at_gate,
+                                  )}
+                                </span>
+                                <span>
+                                  authorized{" "}
+                                  {analyzeAuthorizeResult.timing.authorized_at ?? "none"};
+                                  delivery window{" "}
+                                  {analyzeAuthorizeResult.timing.delivery_window_state ?? "none"}{" "}
+                                  until{" "}
+                                  {analyzeAuthorizeResult.timing.delivery_window_expires_at ??
+                                    "none"}
+                                </span>
+                                {analyzeAuthorizeResult.policy_gate.interviewer_prompt_id ? (
+                                  <button
+                                    type="button"
+                                    className="voice-control-button voice-dev-button"
+                                    onClick={() =>
+                                      onDeliverAuthorizedPrompt(
+                                        analyzeAuthorizeResult.policy_gate!
+                                          .interviewer_prompt_id!,
+                                      )
+                                    }
+                                    disabled={voiceState !== "Listening" && voiceState !== "Muted"}
+                                  >
+                                    Deliver authorized prompt
+                                  </button>
+                                ) : null}
+                              </>
+                            ) : (
+                              <span>No policy gate was run for this analysis result.</span>
+                            )}
+                          </>
+                        ) : null}
                       </div>
                     ) : null}
                   </dd>
@@ -511,4 +620,11 @@ export function InterviewerSurface({
       ) : null}
     </section>
   );
+}
+
+function formatSeconds(value: number | null | undefined): string {
+  if (typeof value !== "number") {
+    return "unknown";
+  }
+  return `${Math.max(0, value).toFixed(1)}s`;
 }

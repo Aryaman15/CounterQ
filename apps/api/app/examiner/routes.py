@@ -18,6 +18,11 @@ from app.examiner.coordinator import (
     LiveExaminerDebugResult,
     LiveExaminerError,
 )
+from app.examiner.development_workflow import (
+    DevelopmentAnalyzeAndAuthorizeResult,
+    DevelopmentAnalyzeAndAuthorizeWorkflow,
+)
+from app.interviews.prompt_authorization import PromptAuthorizationError
 
 router = APIRouter(prefix="/api/examiner", tags=["examiner"])
 
@@ -71,6 +76,36 @@ class DevelopmentAnalyzeLatestResponse(BaseModel):
     claims: list[DevelopmentExaminerClaim]
     decision: DevelopmentExaminerDecision | None
     message: str | None
+
+
+class DevelopmentPolicyGateResult(BaseModel):
+    decision_id: UUID
+    disposition: str
+    decision_status: str
+    policy_gate_outcome: str | None
+    reason: str
+    interviewer_prompt_id: UUID | None
+    prompt_kind: str | None
+    probe_strategy: str | None
+    candidate_safe_text: str | None
+
+
+class DevelopmentPolicyGateTiming(BaseModel):
+    analysis_completed_at: str
+    gate_evaluated_at: str | None
+    decision_deadline_at: str | None
+    remaining_usefulness_seconds_at_analysis: float | None
+    remaining_usefulness_seconds_at_gate: float | None
+    authorized_at: str | None
+    delivery_window_expires_at: str | None
+    delivery_window_seconds: float
+    delivery_window_state: str | None
+
+
+class DevelopmentAnalyzeAndAuthorizeResponse(BaseModel):
+    analysis: DevelopmentAnalyzeLatestResponse
+    policy_gate: DevelopmentPolicyGateResult | None
+    timing: DevelopmentPolicyGateTiming
 
 
 def build_live_examiner_coordinator(
@@ -132,6 +167,60 @@ async def development_analyze_latest(
     return _response_from_result(result)
 
 
+@router.post(
+    "/development-analyze-and-authorize",
+    response_model=DevelopmentAnalyzeAndAuthorizeResponse,
+)
+async def development_analyze_and_authorize(
+    request: DevelopmentAnalyzeLatestRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    provider_builder: Annotated[
+        Callable[[Settings], ReasoningProvider],
+        Depends(get_reasoning_provider_builder),
+    ],
+    coordinator_builder: Annotated[
+        Callable[[Settings, Callable[[Settings], ReasoningProvider]], LiveExaminerCoordinator],
+        Depends(get_live_examiner_coordinator_builder),
+    ],
+) -> DevelopmentAnalyzeAndAuthorizeResponse:
+    if not development_spike_enabled(settings):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "category": "development_only",
+                "message": "Live Examiner analyze-and-authorize is local-development only",
+            },
+        )
+
+    coordinator = coordinator_builder(settings, provider_builder)
+    workflow = DevelopmentAnalyzeAndAuthorizeWorkflow(
+        coordinator=coordinator,
+        sessionmaker=get_sessionmaker(),
+        authorized_prompt_delivery_window_seconds=(
+            settings.authorized_prompt_delivery_window_seconds
+        ),
+    )
+    try:
+        result = await workflow.analyze_and_authorize_latest(request.interview_session_id)
+    except ReasoningProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"category": exc.category, "message": exc.safe_message},
+        ) from exc
+    except PromptAuthorizationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"category": "PROMPT_AUTHORIZATION", "message": str(exc)},
+        ) from exc
+    except LiveExaminerError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"category": exc.category, "message": exc.safe_message},
+        ) from exc
+
+    return _combined_response_from_result(result)
+
+
 def _response_from_result(result: LiveExaminerDebugResult) -> DevelopmentAnalyzeLatestResponse:
     return DevelopmentAnalyzeLatestResponse(
         status=result.status,
@@ -185,4 +274,49 @@ def _response_from_result(result: LiveExaminerDebugResult) -> DevelopmentAnalyze
             else None
         ),
         message=result.message,
+    )
+
+
+def _combined_response_from_result(
+    result: DevelopmentAnalyzeAndAuthorizeResult,
+) -> DevelopmentAnalyzeAndAuthorizeResponse:
+    timing = result.timing
+    return DevelopmentAnalyzeAndAuthorizeResponse(
+        analysis=_response_from_result(result.analysis),
+        policy_gate=(
+            DevelopmentPolicyGateResult(
+                decision_id=result.policy_gate.decision_id,
+                disposition=result.policy_gate.disposition,
+                decision_status=result.policy_gate.decision_status,
+                policy_gate_outcome=result.policy_gate.policy_gate_outcome,
+                reason=result.policy_gate.reason,
+                interviewer_prompt_id=result.policy_gate.prompt_id,
+                prompt_kind=result.policy_gate.prompt_kind,
+                probe_strategy=result.policy_gate.probe_strategy,
+                candidate_safe_text=result.policy_gate.candidate_safe_text,
+            )
+            if result.policy_gate
+            else None
+        ),
+        timing=DevelopmentPolicyGateTiming(
+            analysis_completed_at=timing.analysis_completed_at.isoformat(),
+            gate_evaluated_at=(
+                timing.gate_evaluated_at.isoformat() if timing.gate_evaluated_at else None
+            ),
+            decision_deadline_at=(
+                timing.decision_deadline_at.isoformat() if timing.decision_deadline_at else None
+            ),
+            remaining_usefulness_seconds_at_analysis=(
+                timing.remaining_usefulness_seconds_at_analysis
+            ),
+            remaining_usefulness_seconds_at_gate=timing.remaining_usefulness_seconds_at_gate,
+            authorized_at=timing.authorized_at.isoformat() if timing.authorized_at else None,
+            delivery_window_expires_at=(
+                timing.delivery_window_expires_at.isoformat()
+                if timing.delivery_window_expires_at
+                else None
+            ),
+            delivery_window_seconds=timing.delivery_window_seconds,
+            delivery_window_state=timing.delivery_window_state,
+        ),
     )

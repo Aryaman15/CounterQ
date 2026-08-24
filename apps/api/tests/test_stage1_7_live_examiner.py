@@ -4,7 +4,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
@@ -27,11 +27,18 @@ from app.config.settings import Settings, create_settings, get_settings
 from app.db.session import build_engine, dispose_engine
 from app.examiner.analysis_schema import ExaminerAnalysisResult
 from app.examiner.coordinator import LiveExaminerCoordinator, LiveExaminerTaskRegistry
+from app.examiner.development_workflow import DevelopmentAnalyzeAndAuthorizeWorkflow
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.examiner.policy import LIVE_EXAMINER_INSTRUCTIONS, live_examiner_policy_descriptor
 from app.examiner.routes import get_live_examiner_coordinator_builder
 from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
-from app.interviews.models import InterviewerPrompt, SessionBudget
+from app.interviews.models import (
+    InterviewerPrompt,
+    InterviewerPromptDelivery,
+    InterviewSession,
+    SessionBudget,
+)
+from app.interviews.prompt_authorization import PromptAuthorizationService
 from app.main import create_app
 from app.realtime.control_protocol import (
     CandidateCodeSnapshotMessage,
@@ -340,6 +347,18 @@ async def add_code(
                 ),
             )
             return result
+
+
+async def set_session_deadline(
+    maker: async_sessionmaker[AsyncSession],
+    session_id: Any,
+    deadline_at: datetime,
+) -> None:
+    async with maker() as session:
+        async with session.begin():
+            interview = await session.get(InterviewSession, session_id)
+            assert interview is not None
+            interview.deadline_at = deadline_at
 
 
 def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() -> None:
@@ -810,6 +829,221 @@ async def test_live_examiner_reuses_existing_source_policy_decision_without_prov
         assert provider.calls == 1
         assert invocation_count == 1
         assert decision_count == 1
+
+
+async def test_development_analyze_and_authorize_gates_immediately_after_reasoning_latency(
+    tmp_path: Path,
+) -> None:
+    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    current_time = {"value": t0}
+
+    class AdvancingProvider(FakeExaminerProvider):
+        async def reason_structured(
+            self,
+            request: ReasoningRequest,
+            *,
+            model: str,
+            reasoning_effort: ReasoningEffort,
+        ) -> ProviderReasoningResult:
+            result = await super().reason_structured(
+                request,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
+            current_time["value"] = t0 + timedelta(seconds=4)
+            return result
+
+    async with dev_context() as (maker, dev):
+        await set_session_deadline(maker, dev.interview_session.id, t0 + timedelta(minutes=30))
+        await add_transcript(maker, dev.interview_session.id)
+        provider = AdvancingProvider()
+        local_settings = settings(tmp_path)
+        coordinator = LiveExaminerCoordinator(
+            settings=local_settings,
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+            clock=lambda: current_time["value"],
+        )
+        workflow = DevelopmentAnalyzeAndAuthorizeWorkflow(
+            coordinator=coordinator,
+            sessionmaker=maker,
+            clock=lambda: current_time["value"],
+            authorized_prompt_delivery_window_seconds=12,
+        )
+
+        result = await workflow.analyze_and_authorize_latest(dev.interview_session.id)
+        assert result.analysis.decision is not None
+
+        async with maker() as session:
+            decision = await session.get(ExaminerDecision, result.analysis.decision.id)
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.examiner_decision_id == result.analysis.decision.id
+                )
+            )
+            delivery_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPromptDelivery)
+                .where(
+                    InterviewerPromptDelivery.interview_session_id
+                    == dev.interview_session.id
+                )
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+
+        assert result.analysis.status == "PROPOSED"
+        assert result.policy_gate is not None
+        assert result.policy_gate.disposition == "AUTHORIZED"
+        assert prompt is not None
+        assert result.policy_gate.prompt_id == prompt.id
+        assert result.timing.remaining_usefulness_seconds_at_analysis == 4
+        assert result.timing.remaining_usefulness_seconds_at_gate == 4
+        assert result.timing.delivery_window_state == "OPEN"
+        assert result.timing.delivery_window_expires_at == t0 + timedelta(seconds=16)
+        assert decision is not None
+        assert decision.status == "AUTHORIZED"
+        assert prompt.status == "AUTHORIZED"
+        assert prompt.authorized_at == t0 + timedelta(seconds=4)
+        assert delivery_count == 0
+        assert budget is not None
+        assert budget.probes_used == 0
+
+
+async def test_manual_policy_gate_after_human_delay_still_expires(
+    tmp_path: Path,
+) -> None:
+    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    current_time = {"value": t0}
+
+    class AdvancingProvider(FakeExaminerProvider):
+        async def reason_structured(
+            self,
+            request: ReasoningRequest,
+            *,
+            model: str,
+            reasoning_effort: ReasoningEffort,
+        ) -> ProviderReasoningResult:
+            result = await super().reason_structured(
+                request,
+                model=model,
+                reasoning_effort=reasoning_effort,
+            )
+            current_time["value"] = t0 + timedelta(seconds=4)
+            return result
+
+    async with dev_context() as (maker, dev):
+        await set_session_deadline(maker, dev.interview_session.id, t0 + timedelta(minutes=30))
+        await add_transcript(maker, dev.interview_session.id)
+        provider = AdvancingProvider()
+        local_settings = settings(tmp_path)
+        coordinator = LiveExaminerCoordinator(
+            settings=local_settings,
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+            clock=lambda: current_time["value"],
+        )
+
+        analysis = await coordinator.analyze_latest(dev.interview_session.id)
+        assert analysis.decision is not None
+        current_time["value"] = t0 + timedelta(seconds=9)
+
+        async with maker() as session:
+            async with session.begin():
+                gate = await PromptAuthorizationService(
+                    session,
+                    clock=lambda: current_time["value"],
+                ).evaluate_examiner_decision(
+                    session_id=dev.interview_session.id,
+                    decision_id=analysis.decision.id,
+                )
+                prompt_count = await session.scalar(
+                    select(func.count())
+                    .select_from(InterviewerPrompt)
+                    .where(InterviewerPrompt.examiner_decision_id == analysis.decision.id)
+                )
+
+        assert gate.disposition == "EXPIRED"
+        assert gate.policy_gate_outcome == "EXPIRED"
+        assert prompt_count == 0
+
+
+@pytest.mark.parametrize("output_data", [wait_output(), code_observe_output("Continue observing.")])
+async def test_development_analyze_and_authorize_silent_actions_create_no_prompt(
+    tmp_path: Path,
+    output_data: dict[str, Any],
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        provider = FakeExaminerProvider(output_data=output_data)
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+        workflow = DevelopmentAnalyzeAndAuthorizeWorkflow(
+            coordinator=coordinator,
+            sessionmaker=maker,
+        )
+
+        result = await workflow.analyze_and_authorize_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+
+        assert result.policy_gate is not None
+        assert result.policy_gate.disposition == "AUTHORIZED"
+        assert result.policy_gate.prompt_id is None
+        assert prompt_count == 0
+
+
+async def test_development_analyze_and_authorize_revalidates_stale_state_before_gate(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id, sequence=1)
+
+        async def add_newer_candidate_behavior(_: Any) -> None:
+            await add_code(
+                maker,
+                dev.interview_session.id,
+                source=CODE_V2,
+                sequence=2,
+                key="newer-code-before-gate",
+            )
+
+        provider = FakeExaminerProvider()
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+        workflow = DevelopmentAnalyzeAndAuthorizeWorkflow(
+            coordinator=coordinator,
+            sessionmaker=maker,
+            before_policy_gate=add_newer_candidate_behavior,
+        )
+
+        result = await workflow.analyze_and_authorize_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+
+        assert result.analysis.status == "PROPOSED"
+        assert result.policy_gate is not None
+        assert result.policy_gate.disposition == "SUPERSEDED"
+        assert prompt_count == 0
 
 
 async def test_live_examiner_marks_code_result_stale_when_newer_code_exists(
