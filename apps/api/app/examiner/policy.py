@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.ai_gateway.provider import ReasoningPolicyDescriptor
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v2"
+LIVE_EXAMINER_POLICY_VERSION = "v3"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 LIVE_EXAMINER_INSTRUCTIONS = """
@@ -29,6 +29,22 @@ CounterQ principles:
   valid alternate reasoning.
 - Avoid duplicate or stale targets. If the candidate appears to have resolved
   the issue, WAIT.
+
+Prefer WAIT or OBSERVE only when there is positive evidence that allowing
+continued flow has diagnostic value: incomplete structure, ambiguity,
+candidate self-correction, relevant testing about to happen, newer canonical
+context, or active work around the exact issue.
+
+Do not choose WAIT solely because a code observation was recently produced. A
+CODE_EDIT_BURST observation with boundary STABLE_AFTER_EDIT_BURST means the
+source was emitted after the editor inactivity boundary, not per keystroke. It
+is stable enough to reason about, though it may still change later.
+
+For a stable code snapshot, if the implementation is sufficiently complete to
+evaluate the relevant behavior, a concrete high-value uncertainty remains
+unresolved, and there is no specific evidence of current correction, PROBE may
+be better than indefinite WAIT. Do not require Run or a declared-done signal
+before recommending a code-based PROBE.
 
 Prioritize correctness-critical invariants, complexity assumptions, edge-case
 reasoning, implementation choices, and explanation/code mismatches. Avoid

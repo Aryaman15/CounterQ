@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.observation.engine import ObservationEngine, StructuredObservation
 from app.observation.models import CodeSnapshot, InterviewEvent
+from app.observation.repository import ObservationRepository
 from app.problems.models import InterviewPackVersion, ProblemVersion
 
 
@@ -72,6 +73,7 @@ class ExaminerContextBuilder:
             raise ExaminerContextError("Interview context is incomplete")
 
         associated_code = await self._associated_code_snapshot(observation)
+        source_freshness = await self._source_freshness(observation)
         history = await self._recent_history(
             session_id=interview.id,
             watermark=observation.source_event_watermark,
@@ -112,6 +114,7 @@ class ExaminerContextBuilder:
                 "pack": pack_version.pack_json,
             },
             "source_observation": _observation_payload(observation, associated_code),
+            "source_freshness": source_freshness,
             "recent_history": history,
         }
         return ExaminerContext(observation=observation, context_json=context_json)
@@ -125,6 +128,45 @@ class ExaminerContextBuilder:
             return None
         snapshot = await self._session.get(CodeSnapshot, snapshot_id)
         return cast(CodeSnapshot | None, snapshot)
+
+    async def _source_freshness(
+        self,
+        observation: StructuredObservation,
+    ) -> dict[str, object]:
+        latest_code = await ObservationRepository(self._session).latest_code_snapshot(
+            observation.interview_session_id
+        )
+        newer_code_exists = (
+            latest_code is not None
+            and observation.code_snapshot_version is not None
+            and latest_code.version_number > observation.code_snapshot_version
+        )
+        newer_transcript_exists = await self._session.scalar(
+            select(InterviewEvent.id)
+            .where(InterviewEvent.interview_session_id == observation.interview_session_id)
+            .where(InterviewEvent.server_sequence > observation.source_event_watermark)
+            .where(InterviewEvent.event_type == "TRANSCRIPT_FINALIZED")
+            .order_by(InterviewEvent.server_sequence.asc())
+            .limit(1)
+        )
+        is_latest_code_snapshot = (
+            latest_code is not None
+            and observation.code_snapshot_id is not None
+            and latest_code.id == observation.code_snapshot_id
+        )
+        return {
+            "source_is_current_at_watermark": True,
+            "latest_code_snapshot_id": str(latest_code.id) if latest_code else None,
+            "latest_code_snapshot_version": latest_code.version_number if latest_code else None,
+            "is_latest_code_snapshot": is_latest_code_snapshot,
+            "newer_code_snapshot_exists": newer_code_exists,
+            "newer_candidate_transcript_exists": newer_transcript_exists is not None,
+            "freshness_semantics": (
+                "Recent means newly observed by the server, not actively being typed. "
+                "Use explicit completion, incompleteness, self-correction, or newer "
+                "context signals to estimate whether waiting has diagnostic value."
+            ),
+        }
 
     async def _recent_history(
         self,
@@ -168,6 +210,15 @@ def _observation_payload(
         "trigger_class": observation.trigger_class,
         "occurred_at": observation.occurred_at.isoformat(),
     }
+    if (
+        observation.kind == "CODE_MEANINGFULLY_CHANGED"
+        and observation.trigger_class == "CODE_EDIT_BURST"
+    ):
+        payload["observation_boundary"] = "STABLE_AFTER_EDIT_BURST"
+        payload["edit_observation_semantics"] = (
+            "Source was emitted after the editor inactivity boundary, not per keystroke. "
+            "It is stable enough to reason about, but the candidate may still edit later."
+        )
     if observation.transcript_segment_id is not None:
         payload["transcript"] = {
             "transcript_segment_id": str(observation.transcript_segment_id),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -40,6 +41,48 @@ from app.realtime.control_service import RealtimeControlService
 
 CODE_V1 = "class Solution { public: int lengthOfLongestSubstring(string s) { return 0; } };"
 CODE_V2 = "class Solution { public: int lengthOfLongestSubstring(string s) { return s.size(); } };"
+CODE_INCOMPLETE = """
+class Solution {
+public:
+    int lengthOfLongestSubstring(string s) {
+        int left = 0;
+        unordered_map<char, int> last;
+    }
+};
+""".strip()
+CODE_ACTIVE_CORRECTION = """
+class Solution {
+public:
+    int lengthOfLongestSubstring(string s) {
+        unordered_map<char, int> last;
+        int left = 0;
+        int ans = 0;
+        for (int right = 0; right < s.size(); right++) {
+            if (last.count(s[right])) {
+                left;
+            }
+        }
+    }
+};
+""".strip()
+CODE_STABLE_INVARIANT_BUG = """
+class Solution {
+public:
+    int lengthOfLongestSubstring(string s) {
+        unordered_map<char, int> last;
+        int left = 0;
+        int ans = 0;
+        for (int right = 0; right < s.size(); right++) {
+            if (last.count(s[right])) {
+                left = last[s[right]] + 1;
+            }
+            last[s[right]] = right;
+            ans = max(ans, right - left + 1);
+        }
+        return ans;
+    }
+};
+""".strip()
 
 
 class FakeExaminerProvider:
@@ -194,6 +237,40 @@ def code_probe_output() -> dict[str, Any]:
     }
 
 
+def code_invariant_prove_output() -> dict[str, Any]:
+    return {
+        "claims": [],
+        "decision": {
+            "action": "PROBE",
+            "target_kind": "CODE_SNAPSHOT",
+            "target_claim_index": None,
+            "proposed_probe_strategy": "PROVE",
+            "technical_rationale": (
+                "The stable implementation leaves the left-boundary invariant unresolved."
+            ),
+            "confidence": 0.88,
+            "priority": 4,
+            "urgency": 3,
+        },
+    }
+
+
+def code_observe_output(reason: str) -> dict[str, Any]:
+    return {
+        "claims": [],
+        "decision": {
+            "action": "OBSERVE",
+            "target_kind": "CODE_SNAPSHOT",
+            "target_claim_index": None,
+            "proposed_probe_strategy": None,
+            "technical_rationale": reason,
+            "confidence": 0.78,
+            "priority": 2,
+            "urgency": 1,
+        },
+    }
+
+
 def wait_output() -> dict[str, Any]:
     return {
         "claims": [],
@@ -285,12 +362,12 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
         ExaminerAnalysisResult.model_validate(invalid_index)
 
 
-def test_live_examiner_policy_v2_guides_primary_strategy_selection() -> None:
+def test_live_examiner_policy_v3_guides_primary_strategy_and_stable_code_selection() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v2"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v2"
+    assert descriptor.version == "v3"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v3"
     assert "primary diagnostic uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the technical topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid guarantee" in LIVE_EXAMINER_INSTRUCTIONS
@@ -299,6 +376,12 @@ def test_live_examiner_policy_v2_guides_primary_strategy_selection() -> None:
     assert "COMPLEXITY" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invariant actually" in LIVE_EXAMINER_INSTRUCTIONS
     assert "PROVE" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not choose WAIT solely because a code observation was recently produced" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
+    assert "STABLE_AFTER_EDIT_BURST" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "stable enough to reason about" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not require Run or a declared-done signal" in LIVE_EXAMINER_INSTRUCTIONS
 
 
 async def test_live_examiner_transcript_persists_claim_and_proposed_decision(
@@ -504,6 +587,196 @@ async def test_live_examiner_code_path_persists_decision_without_fabricated_clai
         assert decision.proposed_probe_strategy == "IMPLEMENTATION_CHOICE"
 
 
+async def test_live_examiner_incomplete_code_can_observe_without_strategy(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V1,
+            sequence=1,
+            key="initial-code",
+            trigger="INITIAL_EDITOR_STATE",
+        )
+        code = await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_INCOMPLETE,
+            sequence=2,
+            key="incomplete-code",
+        )
+        provider = FakeExaminerProvider(
+            output_data=code_observe_output("The implementation is structurally incomplete.")
+        )
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            decision = await session.scalar(
+                select(ExaminerDecision).where(
+                    ExaminerDecision.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert result.status == "PROPOSED"
+        assert result.code_snapshot_id == code.snapshot_id
+        assert decision is not None
+        assert decision.action == "OBSERVE"
+        assert decision.target_code_snapshot_id == code.snapshot_id
+        assert decision.proposed_probe_strategy is None
+
+
+async def test_live_examiner_active_correction_signal_can_observe_without_strategy(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V1,
+            sequence=1,
+            key="initial-code",
+            trigger="INITIAL_EDITOR_STATE",
+        )
+        code = await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_ACTIVE_CORRECTION,
+            sequence=2,
+            key="active-correction-code",
+        )
+        provider = FakeExaminerProvider(
+            output_data=code_observe_output(
+                "The candidate appears to be actively editing the exact invariant site."
+            )
+        )
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            decision = await session.scalar(
+                select(ExaminerDecision).where(
+                    ExaminerDecision.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert result.status == "PROPOSED"
+        assert result.code_snapshot_id == code.snapshot_id
+        assert decision is not None
+        assert decision.action == "OBSERVE"
+        assert decision.target_code_snapshot_id == code.snapshot_id
+        assert decision.proposed_probe_strategy is None
+
+
+async def test_live_examiner_stable_complete_code_can_probe_invariant_with_prove(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V1,
+            sequence=1,
+            key="initial-code",
+            trigger="INITIAL_EDITOR_STATE",
+        )
+        code = await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_STABLE_INVARIANT_BUG,
+            sequence=2,
+            key="stable-invariant-code",
+        )
+        provider = FakeExaminerProvider(output_data=code_invariant_prove_output())
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            decision = await session.scalar(
+                select(ExaminerDecision).where(
+                    ExaminerDecision.interview_session_id == dev.interview_session.id
+                )
+            )
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+
+        assert result.status == "PROPOSED"
+        assert result.code_snapshot_id == code.snapshot_id
+        assert claim_count == 0
+        assert decision is not None
+        assert decision.action == "PROBE"
+        assert decision.target_code_snapshot_id == code.snapshot_id
+        assert decision.target_claim_id is None
+        assert decision.proposed_probe_strategy == "PROVE"
+
+
+async def test_live_examiner_context_marks_edit_burst_code_as_stable_and_current(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V1,
+            sequence=1,
+            key="initial-code",
+            trigger="INITIAL_EDITOR_STATE",
+        )
+        code = await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_STABLE_INVARIANT_BUG,
+            sequence=2,
+            key="stable-context-code",
+        )
+        provider = FakeExaminerProvider(output_data=code_invariant_prove_output())
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        context = json.loads(provider.requests[0].input_content)
+        source = context["source_observation"]
+        freshness = context["source_freshness"]
+        assert result.status == "PROPOSED"
+        assert source["kind"] == "CODE_MEANINGFULLY_CHANGED"
+        assert source["trigger_class"] == "CODE_EDIT_BURST"
+        assert source["observation_boundary"] == "STABLE_AFTER_EDIT_BURST"
+        assert "not per keystroke" in source["edit_observation_semantics"]
+        assert source["code"]["code_snapshot_id"] == str(code.snapshot_id)
+        assert freshness["is_latest_code_snapshot"] is True
+        assert freshness["newer_code_snapshot_exists"] is False
+        assert freshness["newer_candidate_transcript_exists"] is False
+        assert freshness["latest_code_snapshot_version"] == code.version_number
+        assert "not actively being typed" in freshness["freshness_semantics"]
+
+
 async def test_live_examiner_reuses_existing_source_policy_decision_without_provider_call(
     tmp_path: Path,
 ) -> None:
@@ -580,6 +853,10 @@ async def test_live_examiner_marks_code_result_stale_when_newer_code_exists(
             )
 
         assert result.status == "STALE"
+        context = json.loads(provider.requests[0].input_content)
+        freshness = context["source_freshness"]
+        assert freshness["is_latest_code_snapshot"] is False
+        assert freshness["newer_code_snapshot_exists"] is True
         assert decision is not None
         assert decision.status == "STALE"
         assert decision.target_event_id == stale_source.event_id
