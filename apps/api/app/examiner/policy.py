@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.ai_gateway.provider import ReasoningPolicyDescriptor
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v1"
+LIVE_EXAMINER_POLICY_VERSION = "v2"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 LIVE_EXAMINER_INSTRUCTIONS = """
@@ -33,6 +33,17 @@ CounterQ principles:
 Prioritize correctness-critical invariants, complexity assumptions, edge-case
 reasoning, implementation choices, and explanation/code mismatches. Avoid
 cosmetic style feedback and obscure language trivia.
+
+When multiple ProbeStrategies are plausible, choose the strategy describing the
+primary diagnostic uncertainty, not merely the technical topic:
+- topic is complexity but uncertainty is an invalid guarantee, absolute
+  qualifier, assumption, or precondition: use ASSUMPTION_CHALLENGE.
+- topic is complexity and uncertainty is deriving, explaining, comparing, or
+  defending a time/space bound: use COMPLEXITY.
+- topic is implementation and uncertainty is whether an invariant actually
+  holds: use PROVE.
+- topic is edge handling and uncertainty is a missing boundary case: use
+  EDGE_CASE.
 
 The model recommends WAIT, OBSERVE, ASK, or PROBE. CounterQ software decides
 whether anything is authorized or spoken later.

@@ -27,6 +27,7 @@ from app.db.session import build_engine, dispose_engine
 from app.examiner.analysis_schema import ExaminerAnalysisResult
 from app.examiner.coordinator import LiveExaminerCoordinator, LiveExaminerTaskRegistry
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.examiner.policy import LIVE_EXAMINER_INSTRUCTIONS, live_examiner_policy_descriptor
 from app.examiner.routes import get_live_examiner_coordinator_builder
 from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
 from app.interviews.models import InterviewerPrompt, SessionBudget
@@ -112,9 +113,9 @@ def transcript_probe_output() -> dict[str, Any]:
     return {
         "claims": [
             {
-                "normalized_claim": "unordered_map lookup has guaranteed O(1) time complexity",
+                "normalized_claim": "unordered_map lookup is always guaranteed O(1)",
                 "claim_type": "COMPLEXITY",
-                "verbatim_excerpt": "lookup is always O(1)",
+                "verbatim_excerpt": "lookup is always guaranteed O(1)",
                 "confidence": 0.92,
             }
         ],
@@ -123,10 +124,56 @@ def transcript_probe_output() -> dict[str, Any]:
             "target_kind": "CLAIM",
             "target_claim_index": 0,
             "proposed_probe_strategy": "ASSUMPTION_CHALLENGE",
-            "technical_rationale": "The candidate made an absolute hash-table complexity claim.",
+            "technical_rationale": "Clarifying whether the bound is expected or guaranteed.",
             "confidence": 0.9,
             "priority": 4,
             "urgency": 3,
+        },
+    }
+
+
+def complexity_derivation_probe_output() -> dict[str, Any]:
+    return {
+        "claims": [
+            {
+                "normalized_claim": "candidate states the solution is O(n log n)",
+                "claim_type": "COMPLEXITY",
+                "verbatim_excerpt": "My solution is O(n log n).",
+                "confidence": 0.9,
+            }
+        ],
+        "decision": {
+            "action": "PROBE",
+            "target_kind": "CLAIM",
+            "target_claim_index": 0,
+            "proposed_probe_strategy": "COMPLEXITY",
+            "technical_rationale": "The diagnostic uncertainty is how the bound was derived.",
+            "confidence": 0.86,
+            "priority": 3,
+            "urgency": 2,
+        },
+    }
+
+
+def invariant_probe_output() -> dict[str, Any]:
+    return {
+        "claims": [
+            {
+                "normalized_claim": "left boundary never moves backwards",
+                "claim_type": "INVARIANT",
+                "verbatim_excerpt": "left can never move backwards",
+                "confidence": 0.88,
+            }
+        ],
+        "decision": {
+            "action": "PROBE",
+            "target_kind": "CLAIM",
+            "target_claim_index": 0,
+            "proposed_probe_strategy": "PROVE",
+            "technical_rationale": "The diagnostic uncertainty is whether the invariant holds.",
+            "confidence": 0.87,
+            "priority": 4,
+            "urgency": 2,
         },
     }
 
@@ -171,16 +218,22 @@ def client_base(sequence: int = 1) -> dict[str, object]:
     }
 
 
-async def add_transcript(maker: async_sessionmaker[AsyncSession], session_id: Any) -> Any:
+async def add_transcript(
+    maker: async_sessionmaker[AsyncSession],
+    session_id: Any,
+    *,
+    transcript: str = "I'm using an unordered map because lookup is always guaranteed O(1).",
+    sequence: int = 1,
+) -> Any:
     async with maker() as session:
         async with session.begin():
             result = await RealtimeControlService(session).persist_candidate_transcript(
                 session_id=session_id,
                 message=CandidateTranscriptFinalizedMessage(
-                    **client_base(),
+                    **client_base(sequence),
                     type="candidate_transcript_finalized",
-                    provider_item_id="candidate-item-1",
-                    transcript="I'll use unordered_map because lookup is always O(1).",
+                    provider_item_id=f"candidate-item-{sequence}",
+                    transcript=transcript,
                     ended_at=datetime.now(UTC),
                 ),
             )
@@ -232,6 +285,22 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
         ExaminerAnalysisResult.model_validate(invalid_index)
 
 
+def test_live_examiner_policy_v2_guides_primary_strategy_selection() -> None:
+    descriptor = live_examiner_policy_descriptor()
+
+    assert descriptor.policy_key == "live_examiner"
+    assert descriptor.version == "v2"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v2"
+    assert "primary diagnostic uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "not merely the technical topic" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "invalid guarantee" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "ASSUMPTION_CHALLENGE" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "deriving, explaining, comparing, or" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "COMPLEXITY" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "invariant actually" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "PROVE" in LIVE_EXAMINER_INSTRUCTIONS
+
+
 async def test_live_examiner_transcript_persists_claim_and_proposed_decision(
     tmp_path: Path,
 ) -> None:
@@ -278,11 +347,92 @@ async def test_live_examiner_transcript_persists_claim_and_proposed_decision(
         assert decision.status == "PROPOSED"
         assert decision.target_claim_id == claim.id
         assert decision.target_event_id == transcript.event_id
+        assert claim.claim_type == "COMPLEXITY"
+        assert claim.normalized_claim == "unordered_map lookup is always guaranteed O(1)"
+        assert decision.proposed_probe_strategy == "ASSUMPTION_CHALLENGE"
         assert decision.policy_gate_outcome is None
         assert decision.policy_gate_reason is None
         assert prompt_count == 0
         assert budget is not None
         assert budget.probes_used == 0
+
+
+async def test_live_examiner_complexity_derivation_uses_complexity_strategy(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(
+            maker,
+            dev.interview_session.id,
+            transcript="My solution is O(n log n).",
+        )
+        provider = FakeExaminerProvider(output_data=complexity_derivation_probe_output())
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            claim = await session.scalar(
+                select(CandidateClaim).where(
+                    CandidateClaim.interview_session_id == dev.interview_session.id
+                )
+            )
+            decision = await session.scalar(
+                select(ExaminerDecision).where(
+                    ExaminerDecision.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert result.status == "PROPOSED"
+        assert claim is not None
+        assert decision is not None
+        assert claim.claim_type == "COMPLEXITY"
+        assert decision.action == "PROBE"
+        assert decision.proposed_probe_strategy == "COMPLEXITY"
+
+
+async def test_live_examiner_questionable_invariant_uses_prove_strategy(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(
+            maker,
+            dev.interview_session.id,
+            transcript="After I update left, left can never move backwards.",
+        )
+        provider = FakeExaminerProvider(output_data=invariant_probe_output())
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            claim = await session.scalar(
+                select(CandidateClaim).where(
+                    CandidateClaim.interview_session_id == dev.interview_session.id
+                )
+            )
+            decision = await session.scalar(
+                select(ExaminerDecision).where(
+                    ExaminerDecision.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert result.status == "PROPOSED"
+        assert claim is not None
+        assert decision is not None
+        assert claim.claim_type == "INVARIANT"
+        assert decision.action == "PROBE"
+        assert decision.proposed_probe_strategy == "PROVE"
 
 
 async def test_live_examiner_ignores_initial_code_snapshot(
