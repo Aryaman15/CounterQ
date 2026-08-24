@@ -75,6 +75,445 @@
         "title": "CreateRealtimeSessionResponse",
         "type": "object"
       },
+      "DevelopmentAnalyzeLatestRequest": {
+        "properties": {
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id"
+        ],
+        "title": "DevelopmentAnalyzeLatestRequest",
+        "type": "object"
+      },
+      "DevelopmentAnalyzeLatestResponse": {
+        "properties": {
+          "ai_invocation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Invocation Id"
+          },
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "claims": {
+            "items": {
+              "$ref": "#/components/schemas/DevelopmentExaminerClaim"
+            },
+            "title": "Claims",
+            "type": "array"
+          },
+          "code_snapshot_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Snapshot Id"
+          },
+          "code_snapshot_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Snapshot Version"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "decision": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DevelopmentExaminerDecision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "model": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "source_event_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event Id"
+          },
+          "source_event_watermark": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Event Watermark"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "source_state_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source State Version"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "source_kind",
+          "source_event_id",
+          "source_event_watermark",
+          "source_state_version",
+          "code_snapshot_id",
+          "code_snapshot_version",
+          "ai_invocation_id",
+          "provider",
+          "model",
+          "latency_ms",
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens",
+          "estimated_cost",
+          "currency",
+          "claims",
+          "decision",
+          "message"
+        ],
+        "title": "DevelopmentAnalyzeLatestResponse",
+        "type": "object"
+      },
+      "DevelopmentExaminerClaim": {
+        "properties": {
+          "claim_type": {
+            "title": "Claim Type",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "normalized_claim": {
+            "title": "Normalized Claim",
+            "type": "string"
+          },
+          "verbatim_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verbatim Excerpt"
+          }
+        },
+        "required": [
+          "id",
+          "normalized_claim",
+          "claim_type",
+          "verbatim_excerpt",
+          "confidence"
+        ],
+        "title": "DevelopmentExaminerClaim",
+        "type": "object"
+      },
+      "DevelopmentExaminerDecision": {
+        "properties": {
+          "action": {
+            "enum": [
+              "WAIT",
+              "OBSERVE",
+              "ASK",
+              "PROBE"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "deadline_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deadline At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "policy_gate_outcome": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Gate Outcome"
+          },
+          "policy_gate_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Policy Gate Reason"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "proposed_probe_strategy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Proposed Probe Strategy"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "target_claim_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Claim Id"
+          },
+          "target_code_snapshot_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Code Snapshot Id"
+          },
+          "target_kind": {
+            "enum": [
+              "NONE",
+              "CLAIM",
+              "EVENT",
+              "CODE_SNAPSHOT"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "technical_rationale": {
+            "title": "Technical Rationale",
+            "type": "string"
+          },
+          "urgency": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Urgency"
+          }
+        },
+        "required": [
+          "id",
+          "action",
+          "target_kind",
+          "target_claim_id",
+          "target_code_snapshot_id",
+          "proposed_probe_strategy",
+          "technical_rationale",
+          "confidence",
+          "priority",
+          "urgency",
+          "status",
+          "policy_gate_outcome",
+          "policy_gate_reason",
+          "deadline_at"
+        ],
+        "title": "DevelopmentExaminerDecision",
+        "type": "object"
+      },
       "DevelopmentReasoningSmokeRequest": {
         "properties": {
           "interview_session_id": {
@@ -437,6 +876,47 @@
         "summary": "Development Reasoning Smoke",
         "tags": [
           "ai-gateway"
+        ]
+      }
+    },
+    "/api/examiner/development-analyze-latest": {
+      "post": {
+        "operationId": "development_analyze_latest_api_examiner_development_analyze_latest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentAnalyzeLatestRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentAnalyzeLatestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Analyze Latest",
+        "tags": [
+          "examiner"
         ]
       }
     },

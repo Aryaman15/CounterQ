@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/examiner/development-analyze-latest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Development Analyze Latest */
+        post: operations["development_analyze_latest_api_examiner_development_analyze_latest_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/development-interview": {
         parameters: {
             query?: never;
@@ -110,6 +127,110 @@ export interface components {
             voice: string;
             /** Webrtc Url */
             webrtc_url: string;
+        };
+        /** DevelopmentAnalyzeLatestRequest */
+        DevelopmentAnalyzeLatestRequest: {
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+        };
+        /** DevelopmentAnalyzeLatestResponse */
+        DevelopmentAnalyzeLatestResponse: {
+            /** Ai Invocation Id */
+            ai_invocation_id: string | null;
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /** Claims */
+            claims: components["schemas"]["DevelopmentExaminerClaim"][];
+            /** Code Snapshot Id */
+            code_snapshot_id: string | null;
+            /** Code Snapshot Version */
+            code_snapshot_version: number | null;
+            /** Currency */
+            currency: string | null;
+            decision: components["schemas"]["DevelopmentExaminerDecision"] | null;
+            /** Estimated Cost */
+            estimated_cost: string | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Message */
+            message: string | null;
+            /** Model */
+            model: string | null;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Provider */
+            provider: string | null;
+            /** Source Event Id */
+            source_event_id: string | null;
+            /** Source Event Watermark */
+            source_event_watermark: number | null;
+            /** Source Kind */
+            source_kind: string | null;
+            /** Source State Version */
+            source_state_version: number | null;
+            /** Status */
+            status: string;
+        };
+        /** DevelopmentExaminerClaim */
+        DevelopmentExaminerClaim: {
+            /** Claim Type */
+            claim_type: string;
+            /** Confidence */
+            confidence: number;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Normalized Claim */
+            normalized_claim: string;
+            /** Verbatim Excerpt */
+            verbatim_excerpt: string | null;
+        };
+        /** DevelopmentExaminerDecision */
+        DevelopmentExaminerDecision: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "WAIT" | "OBSERVE" | "ASK" | "PROBE";
+            /** Confidence */
+            confidence: number | null;
+            /** Deadline At */
+            deadline_at: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Policy Gate Outcome */
+            policy_gate_outcome: string | null;
+            /** Policy Gate Reason */
+            policy_gate_reason: string | null;
+            /** Priority */
+            priority: number | null;
+            /** Proposed Probe Strategy */
+            proposed_probe_strategy: string | null;
+            /** Status */
+            status: string;
+            /** Target Claim Id */
+            target_claim_id: string | null;
+            /** Target Code Snapshot Id */
+            target_code_snapshot_id: string | null;
+            /**
+             * Target Kind
+             * @enum {string}
+             */
+            target_kind: "NONE" | "CLAIM" | "EVENT" | "CODE_SNAPSHOT";
+            /** Technical Rationale */
+            technical_rationale: string;
+            /** Urgency */
+            urgency: number | null;
         };
         /** DevelopmentReasoningSmokeRequest */
         DevelopmentReasoningSmokeRequest: {
@@ -282,6 +403,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DevelopmentReasoningSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_analyze_latest_api_examiner_development_analyze_latest_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentAnalyzeLatestRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentAnalyzeLatestResponse"];
                 };
             };
             /** @description Validation Error */

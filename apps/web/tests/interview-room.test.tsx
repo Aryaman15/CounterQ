@@ -298,6 +298,101 @@ describe("Interview Room demo", () => {
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
 
+  it("runs the development-only Live Examiner analysis without changing prompt or speaking", async () => {
+    const speakDevelopmentPhrase = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        status: "PROPOSED",
+        source_kind: "CANDIDATE_TRANSCRIPT_FINALIZED",
+        source_event_id: "event-1",
+        source_event_watermark: 17,
+        source_state_version: 3,
+        code_snapshot_id: "snapshot-2",
+        code_snapshot_version: 2,
+        ai_invocation_id: "invocation-live-1",
+        provider: "fake",
+        model: "gpt-5.6-terra",
+        latency_ms: 37,
+        input_tokens: 120,
+        cached_input_tokens: 12,
+        output_tokens: 40,
+        estimated_cost: "0.000700",
+        currency: "USD",
+        claims: [
+          {
+            id: "claim-1",
+            normalized_claim: "unordered_map lookup has guaranteed O(1) time complexity",
+            claim_type: "COMPLEXITY",
+            verbatim_excerpt: "lookup is always O(1)",
+            confidence: 0.92,
+          },
+        ],
+        decision: {
+          id: "decision-1",
+          action: "PROBE",
+          target_kind: "CLAIM",
+          target_claim_id: "claim-1",
+          target_code_snapshot_id: null,
+          proposed_probe_strategy: "ASSUMPTION_CHALLENGE",
+          technical_rationale: "The candidate made an absolute hash-table complexity claim.",
+          confidence: 0.9,
+          priority: 4,
+          urgency: 3,
+          status: "PROPOSED",
+          policy_gate_outcome: null,
+          policy_gate_reason: null,
+          deadline_at: "2026-08-24T00:00:08Z",
+        },
+        message: null,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={speakDevelopmentPhrase}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyze latest observation" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("LIVE EXAMINER RESULT")).toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/examiner/development-analyze-latest",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ interview_session_id: "session-1" }),
+      }),
+    );
+    expect(screen.getByText(/PROPOSED; source CANDIDATE_TRANSCRIPT_FINALIZED; watermark 17/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/COMPLEXITY: unordered_map lookup has guaranteed O\(1\)/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/PROPOSED; PROBE; strategy ASSUMPTION_CHALLENGE/i))
+      .toBeInTheDocument();
+    expect(screen.getByText(/absolute hash-table complexity claim/i)).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === "What guarantees that left never moves backwards?"))
+      .toBeInTheDocument();
+    expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
+  });
+
   it("disables the reasoning smoke button while pending", async () => {
     let resolveRequest: (value: unknown) => void = () => undefined;
     const fetchPromise = new Promise((resolve) => {

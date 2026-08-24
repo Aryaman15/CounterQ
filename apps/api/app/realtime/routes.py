@@ -7,8 +7,19 @@ from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisco
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai_gateway.provider import (
+    ProviderReasoningResult,
+    ReasoningEffort,
+    ReasoningRequest,
+)
+from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
+from app.config.environment import DEVELOPMENT_SPIKE_ENVS, development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_session, get_sessionmaker
+from app.examiner.coordinator import (
+    LiveExaminerCoordinator,
+    observation_is_live_examiner_eligible,
+)
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.runtime import IdempotencyConflict, InterviewRuntimeError
@@ -39,7 +50,7 @@ from app.realtime.openai_provider import OpenAIRealtimeVoiceProvider
 from app.realtime.provider import RealtimeProviderError, RealtimeVoiceProvider
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
-DEVELOPMENT_REALTIME_ENVS = frozenset({"local", "dev", "development", "test"})
+DEVELOPMENT_REALTIME_ENVS = DEVELOPMENT_SPIKE_ENVS
 
 
 class CreateRealtimeSessionRequest(BaseModel):
@@ -66,7 +77,7 @@ class CreateRealtimeSessionResponse(BaseModel):
 
 
 def realtime_credential_minting_allowed(settings: Settings) -> bool:
-    return settings.app_env.lower() in DEVELOPMENT_REALTIME_ENVS
+    return development_spike_enabled(settings)
 
 
 def build_realtime_voice_provider(settings: Settings) -> RealtimeVoiceProvider:
@@ -256,6 +267,11 @@ async def realtime_control_websocket(
                     )
                     floor = service.floor
                 await websocket.send_json(response.model_dump(mode="json"))
+                await _notify_live_examiner_if_eligible(
+                    settings=settings,
+                    response=response,
+                    interview_session_id=interview_session_id,
+                )
         except (RealtimeControlError, InterviewRuntimeError) as exc:
             await websocket.send_json(
                 ControlErrorMessage(
@@ -394,6 +410,45 @@ async def _handle_durable_control_message(
             observation_interview_stage=observation.interview_stage if observation else None,
         )
     raise RealtimeControlError("Unsupported realtime control message")
+
+
+async def _notify_live_examiner_if_eligible(
+    *,
+    settings: Settings,
+    response: object,
+    interview_session_id: UUID,
+) -> None:
+    observation_kind = getattr(response, "observation_kind", None)
+    source_event_id = getattr(response, "interview_event_id", None)
+    if not observation_is_live_examiner_eligible(observation_kind) or source_event_id is None:
+        return
+    provider = (
+        OpenAIReasoningProvider(settings)
+        if settings.live_examiner_autostart
+        else _NoopReasoningProvider()
+    )
+    coordinator = LiveExaminerCoordinator(
+        settings=settings,
+        sessionmaker=get_sessionmaker(),
+        provider=provider,
+    )
+    await coordinator.notify_new_observation(
+        interview_session_id=interview_session_id,
+        source_event_id=source_event_id,
+    )
+
+
+class _NoopReasoningProvider:
+    provider_name = "noop"
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        raise RuntimeError("Noop reasoning provider should not be called when autostart is off")
 
 
 def safe_control_error_message(exc: Exception) -> str:

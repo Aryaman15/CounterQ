@@ -22,9 +22,9 @@ from app.ai_gateway.provider import (
 )
 from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
 from app.ai_gateway.structured_output import StrictReasoningOutputModel
+from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_sessionmaker
-from app.realtime.routes import realtime_credential_minting_allowed
 
 router = APIRouter(prefix="/api/ai", tags=["ai-gateway"])
 
@@ -95,7 +95,7 @@ async def development_reasoning_smoke(
         Depends(get_reasoning_provider_builder),
     ],
 ) -> DevelopmentReasoningSmokeResponse:
-    if not realtime_credential_minting_allowed(settings):
+    if not development_spike_enabled(settings):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={

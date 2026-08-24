@@ -94,6 +94,14 @@ class Settings(BaseSettings):
         default=20.0,
         validation_alias="COUNTERQ_REASONING_TIMEOUT_SECONDS",
     )
+    live_examiner_autostart: bool = Field(
+        default=False,
+        validation_alias="COUNTERQ_LIVE_EXAMINER_AUTOSTART",
+    )
+    live_examiner_usefulness_seconds: float = Field(
+        default=8.0,
+        validation_alias="COUNTERQ_LIVE_EXAMINER_USEFULNESS_SECONDS",
+    )
 
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:

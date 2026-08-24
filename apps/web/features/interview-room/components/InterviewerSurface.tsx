@@ -5,6 +5,8 @@ import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
 import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
+import type { DevelopmentAnalyzeLatestResponse } from "../realtime/liveExaminer";
+import { requestDevelopmentLiveExaminerAnalysis } from "../realtime/liveExaminer";
 import type { DevelopmentReasoningSmokeResponse } from "../realtime/reasoningSmoke";
 import { requestDevelopmentReasoningSmoke } from "../realtime/reasoningSmoke";
 import { CODE_EDIT_BURST_IDLE_MS } from "../realtime/useCodeObservationCollector";
@@ -54,6 +56,10 @@ export function InterviewerSurface({
   const [reasoningSmokeResult, setReasoningSmokeResult] =
     useState<DevelopmentReasoningSmokeResponse | null>(null);
   const [reasoningSmokeError, setReasoningSmokeError] = useState<string | null>(null);
+  const [liveExaminerPending, setLiveExaminerPending] = useState(false);
+  const [liveExaminerResult, setLiveExaminerResult] =
+    useState<DevelopmentAnalyzeLatestResponse | null>(null);
+  const [liveExaminerError, setLiveExaminerError] = useState<string | null>(null);
   const transcriptPopoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -100,6 +106,22 @@ export function InterviewerSurface({
       setReasoningSmokeError("AI Gateway smoke request failed");
     } finally {
       setReasoningSmokePending(false);
+    }
+  };
+
+  const handleLiveExaminerAnalysis = async () => {
+    if (!canonicalDebug.sessionId || liveExaminerPending) {
+      return;
+    }
+    setLiveExaminerPending(true);
+    setLiveExaminerError(null);
+    try {
+      const result = await requestDevelopmentLiveExaminerAnalysis(canonicalDebug.sessionId);
+      setLiveExaminerResult(result);
+    } catch {
+      setLiveExaminerError("Live Examiner analysis request failed");
+    } finally {
+      setLiveExaminerPending(false);
     }
   };
 
@@ -330,6 +352,66 @@ export function InterviewerSurface({
                           {reasoningSmokeResult.confidence}
                         </span>
                         <span>{reasoningSmokeResult.technical_note}</span>
+                      </div>
+                    ) : null}
+                  </dd>
+                </div>
+                <div className="voice-dev-ai-gateway">
+                  <dt>LIVE EXAMINER</dt>
+                  <dd>
+                    <span>Autostart OFF by default in development</span>
+                    <button
+                      type="button"
+                      className="voice-control-button voice-dev-button"
+                      onClick={handleLiveExaminerAnalysis}
+                      disabled={!canonicalDebug.sessionId || liveExaminerPending}
+                    >
+                      {liveExaminerPending ? "Analyzing..." : "Analyze latest observation"}
+                    </button>
+                    {liveExaminerError ? (
+                      <span className="voice-dev-inline-error">{liveExaminerError}</span>
+                    ) : null}
+                    {liveExaminerResult ? (
+                      <div className="voice-dev-reasoning-result" aria-live="polite">
+                        <p>LIVE EXAMINER RESULT</p>
+                        <span>
+                          {liveExaminerResult.status}; source{" "}
+                          {liveExaminerResult.source_kind ?? "none"}; watermark{" "}
+                          {liveExaminerResult.source_event_watermark ?? "none"}
+                        </span>
+                        <span>
+                          invocation {liveExaminerResult.ai_invocation_id ?? "none"};{" "}
+                          {liveExaminerResult.provider ?? "no provider"}/
+                          {liveExaminerResult.model ?? "no model"}; latency{" "}
+                          {liveExaminerResult.latency_ms ?? "unknown"} ms
+                        </span>
+                        <span>
+                          code snapshot {liveExaminerResult.code_snapshot_id ?? "none"}; version{" "}
+                          {liveExaminerResult.code_snapshot_version ?? "none"}
+                        </span>
+                        <p>Claims</p>
+                        {liveExaminerResult.claims.length ? (
+                          liveExaminerResult.claims.map((claim) => (
+                            <span key={claim.id}>
+                              {claim.claim_type}: {claim.normalized_claim}
+                            </span>
+                          ))
+                        ) : (
+                          <span>No claims persisted</span>
+                        )}
+                        <p>Decision</p>
+                        {liveExaminerResult.decision ? (
+                          <>
+                            <span>
+                              {liveExaminerResult.decision.status};{" "}
+                              {liveExaminerResult.decision.action}; strategy{" "}
+                              {liveExaminerResult.decision.proposed_probe_strategy ?? "none"}
+                            </span>
+                            <span>{liveExaminerResult.decision.technical_rationale}</span>
+                          </>
+                        ) : (
+                          <span>{liveExaminerResult.message ?? "No decision persisted"}</span>
+                        )}
                       </div>
                     ) : null}
                   </dd>
