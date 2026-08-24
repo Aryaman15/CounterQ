@@ -223,9 +223,19 @@ class PromptDeliveryPermitMessage(BaseModel):
     type: Literal["prompt_delivery_permit"] = "prompt_delivery_permit"
     client_event_id: str
     interviewer_prompt_id: UUID
+    status: Literal["PERMITTED"] = "PERMITTED"
+    reason: str | None = None
     text: str
     origin: str
     kind: str
+
+
+class PromptDeliveryPermitResultMessage(BaseModel):
+    type: Literal["prompt_delivery_permit_result"] = "prompt_delivery_permit_result"
+    client_event_id: str
+    interviewer_prompt_id: UUID
+    status: Literal["DEFERRED", "EXPIRED", "STALE", "REJECTED"]
+    reason: str
 
 
 class DeliveryAckMessage(BaseModel):

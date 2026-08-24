@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 from uuid import UUID
@@ -38,6 +38,7 @@ PROBE_ALLOWED_STAGES = {
     "FINAL_DEFENSE",
 }
 ASK_ALLOWED_STAGES = PROBE_ALLOWED_STAGES | {"INTRODUCTION", "WRAP_UP"}
+AUTHORIZED_PROMPT_DELIVERY_WINDOW_SECONDS = 12.0
 
 
 class PromptAuthorizationError(ValueError):
@@ -70,9 +71,11 @@ class PromptGateResult:
 @dataclass(frozen=True)
 class PromptDeliveryPermit:
     prompt_id: UUID
-    text: str
-    kind: str
-    origin: str
+    status: str
+    reason: str
+    text: str | None = None
+    kind: str | None = None
+    origin: str | None = None
 
 
 class PromptAuthorizationService:
@@ -81,9 +84,15 @@ class PromptAuthorizationService:
         session: AsyncSession,
         *,
         clock: Callable[[], datetime] | None = None,
+        authorized_prompt_delivery_window_seconds: float = (
+            AUTHORIZED_PROMPT_DELIVERY_WINDOW_SECONDS
+        ),
     ) -> None:
         self._session = session
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._authorized_prompt_delivery_window = timedelta(
+            seconds=authorized_prompt_delivery_window_seconds,
+        )
 
     async def evaluate_examiner_decision(
         self,
@@ -192,34 +201,78 @@ class PromptAuthorizationService:
         runtime_state = runtime_state or PromptGateRuntimeState()
         prompt = await self._prompt_for_session(session_id, prompt_id)
         if prompt.status != "AUTHORIZED":
-            raise PromptDeliveryPermitError("Prompt is not authorized for delivery.")
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="REJECTED",
+                reason="Prompt is not authorized for delivery.",
+            )
         if runtime_state.candidate_speaking:
-            raise PromptDeliveryPermitError("Candidate currently owns the conversation floor.")
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="DEFERRED",
+                reason="Candidate is speaking.",
+            )
         if runtime_state.candidate_code_active:
-            raise PromptDeliveryPermitError("Candidate is actively editing.")
-        await self._ensure_no_active_delivery(session_id)
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="DEFERRED",
+                reason="Candidate is actively editing.",
+            )
+        if await self._active_delivery_exists(session_id):
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="DEFERRED",
+                reason="A prompt delivery is already active.",
+            )
+        if prompt.authorized_at is None:
+            prompt.status = "REJECTED"
+            await self._session.flush()
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="REJECTED",
+                reason="Prompt authorization timestamp is unavailable.",
+            )
+        if self._clock() > prompt.authorized_at + self._authorized_prompt_delivery_window:
+            prompt.status = "EXPIRED"
+            await self._session.flush()
+            return PromptDeliveryPermit(
+                prompt_id=prompt.id,
+                status="EXPIRED",
+                reason="Authorized prompt delivery window expired.",
+            )
 
         if prompt.origin == "EXAMINER_DECISION":
             decision = await self._session.get(ExaminerDecision, prompt.examiner_decision_id)
             if decision is None or decision.status != "AUTHORIZED":
-                raise PromptDeliveryPermitError("Examiner prompt no longer has authorization.")
-            rejection = await self._durable_rejection_outcome(
+                prompt.status = "REJECTED"
+                await self._session.flush()
+                return PromptDeliveryPermit(
+                    prompt_id=prompt.id,
+                    status="REJECTED",
+                    reason="Examiner prompt no longer has authorization.",
+                )
+            rejection = await self._delivery_rejection_outcome(
                 await self._lock_session(session_id),
                 decision,
             )
             if rejection is not None:
                 outcome, reason = rejection
-                self._mark_decision(decision, outcome=outcome, reason=reason)
                 prompt.status = (
-                    decision.status
-                    if decision.status in {"STALE", "EXPIRED", "SUPERSEDED"}
+                    outcome
+                    if outcome in {"STALE", "EXPIRED", "SUPERSEDED"}
                     else "REJECTED"
                 )
                 await self._session.flush()
-                raise PromptDeliveryPermitError("Prompt authorization became stale.")
+                return PromptDeliveryPermit(
+                    prompt_id=prompt.id,
+                    status=outcome if outcome in {"STALE", "EXPIRED", "SUPERSEDED"} else "REJECTED",
+                    reason=reason,
+                )
 
         return PromptDeliveryPermit(
             prompt_id=prompt.id,
+            status="PERMITTED",
+            reason="Authorized prompt is valid for delivery.",
             text=prompt.intent,
             kind=prompt.kind,
             origin=prompt.origin,
@@ -296,6 +349,54 @@ class PromptAuthorizationService:
             budget_result = await self._probe_budget_result(interview.id)
             if budget_result is not None:
                 return budget_result
+        return None
+
+    async def _delivery_rejection_outcome(
+        self,
+        interview: InterviewSession,
+        decision: ExaminerDecision,
+    ) -> tuple[str, str] | None:
+        now = self._clock()
+        if interview.status != "ACTIVE":
+            return ("STALE", "InterviewSession is no longer active.")
+        if now >= interview.deadline_at:
+            return ("EXPIRED", "InterviewSession deadline has been reached.")
+        if interview.state_version != decision.source_state_version:
+            return ("STALE", "Interview state version changed after prompt authorization.")
+        if decision.target_event_id is None:
+            return ("STALE", "ExaminerDecision has no source event target.")
+        source_event = await self._session.get(InterviewEvent, decision.target_event_id)
+        if source_event is None or source_event.interview_session_id != interview.id:
+            return ("STALE", "ExaminerDecision source event is unavailable.")
+        if source_event.server_sequence != decision.source_event_watermark:
+            return ("STALE", "ExaminerDecision source watermark does not match source event.")
+        if decision.action == "PROBE" and interview.current_stage not in PROBE_ALLOWED_STAGES:
+            return ("STALE", "Probe is no longer legal in the current interview stage.")
+        if decision.action == "ASK" and interview.current_stage not in ASK_ALLOWED_STAGES:
+            return ("STALE", "Clarification is no longer legal in the current interview stage.")
+        remaining_seconds = (interview.deadline_at - now).total_seconds()
+        if remaining_seconds < MIN_REMAINING_PROMPT_SECONDS:
+            return ("EXPIRED", "Insufficient session time remains for prompt delivery.")
+        if decision.target_code_snapshot_id is not None:
+            latest = await ObservationRepository(self._session).latest_code_snapshot(interview.id)
+            target_snapshot = await self._session.get(
+                CodeSnapshot,
+                decision.target_code_snapshot_id,
+            )
+            if target_snapshot is None or target_snapshot.interview_session_id != interview.id:
+                return ("STALE", "Target CodeSnapshot is unavailable.")
+            if latest is not None and latest.version_number > target_snapshot.version_number:
+                return ("STALE", "Target code changed after prompt authorization.")
+        newer_candidate_event = await self._session.scalar(
+            select(InterviewEvent)
+            .where(InterviewEvent.interview_session_id == interview.id)
+            .where(InterviewEvent.server_sequence > decision.source_event_watermark)
+            .where(InterviewEvent.source.in_(["CANDIDATE_VOICE", "NATIVE_EDITOR"]))
+            .order_by(InterviewEvent.server_sequence.asc())
+            .limit(1),
+        )
+        if newer_candidate_event is not None:
+            return ("STALE", "Newer candidate behavior arrived after prompt authorization.")
         return None
 
     async def _probe_budget_result(self, session_id: UUID) -> tuple[str, str] | None:
@@ -450,11 +551,15 @@ class PromptAuthorizationService:
         return prompt
 
     async def _ensure_no_active_delivery(self, session_id: UUID) -> None:
+        active = await self._active_delivery_exists(session_id)
+        if active:
+            raise PromptDeliveryPermitError("A prompt delivery is already active.")
+
+    async def _active_delivery_exists(self, session_id: UUID) -> bool:
         active = await self._session.scalar(
             select(InterviewerPromptDelivery.id)
             .where(InterviewerPromptDelivery.interview_session_id == session_id)
             .where(InterviewerPromptDelivery.delivery_state == "STARTED")
             .limit(1),
         )
-        if active is not None:
-            raise PromptDeliveryPermitError("A prompt delivery is already active.")
+        return active is not None

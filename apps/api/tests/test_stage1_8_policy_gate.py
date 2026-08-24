@@ -34,11 +34,15 @@ async def proposed_decision(
     confidence: Decimal = Decimal("0.91"),
     source_sequence: int = 1,
     stage: str = "IMPLEMENTATION",
+    decision_deadline_at: datetime | None = None,
+    session_deadline_at: datetime | None = None,
 ) -> tuple[Stage1PersistenceGraph, ExaminerDecision, CodeSnapshot]:
     graph = await create_stage1_graph(db_session)
     graph.interview_session.current_stage = stage
     graph.interview_session.state_version = 0
     graph.interview_session.last_server_sequence = source_sequence
+    if session_deadline_at is not None:
+        graph.interview_session.deadline_at = session_deadline_at
     ai = await create_ai_context(db_session, graph, purpose="LIVE_EXAMINER")
     event, snapshot = await add_snapshot(
         db_session,
@@ -59,7 +63,7 @@ async def proposed_decision(
         urgency=3,
         source_event_watermark=event.server_sequence,
         source_state_version=graph.interview_session.state_version,
-        deadline_at=datetime.now(UTC) + timedelta(seconds=60),
+        deadline_at=decision_deadline_at or datetime.now(UTC) + timedelta(seconds=60),
         expiry_policy="stage1_live_examiner_short_lived",
         status="PROPOSED",
         ai_invocation_id=ai.invocation.id,
@@ -165,6 +169,162 @@ async def test_newer_code_snapshot_marks_decision_stale(
     refreshed = await db_session.get(ExaminerDecision, decision.id)
     assert refreshed is not None
     assert refreshed.status == "STALE"
+
+
+async def test_authorized_prompt_delivery_window_survives_original_decision_deadline(
+    db_session: AsyncSession,
+) -> None:
+    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    _graph, decision, _snapshot = await proposed_decision(
+        db_session,
+        decision_deadline_at=t0 + timedelta(seconds=8),
+        session_deadline_at=t0 + timedelta(minutes=30),
+    )
+    current_time = t0 + timedelta(seconds=6)
+    service = PromptAuthorizationService(
+        db_session,
+        clock=lambda: current_time,
+        authorized_prompt_delivery_window_seconds=12,
+    )
+
+    gate = await service.evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    assert gate.disposition == "AUTHORIZED"
+    assert gate.prompt_id is not None
+
+    current_time = t0 + timedelta(seconds=9)
+    permit = await service.permit_delivery(
+        session_id=decision.interview_session_id,
+        prompt_id=gate.prompt_id,
+    )
+
+    assert permit.status == "PERMITTED"
+    assert permit.text == gate.candidate_safe_text
+
+
+async def test_decision_expired_before_policy_gate_creates_no_prompt(
+    db_session: AsyncSession,
+) -> None:
+    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    _graph, decision, _snapshot = await proposed_decision(
+        db_session,
+        decision_deadline_at=t0 + timedelta(seconds=8),
+        session_deadline_at=t0 + timedelta(minutes=30),
+    )
+
+    result = await PromptAuthorizationService(
+        db_session,
+        clock=lambda: t0 + timedelta(seconds=9),
+    ).evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+
+    assert result.disposition == "EXPIRED"
+    prompt = await db_session.scalar(
+        select(InterviewerPrompt).where(InterviewerPrompt.examiner_decision_id == decision.id),
+    )
+    assert prompt is None
+
+
+async def test_authorized_prompt_delivery_window_expiry_expires_prompt(
+    db_session: AsyncSession,
+) -> None:
+    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    _graph, decision, _snapshot = await proposed_decision(
+        db_session,
+        decision_deadline_at=t0 + timedelta(seconds=30),
+        session_deadline_at=t0 + timedelta(minutes=30),
+    )
+    current_time = t0 + timedelta(seconds=6)
+    service = PromptAuthorizationService(
+        db_session,
+        clock=lambda: current_time,
+        authorized_prompt_delivery_window_seconds=12,
+    )
+    gate = await service.evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    assert gate.prompt_id is not None
+
+    current_time = t0 + timedelta(seconds=19)
+    permit = await service.permit_delivery(
+        session_id=decision.interview_session_id,
+        prompt_id=gate.prompt_id,
+    )
+    prompt = await db_session.get(InterviewerPrompt, gate.prompt_id)
+
+    assert permit.status == "EXPIRED"
+    assert permit.reason == "Authorized prompt delivery window expired."
+    assert prompt is not None
+    assert prompt.status == "EXPIRED"
+
+
+async def test_authorized_prompt_stales_if_target_code_changes_before_delivery(
+    db_session: AsyncSession,
+) -> None:
+    graph, decision, first_snapshot = await proposed_decision(db_session, source_sequence=1)
+    gate = await PromptAuthorizationService(db_session).evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    assert gate.prompt_id is not None
+    await add_snapshot(
+        db_session,
+        graph,
+        server_sequence=2,
+        version_number=2,
+        parent_snapshot_id=first_snapshot.id,
+        source_code="class Solution { int left = 2; };",
+    )
+
+    permit = await PromptAuthorizationService(db_session).permit_delivery(
+        session_id=decision.interview_session_id,
+        prompt_id=gate.prompt_id,
+    )
+
+    assert permit.status == "STALE"
+    assert permit.reason == "Target code changed after prompt authorization."
+    prompt = await db_session.get(InterviewerPrompt, gate.prompt_id)
+    refreshed_decision = await db_session.get(ExaminerDecision, decision.id)
+    assert prompt is not None
+    assert prompt.status == "STALE"
+    assert refreshed_decision is not None
+    assert refreshed_decision.status == "AUTHORIZED"
+
+
+async def test_authorized_prompt_deferred_by_candidate_floor_or_active_editing(
+    db_session: AsyncSession,
+) -> None:
+    _graph, decision, _snapshot = await proposed_decision(db_session)
+    service = PromptAuthorizationService(db_session)
+    gate = await service.evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    assert gate.prompt_id is not None
+
+    speaking = await service.permit_delivery(
+        session_id=decision.interview_session_id,
+        prompt_id=gate.prompt_id,
+        runtime_state=PromptGateRuntimeState(candidate_speaking=True),
+    )
+    editing = await service.permit_delivery(
+        session_id=decision.interview_session_id,
+        prompt_id=gate.prompt_id,
+        runtime_state=PromptGateRuntimeState(candidate_code_active=True),
+    )
+
+    prompt = await db_session.get(InterviewerPrompt, gate.prompt_id)
+    assert speaking.status == "DEFERRED"
+    assert speaking.reason == "Candidate is speaking."
+    assert editing.status == "DEFERRED"
+    assert editing.reason == "Candidate is actively editing."
+    assert prompt is not None
+    assert prompt.status == "AUTHORIZED"
 
 
 async def test_delivery_completion_consumes_probe_budget_once(

@@ -27,6 +27,12 @@ export type PolicyGateDebug = {
   promptKind: string | null;
 };
 
+export type DeliveryPermitDebug = {
+  promptId: string | null;
+  status: string | null;
+  reason: string | null;
+};
+
 export type CanonicalCandidateFinal = {
   providerItemId: string | null;
   eventId: string | null;
@@ -77,6 +83,7 @@ export type CanonicalControlDebug = {
   lastCode: CanonicalCodeDebug;
   lastVoice: CanonicalVoiceDebug;
   lastPolicyGate: PolicyGateDebug;
+  lastDeliveryPermit: DeliveryPermitDebug;
 };
 
 export type RealtimeControlEvent =
@@ -85,6 +92,7 @@ export type RealtimeControlEvent =
   | { type: "debug_updated"; debug: CanonicalControlDebug }
   | { type: "authorized_prompt"; prompt: AuthorizedDevelopmentPrompt }
   | { type: "policy_gate_result"; result: PolicyGateDebug }
+  | { type: "delivery_permit_result"; result: DeliveryPermitDebug }
   | { type: "delivery_started"; promptId: string; deliveryId: string; providerResponseId: string }
   | { type: "error"; message: string };
 
@@ -547,6 +555,13 @@ export class RealtimeControlClient {
       }
       const promptId = stringField(message.interviewer_prompt_id);
       const text = stringField(message.text);
+      const result: DeliveryPermitDebug = {
+        promptId,
+        status: stringField(message.status) ?? "PERMITTED",
+        reason: stringField(message.reason),
+      };
+      this.patchDebug({ lastDeliveryPermit: result });
+      this.emit({ type: "delivery_permit_result", result });
       if (promptId && text) {
         this.activeDelivery = {
           promptId,
@@ -575,6 +590,20 @@ export class RealtimeControlClient {
           },
         });
       }
+      return;
+    }
+    if (type === "prompt_delivery_permit_result") {
+      const clientEventId = stringField(message.client_event_id);
+      if (clientEventId) {
+        this.ackPending(clientEventId);
+      }
+      const result: DeliveryPermitDebug = {
+        promptId: stringField(message.interviewer_prompt_id),
+        status: stringField(message.status),
+        reason: stringField(message.reason),
+      };
+      this.patchDebug({ lastDeliveryPermit: result });
+      this.emit({ type: "delivery_permit_result", result });
       return;
     }
     if (type === "durable_event_ack") {
@@ -816,6 +845,11 @@ function emptyDebug(): CanonicalControlDebug {
       policyGateOutcome: null,
       promptId: null,
       promptKind: null,
+    },
+    lastDeliveryPermit: {
+      promptId: null,
+      status: null,
+      reason: null,
     },
   };
 }

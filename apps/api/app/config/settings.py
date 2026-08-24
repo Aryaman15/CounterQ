@@ -102,6 +102,10 @@ class Settings(BaseSettings):
         default=8.0,
         validation_alias="COUNTERQ_LIVE_EXAMINER_USEFULNESS_SECONDS",
     )
+    authorized_prompt_delivery_window_seconds: float = Field(
+        default=12.0,
+        validation_alias="COUNTERQ_AUTHORIZED_PROMPT_DELIVERY_WINDOW_SECONDS",
+    )
 
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:

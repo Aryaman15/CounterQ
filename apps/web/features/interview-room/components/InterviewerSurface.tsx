@@ -471,6 +471,24 @@ export function InterviewerSurface({
                   </dd>
                 </div>
                 <div>
+                  <dt>Delivery permit</dt>
+                  <dd>
+                    {canonicalDebug.lastDeliveryPermit.status ? (
+                      <>
+                        <span>
+                          {canonicalDebug.lastDeliveryPermit.status}; prompt{" "}
+                          {canonicalDebug.lastDeliveryPermit.promptId ?? "unknown"}
+                        </span>
+                        <span>
+                          {canonicalDebug.lastDeliveryPermit.reason ?? "No permit reason"}
+                        </span>
+                      </>
+                    ) : (
+                      "No delivery permit requested"
+                    )}
+                  </dd>
+                </div>
+                <div>
                   <dt>Last delivery</dt>
                   <dd>
                     {canonicalDebug.lastDelivery.promptId

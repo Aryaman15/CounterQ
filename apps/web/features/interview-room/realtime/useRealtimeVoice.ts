@@ -462,5 +462,10 @@ function emptyCanonicalDebug(): CanonicalControlDebug {
       promptId: null,
       promptKind: null,
     },
+    lastDeliveryPermit: {
+      promptId: null,
+      status: null,
+      reason: null,
+    },
   };
 }

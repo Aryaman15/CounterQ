@@ -76,6 +76,11 @@ const observedCanonicalSession = {
     promptId: "prompt-1",
     promptKind: "PROBE",
   },
+  lastDeliveryPermit: {
+    promptId: "prompt-1",
+    status: "PERMITTED",
+    reason: "Authorized prompt is valid for delivery.",
+  },
 };
 
 vi.mock("@monaco-editor/react", () => ({
@@ -205,6 +210,8 @@ describe("Interview Room demo", () => {
     expect(screen.getByText(/ACKNOWLEDGED; snapshot snapshot-2; version 2; hash abc123def456; diff diff-1/i)).toBeInTheDocument();
     expect(screen.getByText(/acknowledged; idle threshold 2500 ms/i)).toBeInTheDocument();
     expect(screen.getByText(/segment segment-1; code snapshot snapshot-2; version 2/i)).toBeInTheDocument();
+    expect(screen.getByText(/PERMITTED; prompt prompt-1/i)).toBeInTheDocument();
+    expect(screen.getByText("Authorized prompt is valid for delivery.")).toBeInTheDocument();
     expect(screen.getByText(/prompt prompt-1; delivery delivery-1; state DELIVERED/i)).toBeInTheDocument();
     expect(screen.getByText("Listening")).toBeInTheDocument();
 
@@ -311,6 +318,44 @@ describe("Interview Room demo", () => {
     expect(screen.queryByText(/OPENAI_API_KEY/i)).not.toBeInTheDocument();
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
+
+  it("shows development delivery-permit diagnostics distinctly", () => {
+    const noop = vi.fn();
+    const diagnostics = {
+      ...observedCanonicalSession,
+      lastDeliveryPermit: {
+        promptId: "prompt-expired",
+        status: "EXPIRED",
+        reason: "Authorized prompt delivery window expired.",
+      },
+    };
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={diagnostics}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={noop}
+        onMute={noop}
+        onUnmute={noop}
+        onDisconnectVoice={noop}
+        onSpeakDevelopmentPhrase={noop}
+        onEvaluateExaminerDecision={noop}
+        onDeliverAuthorizedPrompt={noop}
+        onOpenConversation={noop}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    expect(screen.getByText(/EXPIRED; prompt prompt-expired/i)).toBeInTheDocument();
+    expect(screen.getByText("Authorized prompt delivery window expired.")).toBeInTheDocument();
+  });
+
 
   it("runs the development-only Live Examiner analysis without changing prompt or speaking", async () => {
     const speakDevelopmentPhrase = vi.fn();

@@ -45,6 +45,7 @@ from app.realtime.control_protocol import (
     PolicyGateResultMessage,
     PromptDeliveryPermitMessage,
     PromptDeliveryPermitRequestMessage,
+    PromptDeliveryPermitResultMessage,
     RealtimeDevelopmentBootstrapRequest,
     RealtimeDevelopmentBootstrapResponse,
     RealtimeDisconnectedMessage,
@@ -200,7 +201,12 @@ async def realtime_control_websocket(
 
     try:
         async with sessionmaker() as session:
-            service = RealtimeControlService(session)
+            service = RealtimeControlService(
+                session,
+                authorized_prompt_delivery_window_seconds=(
+                    settings.authorized_prompt_delivery_window_seconds
+                ),
+            )
             interview = await service.ensure_session_exists(interview_session_id)
             await websocket.send_json(
                 ServerHelloMessage(
@@ -304,7 +310,12 @@ async def realtime_control_websocket(
 
             async with sessionmaker() as session:
                 async with session.begin():
-                    service = RealtimeControlService(session)
+                    service = RealtimeControlService(
+                        session,
+                        authorized_prompt_delivery_window_seconds=(
+                            settings.authorized_prompt_delivery_window_seconds
+                        ),
+                    )
                     service.floor = floor
                     response = await _handle_durable_control_message(
                         service=service,
@@ -340,6 +351,7 @@ async def _handle_durable_control_message(
     | DevelopmentAuthorizedPromptMessage
     | PolicyGateResultMessage
     | PromptDeliveryPermitMessage
+    | PromptDeliveryPermitResultMessage
     | DeliveryAckMessage
     | ControlSignalAckMessage
 ):
@@ -431,12 +443,20 @@ async def _handle_durable_control_message(
             prompt_id=message.interviewer_prompt_id,
             runtime_state=runtime_state,
         )
+        if permit.status != "PERMITTED":
+            return PromptDeliveryPermitResultMessage(
+                client_event_id=message.client_event_id,
+                interviewer_prompt_id=permit.prompt_id,
+                status=permit.status,  # type: ignore[arg-type]
+                reason=permit.reason,
+            )
         return PromptDeliveryPermitMessage(
             client_event_id=message.client_event_id,
             interviewer_prompt_id=permit.prompt_id,
-            text=permit.text,
-            origin=permit.origin,
-            kind=permit.kind,
+            reason=permit.reason,
+            text=permit.text or "",
+            origin=permit.origin or "",
+            kind=permit.kind or "",
         )
     if isinstance(message, CounterQDeliveryStartedMessage):
         delivery_result = await service.start_delivery(

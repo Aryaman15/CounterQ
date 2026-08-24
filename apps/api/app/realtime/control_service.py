@@ -122,9 +122,13 @@ class RealtimeControlService:
         session: AsyncSession,
         *,
         clock: Callable[[], datetime] | None = None,
+        authorized_prompt_delivery_window_seconds: float = 12.0,
     ) -> None:
         self._session = session
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._authorized_prompt_delivery_window_seconds = (
+            authorized_prompt_delivery_window_seconds
+        )
         self.floor = ConversationFloor()
 
     async def ensure_session_exists(self, session_id: UUID) -> InterviewSession:
@@ -390,6 +394,9 @@ class RealtimeControlService:
         return await PromptAuthorizationService(
             self._session,
             clock=self._clock,
+            authorized_prompt_delivery_window_seconds=(
+                self._authorized_prompt_delivery_window_seconds
+            ),
         ).evaluate_examiner_decision(
             session_id=session_id,
             decision_id=decision_id,
@@ -403,7 +410,13 @@ class RealtimeControlService:
         prompt_id: UUID,
         runtime_state: RealtimeControlRuntimeState | None = None,
     ) -> PromptDeliveryPermit:
-        return await PromptAuthorizationService(self._session, clock=self._clock).permit_delivery(
+        return await PromptAuthorizationService(
+            self._session,
+            clock=self._clock,
+            authorized_prompt_delivery_window_seconds=(
+                self._authorized_prompt_delivery_window_seconds
+            ),
+        ).permit_delivery(
             session_id=session_id,
             prompt_id=prompt_id,
             runtime_state=(runtime_state or RealtimeControlRuntimeState()).prompt_gate_state(),
@@ -522,6 +535,9 @@ class RealtimeControlService:
         await PromptAuthorizationService(
             self._session,
             clock=self._clock,
+            authorized_prompt_delivery_window_seconds=(
+                self._authorized_prompt_delivery_window_seconds
+            ),
         ).consume_probe_budget_for_delivered_prompt(prompt)
         prompt.status = "DELIVERED"
         self.floor = self.floor.release()

@@ -1026,11 +1026,23 @@ describe("Realtime voice foundation", () => {
       type: "prompt_delivery_permit",
       client_event_id: "ctrl-3-stable-id",
       interviewer_prompt_id: "prompt-1",
+      status: "PERMITTED",
+      reason: "Authorized prompt is valid for delivery.",
       text: "What invariant holds?",
       origin: "EXAMINER_DECISION",
       kind: "PROBE",
     });
 
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "delivery_permit_result",
+        result: {
+          promptId: "prompt-1",
+          status: "PERMITTED",
+          reason: "Authorized prompt is valid for delivery.",
+        },
+      }),
+    );
     expect(events.at(-1)).toMatchObject({
       type: "authorized_prompt",
       prompt: {
@@ -1040,6 +1052,68 @@ describe("Realtime voice foundation", () => {
         kind: "PROBE",
       },
     });
+  });
+
+  it("control client surfaces delivery permit expired stale and deferred without speaking", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: () => "client-instance",
+        setItem: vi.fn(),
+      },
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(0));
+    const socket = FakeControlWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await connectPromise;
+
+    for (const [index, status, reason] of [
+      ["2", "EXPIRED", "Authorized prompt delivery window expired."],
+      ["3", "STALE", "Target code changed after prompt authorization."],
+      ["4", "DEFERRED", "Candidate is speaking."],
+    ] as const) {
+      client.requestPromptDeliveryPermit("prompt-1");
+      socket.receive({
+        type: "prompt_delivery_permit_result",
+        client_event_id: `ctrl-${index}-stable-id`,
+        interviewer_prompt_id: "prompt-1",
+        status,
+        reason,
+      });
+    }
+
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "delivery_permit_result",
+          result: expect.objectContaining({ promptId: "prompt-1", status: "EXPIRED" }),
+        }),
+        expect.objectContaining({
+          type: "delivery_permit_result",
+          result: expect.objectContaining({ promptId: "prompt-1", status: "STALE" }),
+        }),
+        expect.objectContaining({
+          type: "delivery_permit_result",
+          result: expect.objectContaining({ promptId: "prompt-1", status: "DEFERRED" }),
+        }),
+      ]),
+    );
+    expect(events.some((event) => event.type === "authorized_prompt")).toBe(false);
   });
 
   it("queues durable control messages until server hello marks the channel ready", async () => {
