@@ -38,11 +38,23 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const remainingLabel = useDemoDeadlineTimer(fixture.serverNowIso, fixture.deadlineAtIso);
   const realtimeVoice = useRealtimeVoice();
+  const currentDeliveredTurn = useMemo(
+    () =>
+      realtimeVoice.currentCounterQDeliveryText
+        ? {
+            ...fixture.currentDeliveredTurn,
+            actualText: realtimeVoice.currentCounterQDeliveryText,
+          }
+        : fixture.currentDeliveredTurn,
+    [fixture.currentDeliveredTurn, realtimeVoice.currentCounterQDeliveryText],
+  );
 
   useCodeObservationCollector({
     sourceCode: editorCode,
     controlReady: realtimeVoice.canonicalDebug.controlConnected,
     sendSnapshot: realtimeVoice.observeCodeSnapshot,
+    noteActivityStarted: realtimeVoice.noteCodeActivityStarted,
+    noteActivityIdle: realtimeVoice.noteCodeActivityIdle,
   });
 
   useEffect(() => {
@@ -179,12 +191,14 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
         lastFinalTranscript={realtimeVoice.lastFinalTranscript}
         sessionDebug={realtimeVoice.sessionDebug}
         canonicalDebug={realtimeVoice.canonicalDebug}
-        currentTurn={fixture.currentDeliveredTurn}
+        currentTurn={currentDeliveredTurn}
         onEnableMicrophone={realtimeVoice.enableMicrophone}
         onMute={realtimeVoice.mute}
         onUnmute={realtimeVoice.unmute}
         onDisconnectVoice={realtimeVoice.disconnect}
         onSpeakDevelopmentPhrase={realtimeVoice.speakDevelopmentPhrase}
+        onEvaluateExaminerDecision={realtimeVoice.evaluateExaminerDecision}
+        onDeliverAuthorizedPrompt={realtimeVoice.deliverAuthorizedPrompt}
         onOpenConversation={() => setConversationOpen(true)}
       />
       <RecentConversationDrawer

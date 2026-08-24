@@ -22,8 +22,11 @@ from app.examiner.coordinator import (
 )
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
+from app.interviews.prompt_authorization import PromptAuthorizationError
 from app.interviews.runtime import IdempotencyConflict, InterviewRuntimeError
 from app.realtime.control_protocol import (
+    CandidateCodeActivityIdleMessage,
+    CandidateCodeActivityStartedMessage,
     CandidateCodeSnapshotMessage,
     CandidateSpeechStartedMessage,
     CandidateSpeechStoppedMessage,
@@ -38,6 +41,10 @@ from app.realtime.control_protocol import (
     DevelopmentAuthorizedPromptMessage,
     DevelopmentAuthorizedPromptRequestMessage,
     DurableEventAckMessage,
+    ExaminerDecisionPolicyGateRequestMessage,
+    PolicyGateResultMessage,
+    PromptDeliveryPermitMessage,
+    PromptDeliveryPermitRequestMessage,
     RealtimeDevelopmentBootstrapRequest,
     RealtimeDevelopmentBootstrapResponse,
     RealtimeDisconnectedMessage,
@@ -45,7 +52,11 @@ from app.realtime.control_protocol import (
     ServerHelloMessage,
     client_control_message_adapter,
 )
-from app.realtime.control_service import RealtimeControlError, RealtimeControlService
+from app.realtime.control_service import (
+    RealtimeControlError,
+    RealtimeControlRuntimeState,
+    RealtimeControlService,
+)
 from app.realtime.openai_provider import OpenAIRealtimeVoiceProvider
 from app.realtime.provider import RealtimeProviderError, RealtimeVoiceProvider
 
@@ -185,6 +196,7 @@ async def realtime_control_websocket(
     await websocket.accept()
     sessionmaker = get_sessionmaker()
     floor = ConversationFloor()
+    runtime_state = RealtimeControlRuntimeState()
 
     try:
         async with sessionmaker() as session:
@@ -237,6 +249,10 @@ async def realtime_control_websocket(
                 continue
             if isinstance(message, CandidateSpeechStartedMessage):
                 floor = floor.candidate_speech_started()
+                runtime_state = RealtimeControlRuntimeState(
+                    candidate_speaking=True,
+                    candidate_code_active=runtime_state.candidate_code_active,
+                )
                 await websocket.send_json(
                     ControlSignalAckMessage(
                         client_event_id=message.client_event_id,
@@ -247,6 +263,36 @@ async def realtime_control_websocket(
                 continue
             if isinstance(message, CandidateSpeechStoppedMessage):
                 floor = floor.candidate_paused()
+                runtime_state = RealtimeControlRuntimeState(
+                    candidate_speaking=False,
+                    candidate_code_active=runtime_state.candidate_code_active,
+                )
+                await websocket.send_json(
+                    ControlSignalAckMessage(
+                        client_event_id=message.client_event_id,
+                        floor_state=floor.state,
+                        interrupted_prompt_delivery_id=floor.interrupted_prompt_delivery_id,
+                    ).model_dump(mode="json"),
+                )
+                continue
+            if isinstance(message, CandidateCodeActivityStartedMessage):
+                runtime_state = RealtimeControlRuntimeState(
+                    candidate_speaking=runtime_state.candidate_speaking,
+                    candidate_code_active=True,
+                )
+                await websocket.send_json(
+                    ControlSignalAckMessage(
+                        client_event_id=message.client_event_id,
+                        floor_state=floor.state,
+                        interrupted_prompt_delivery_id=floor.interrupted_prompt_delivery_id,
+                    ).model_dump(mode="json"),
+                )
+                continue
+            if isinstance(message, CandidateCodeActivityIdleMessage):
+                runtime_state = RealtimeControlRuntimeState(
+                    candidate_speaking=runtime_state.candidate_speaking,
+                    candidate_code_active=False,
+                )
                 await websocket.send_json(
                     ControlSignalAckMessage(
                         client_event_id=message.client_event_id,
@@ -264,6 +310,7 @@ async def realtime_control_websocket(
                         service=service,
                         interview_session_id=interview_session_id,
                         message=message,
+                        runtime_state=runtime_state,
                     )
                     floor = service.floor
                 await websocket.send_json(response.model_dump(mode="json"))
@@ -272,7 +319,7 @@ async def realtime_control_websocket(
                     response=response,
                     interview_session_id=interview_session_id,
                 )
-        except (RealtimeControlError, InterviewRuntimeError) as exc:
+        except (RealtimeControlError, InterviewRuntimeError, PromptAuthorizationError) as exc:
             await websocket.send_json(
                 ControlErrorMessage(
                     client_event_id=getattr(message, "client_event_id", None),
@@ -287,9 +334,12 @@ async def _handle_durable_control_message(
     service: RealtimeControlService,
     interview_session_id: UUID,
     message: object,
+    runtime_state: RealtimeControlRuntimeState,
 ) -> (
     DurableEventAckMessage
     | DevelopmentAuthorizedPromptMessage
+    | PolicyGateResultMessage
+    | PromptDeliveryPermitMessage
     | DeliveryAckMessage
     | ControlSignalAckMessage
 ):
@@ -356,6 +406,37 @@ async def _handle_durable_control_message(
             client_event_id=message.client_event_id,
             interviewer_prompt_id=prompt_result.prompt_id,
             text=prompt_result.text,
+        )
+    if isinstance(message, ExaminerDecisionPolicyGateRequestMessage):
+        gate_result = await service.evaluate_examiner_decision(
+            session_id=interview_session_id,
+            decision_id=message.examiner_decision_id,
+            runtime_state=runtime_state,
+        )
+        return PolicyGateResultMessage(
+            client_event_id=message.client_event_id,
+            examiner_decision_id=gate_result.decision_id,
+            disposition=gate_result.disposition,
+            decision_status=gate_result.decision_status,
+            policy_gate_outcome=gate_result.policy_gate_outcome,
+            reason=gate_result.reason,
+            interviewer_prompt_id=gate_result.prompt_id,
+            prompt_kind=gate_result.prompt_kind,
+            probe_strategy=gate_result.probe_strategy,
+            candidate_safe_text=gate_result.candidate_safe_text,
+        )
+    if isinstance(message, PromptDeliveryPermitRequestMessage):
+        permit = await service.permit_prompt_delivery(
+            session_id=interview_session_id,
+            prompt_id=message.interviewer_prompt_id,
+            runtime_state=runtime_state,
+        )
+        return PromptDeliveryPermitMessage(
+            client_event_id=message.client_event_id,
+            interviewer_prompt_id=permit.prompt_id,
+            text=permit.text,
+            origin=permit.origin,
+            kind=permit.kind,
         )
     if isinstance(message, CounterQDeliveryStartedMessage):
         delivery_result = await service.start_delivery(
@@ -454,6 +535,8 @@ class _NoopReasoningProvider:
 def safe_control_error_message(exc: Exception) -> str:
     if isinstance(exc, IdempotencyConflict):
         return "Realtime control message conflicts with previously accepted truth"
+    if isinstance(exc, PromptAuthorizationError):
+        return "Prompt authorization policy rejected the control request"
     if isinstance(exc, RealtimeControlError):
         return "Realtime control message could not be accepted"
     return "Realtime control operation failed"

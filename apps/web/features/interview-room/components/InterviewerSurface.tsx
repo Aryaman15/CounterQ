@@ -28,6 +28,8 @@ type InterviewerSurfaceProps = {
   onUnmute: () => void;
   onDisconnectVoice: () => void;
   onSpeakDevelopmentPhrase: () => void;
+  onEvaluateExaminerDecision: (examinerDecisionId: string) => void;
+  onDeliverAuthorizedPrompt: (promptId: string) => void;
   onOpenConversation: () => void;
 };
 
@@ -45,6 +47,8 @@ export function InterviewerSurface({
   onUnmute,
   onDisconnectVoice,
   onSpeakDevelopmentPhrase,
+  onEvaluateExaminerDecision,
+  onDeliverAuthorizedPrompt,
   onOpenConversation,
 }: InterviewerSurfaceProps) {
   const connected = voiceState === "Listening" || voiceState === "Speaking" || voiceState === "Muted";
@@ -408,6 +412,16 @@ export function InterviewerSurface({
                               {liveExaminerResult.decision.proposed_probe_strategy ?? "none"}
                             </span>
                             <span>{liveExaminerResult.decision.technical_rationale}</span>
+                            <button
+                              type="button"
+                              className="voice-control-button voice-dev-button"
+                              onClick={() =>
+                                onEvaluateExaminerDecision(liveExaminerResult.decision!.id)
+                              }
+                              disabled={liveExaminerResult.decision.status !== "PROPOSED"}
+                            >
+                              Policy gate
+                            </button>
                           </>
                         ) : (
                           <span>{liveExaminerResult.message ?? "No decision persisted"}</span>
@@ -426,6 +440,34 @@ export function InterviewerSurface({
                           canonicalDebug.lastVoice.associatedCodeSnapshotVersion ?? "none"
                         }`
                       : "No finalized voice observation yet"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Policy gate</dt>
+                  <dd>
+                    {canonicalDebug.lastPolicyGate.decisionId ? (
+                      <>
+                        <span>
+                          {canonicalDebug.lastPolicyGate.disposition}; decision{" "}
+                          {canonicalDebug.lastPolicyGate.decisionStatus}; outcome{" "}
+                          {canonicalDebug.lastPolicyGate.policyGateOutcome ?? "transient"}
+                        </span>
+                        {canonicalDebug.lastPolicyGate.promptId ? (
+                          <button
+                            type="button"
+                            className="voice-control-button voice-dev-button"
+                            onClick={() =>
+                              onDeliverAuthorizedPrompt(canonicalDebug.lastPolicyGate.promptId!)
+                            }
+                            disabled={voiceState !== "Listening" && voiceState !== "Muted"}
+                          >
+                            Deliver authorized prompt
+                          </button>
+                        ) : null}
+                      </>
+                    ) : (
+                      "No policy-gate result yet"
+                    )}
                   </dd>
                 </div>
                 <div>

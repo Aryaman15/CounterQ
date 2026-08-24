@@ -14,6 +14,17 @@ export type DevelopmentBootstrapResponse = {
 export type AuthorizedDevelopmentPrompt = {
   promptId: string;
   text: string;
+  origin?: string;
+  kind?: string;
+};
+
+export type PolicyGateDebug = {
+  decisionId: string | null;
+  disposition: string | null;
+  decisionStatus: string | null;
+  policyGateOutcome: string | null;
+  promptId: string | null;
+  promptKind: string | null;
 };
 
 export type CanonicalCandidateFinal = {
@@ -65,6 +76,7 @@ export type CanonicalControlDebug = {
   lastObservation: CanonicalObservationDebug;
   lastCode: CanonicalCodeDebug;
   lastVoice: CanonicalVoiceDebug;
+  lastPolicyGate: PolicyGateDebug;
 };
 
 export type RealtimeControlEvent =
@@ -72,6 +84,7 @@ export type RealtimeControlEvent =
   | { type: "disconnected" }
   | { type: "debug_updated"; debug: CanonicalControlDebug }
   | { type: "authorized_prompt"; prompt: AuthorizedDevelopmentPrompt }
+  | { type: "policy_gate_result"; result: PolicyGateDebug }
   | { type: "delivery_started"; promptId: string; deliveryId: string; providerResponseId: string }
   | { type: "error"; message: string };
 
@@ -209,6 +222,28 @@ export class RealtimeControlClient {
 
   requestDevelopmentPrompt(): void {
     this.sendDurable({ type: "development_authorized_prompt_requested" });
+  }
+
+  requestExaminerDecisionPolicyGate(examinerDecisionId: string): void {
+    this.sendDurable({
+      type: "examiner_decision_policy_gate_requested",
+      examiner_decision_id: examinerDecisionId,
+    });
+  }
+
+  requestPromptDeliveryPermit(promptId: string): void {
+    this.sendDurable({
+      type: "prompt_delivery_permit_requested",
+      interviewer_prompt_id: promptId,
+    });
+  }
+
+  sendCandidateCodeActivityStarted(): void {
+    this.sendBestEffort({ type: "candidate_code_activity_started" });
+  }
+
+  sendCandidateCodeActivityIdle(): void {
+    this.sendBestEffort({ type: "candidate_code_activity_idle" });
   }
 
   noteProviderResponseCreated(providerResponseId: string, providerItemId: string | null): void {
@@ -488,6 +523,60 @@ export class RealtimeControlClient {
       }
       return;
     }
+    if (type === "policy_gate_result") {
+      const clientEventId = stringField(message.client_event_id);
+      if (clientEventId) {
+        this.ackPending(clientEventId);
+      }
+      const result: PolicyGateDebug = {
+        decisionId: stringField(message.examiner_decision_id),
+        disposition: stringField(message.disposition),
+        decisionStatus: stringField(message.decision_status),
+        policyGateOutcome: stringField(message.policy_gate_outcome),
+        promptId: stringField(message.interviewer_prompt_id),
+        promptKind: stringField(message.prompt_kind),
+      };
+      this.patchDebug({ lastPolicyGate: result });
+      this.emit({ type: "policy_gate_result", result });
+      return;
+    }
+    if (type === "prompt_delivery_permit") {
+      const clientEventId = stringField(message.client_event_id);
+      if (clientEventId) {
+        this.ackPending(clientEventId);
+      }
+      const promptId = stringField(message.interviewer_prompt_id);
+      const text = stringField(message.text);
+      if (promptId && text) {
+        this.activeDelivery = {
+          promptId,
+          intendedText: text,
+          providerResponseId: `pending-${promptId}`,
+          providerItemId: null,
+          deliveryId: null,
+          outputTranscript: "",
+        };
+        this.patchDebug({
+          lastDelivery: {
+            promptId,
+            deliveryId: null,
+            deliveryState: "PERMITTED",
+            providerResponseId: null,
+            actualTranscriptId: null,
+          },
+        });
+        this.emit({
+          type: "authorized_prompt",
+          prompt: {
+            promptId,
+            text,
+            origin: stringField(message.origin) ?? undefined,
+            kind: stringField(message.kind) ?? undefined,
+          },
+        });
+      }
+      return;
+    }
     if (type === "durable_event_ack") {
       const clientEventId = stringField(message.client_event_id);
       if (clientEventId) {
@@ -719,6 +808,14 @@ function emptyDebug(): CanonicalControlDebug {
       transcriptSegmentId: null,
       associatedCodeSnapshotId: null,
       associatedCodeSnapshotVersion: null,
+    },
+    lastPolicyGate: {
+      decisionId: null,
+      disposition: null,
+      decisionStatus: null,
+      policyGateOutcome: null,
+      promptId: null,
+      promptKind: null,
     },
   };
 }

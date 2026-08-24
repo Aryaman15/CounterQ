@@ -68,6 +68,14 @@ const observedCanonicalSession = {
     associatedCodeSnapshotId: "snapshot-2",
     associatedCodeSnapshotVersion: 2,
   },
+  lastPolicyGate: {
+    decisionId: "decision-1",
+    disposition: "AUTHORIZED",
+    decisionStatus: "AUTHORIZED",
+    policyGateOutcome: "AUTHORIZED",
+    promptId: "prompt-1",
+    promptKind: "PROBE",
+  },
 };
 
 vi.mock("@monaco-editor/react", () => ({
@@ -172,6 +180,8 @@ describe("Interview Room demo", () => {
         onUnmute={noop}
         onDisconnectVoice={noop}
         onSpeakDevelopmentPhrase={noop}
+        onEvaluateExaminerDecision={noop}
+        onDeliverAuthorizedPrompt={noop}
         onOpenConversation={noop}
       />,
     );
@@ -213,6 +223,8 @@ describe("Interview Room demo", () => {
         onUnmute={noop}
         onDisconnectVoice={noop}
         onSpeakDevelopmentPhrase={noop}
+        onEvaluateExaminerDecision={noop}
+        onDeliverAuthorizedPrompt={noop}
         onOpenConversation={noop}
       />,
     );
@@ -270,6 +282,8 @@ describe("Interview Room demo", () => {
         onUnmute={vi.fn()}
         onDisconnectVoice={vi.fn()}
         onSpeakDevelopmentPhrase={speakDevelopmentPhrase}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
         onOpenConversation={vi.fn()}
       />,
     );
@@ -364,6 +378,8 @@ describe("Interview Room demo", () => {
         onUnmute={vi.fn()}
         onDisconnectVoice={vi.fn()}
         onSpeakDevelopmentPhrase={speakDevelopmentPhrase}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
         onOpenConversation={vi.fn()}
       />,
     );
@@ -415,6 +431,8 @@ describe("Interview Room demo", () => {
         onUnmute={vi.fn()}
         onDisconnectVoice={vi.fn()}
         onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
         onOpenConversation={vi.fn()}
       />,
     );

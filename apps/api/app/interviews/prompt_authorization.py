@@ -1,0 +1,460 @@
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from decimal import Decimal
+from typing import cast
+from uuid import UUID
+
+import structlog
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.interviews.interaction_repository import InterviewInteractionRepository
+from app.interviews.models import (
+    InterviewerPrompt,
+    InterviewerPromptDelivery,
+    InterviewSession,
+    SessionBudget,
+)
+from app.observation.models import CodeSnapshot, InterviewEvent
+from app.observation.repository import ObservationRepository
+
+logger = structlog.get_logger(__name__)
+
+MIN_PROMPT_GATE_CONFIDENCE = Decimal("0.75")
+IMPLEMENTATION_PROBE_MIN_CONFIDENCE = Decimal("0.80")
+MIN_REMAINING_PROMPT_SECONDS = 8
+PROBE_ALLOWED_STAGES = {
+    "PROBLEM_UNDERSTANDING",
+    "APPROACH_DISCOVERY",
+    "APPROACH_DEFENSE",
+    "IMPLEMENTATION",
+    "TESTING_DEBUGGING",
+    "COMPLEXITY_EDGE_CASES",
+    "CONSTRAINT_MUTATION",
+    "FINAL_DEFENSE",
+}
+ASK_ALLOWED_STAGES = PROBE_ALLOWED_STAGES | {"INTRODUCTION", "WRAP_UP"}
+
+
+class PromptAuthorizationError(ValueError):
+    pass
+
+
+class PromptDeliveryPermitError(PromptAuthorizationError):
+    pass
+
+
+@dataclass(frozen=True)
+class PromptGateRuntimeState:
+    candidate_speaking: bool = False
+    candidate_code_active: bool = False
+
+
+@dataclass(frozen=True)
+class PromptGateResult:
+    decision_id: UUID
+    disposition: str
+    decision_status: str
+    policy_gate_outcome: str | None
+    reason: str
+    prompt_id: UUID | None = None
+    prompt_kind: str | None = None
+    probe_strategy: str | None = None
+    candidate_safe_text: str | None = None
+
+
+@dataclass(frozen=True)
+class PromptDeliveryPermit:
+    prompt_id: UUID
+    text: str
+    kind: str
+    origin: str
+
+
+class PromptAuthorizationService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._session = session
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def evaluate_examiner_decision(
+        self,
+        *,
+        session_id: UUID,
+        decision_id: UUID,
+        runtime_state: PromptGateRuntimeState | None = None,
+    ) -> PromptGateResult:
+        runtime_state = runtime_state or PromptGateRuntimeState()
+        decision = await self._lock_decision(session_id, decision_id)
+        interview = await self._lock_session(session_id)
+
+        existing_prompt = await self._prompt_for_decision(session_id, decision_id)
+        if existing_prompt is not None:
+            return PromptGateResult(
+                decision_id=decision.id,
+                disposition="AUTHORIZED",
+                decision_status=decision.status,
+                policy_gate_outcome=decision.policy_gate_outcome,
+                reason="ExaminerDecision already has an authorized prompt.",
+                prompt_id=existing_prompt.id,
+                prompt_kind=existing_prompt.kind,
+                probe_strategy=existing_prompt.probe_strategy,
+                candidate_safe_text=existing_prompt.intent,
+            )
+
+        if decision.status != "PROPOSED":
+            return self._non_proposed_result(decision)
+
+        if decision.action in {"WAIT", "OBSERVE"}:
+            return await self._accept_silence(decision)
+
+        deferred_reason = await self._defer_reason(session_id, runtime_state)
+        if deferred_reason is not None:
+            return PromptGateResult(
+                decision_id=decision.id,
+                disposition="DEFERRED",
+                decision_status=decision.status,
+                policy_gate_outcome=None,
+                reason=deferred_reason,
+            )
+
+        reject_outcome = await self._durable_rejection_outcome(interview, decision)
+        if reject_outcome is not None:
+            outcome, reason = reject_outcome
+            self._mark_decision(decision, outcome=outcome, reason=reason)
+            await self._session.flush()
+            logger.info(
+                "examiner_decision_policy_rejected",
+                session_id=str(session_id),
+                decision_id=str(decision.id),
+                outcome=outcome,
+            )
+            return PromptGateResult(
+                decision_id=decision.id,
+                disposition=outcome,
+                decision_status=decision.status,
+                policy_gate_outcome=decision.policy_gate_outcome,
+                reason=reason,
+            )
+
+        prompt_kind = "CLARIFICATION" if decision.action == "ASK" else "PROBE"
+        probe_strategy = decision.proposed_probe_strategy if prompt_kind == "PROBE" else None
+        text = await self._compose_candidate_safe_text(decision)
+        prompt = await InterviewInteractionRepository(self._session).add_prompt(
+            interview_session_id=session_id,
+            origin="EXAMINER_DECISION",
+            kind=prompt_kind,
+            examiner_decision_id=decision.id,
+            probe_strategy=probe_strategy,
+            target_claim_id=decision.target_claim_id,
+            intent=text,
+            status="AUTHORIZED",
+            authorized_at=self._clock(),
+        )
+        decision.status = "AUTHORIZED"
+        decision.policy_gate_outcome = "AUTHORIZED"
+        decision.policy_gate_reason = "Policy gate authorized candidate-safe prompt intent."
+        await self._session.flush()
+        logger.info(
+            "examiner_decision_authorized",
+            session_id=str(session_id),
+            decision_id=str(decision.id),
+            prompt_id=str(prompt.id),
+            action=decision.action,
+        )
+        return PromptGateResult(
+            decision_id=decision.id,
+            disposition="AUTHORIZED",
+            decision_status=decision.status,
+            policy_gate_outcome=decision.policy_gate_outcome,
+            reason=decision.policy_gate_reason,
+            prompt_id=prompt.id,
+            prompt_kind=prompt.kind,
+            probe_strategy=prompt.probe_strategy,
+            candidate_safe_text=prompt.intent,
+        )
+
+    async def permit_delivery(
+        self,
+        *,
+        session_id: UUID,
+        prompt_id: UUID,
+        runtime_state: PromptGateRuntimeState | None = None,
+    ) -> PromptDeliveryPermit:
+        runtime_state = runtime_state or PromptGateRuntimeState()
+        prompt = await self._prompt_for_session(session_id, prompt_id)
+        if prompt.status != "AUTHORIZED":
+            raise PromptDeliveryPermitError("Prompt is not authorized for delivery.")
+        if runtime_state.candidate_speaking:
+            raise PromptDeliveryPermitError("Candidate currently owns the conversation floor.")
+        if runtime_state.candidate_code_active:
+            raise PromptDeliveryPermitError("Candidate is actively editing.")
+        await self._ensure_no_active_delivery(session_id)
+
+        if prompt.origin == "EXAMINER_DECISION":
+            decision = await self._session.get(ExaminerDecision, prompt.examiner_decision_id)
+            if decision is None or decision.status != "AUTHORIZED":
+                raise PromptDeliveryPermitError("Examiner prompt no longer has authorization.")
+            rejection = await self._durable_rejection_outcome(
+                await self._lock_session(session_id),
+                decision,
+            )
+            if rejection is not None:
+                outcome, reason = rejection
+                self._mark_decision(decision, outcome=outcome, reason=reason)
+                prompt.status = (
+                    decision.status
+                    if decision.status in {"STALE", "EXPIRED", "SUPERSEDED"}
+                    else "REJECTED"
+                )
+                await self._session.flush()
+                raise PromptDeliveryPermitError("Prompt authorization became stale.")
+
+        return PromptDeliveryPermit(
+            prompt_id=prompt.id,
+            text=prompt.intent,
+            kind=prompt.kind,
+            origin=prompt.origin,
+        )
+
+    async def consume_probe_budget_for_delivered_prompt(self, prompt: InterviewerPrompt) -> None:
+        if prompt.kind != "PROBE" or prompt.status == "DELIVERED":
+            return
+        budget = await self._session.scalar(
+            select(SessionBudget)
+            .where(SessionBudget.session_id == prompt.interview_session_id)
+            .with_for_update(),
+        )
+        if budget is None:
+            return
+        budget.probes_used += 1
+
+    async def _durable_rejection_outcome(
+        self,
+        interview: InterviewSession,
+        decision: ExaminerDecision,
+    ) -> tuple[str, str] | None:
+        now = self._clock()
+        if interview.status != "ACTIVE":
+            return ("STALE", "InterviewSession is no longer active.")
+        if now >= interview.deadline_at:
+            return ("EXPIRED", "InterviewSession deadline has been reached.")
+        if decision.deadline_at is not None and now >= decision.deadline_at:
+            return ("EXPIRED", "ExaminerDecision usefulness deadline expired.")
+        if interview.state_version != decision.source_state_version:
+            return ("STALE", "Interview state version changed after ExaminerDecision.")
+        if decision.target_event_id is None:
+            return ("STALE", "ExaminerDecision has no source event target.")
+        source_event = await self._session.get(InterviewEvent, decision.target_event_id)
+        if source_event is None or source_event.interview_session_id != interview.id:
+            return ("STALE", "ExaminerDecision source event is unavailable.")
+        if source_event.server_sequence != decision.source_event_watermark:
+            return ("STALE", "ExaminerDecision source watermark does not match source event.")
+        if decision.action == "PROBE" and interview.current_stage not in PROBE_ALLOWED_STAGES:
+            return ("STAGE_INVALID", "Probe is not legal in the current interview stage.")
+        if decision.action == "ASK" and interview.current_stage not in ASK_ALLOWED_STAGES:
+            return ("STAGE_INVALID", "Clarification is not legal in the current interview stage.")
+        min_confidence = (
+            IMPLEMENTATION_PROBE_MIN_CONFIDENCE
+            if decision.action == "PROBE" and interview.current_stage == "IMPLEMENTATION"
+            else MIN_PROMPT_GATE_CONFIDENCE
+        )
+        if decision.confidence is None or decision.confidence < min_confidence:
+            return ("LOW_CONFIDENCE", "ExaminerDecision confidence is below policy threshold.")
+        remaining_seconds = (interview.deadline_at - now).total_seconds()
+        if remaining_seconds < MIN_REMAINING_PROMPT_SECONDS:
+            return ("EXPIRED", "Insufficient session time remains for a new prompt.")
+        if decision.target_code_snapshot_id is not None:
+            latest = await ObservationRepository(self._session).latest_code_snapshot(interview.id)
+            target_snapshot = await self._session.get(
+                CodeSnapshot,
+                decision.target_code_snapshot_id,
+            )
+            if target_snapshot is None or target_snapshot.interview_session_id != interview.id:
+                return ("STALE", "Target CodeSnapshot is unavailable.")
+            if latest is not None and latest.version_number > target_snapshot.version_number:
+                return ("STALE", "A newer CodeSnapshot superseded the target.")
+        newer_candidate_event = await self._session.scalar(
+            select(InterviewEvent)
+            .where(InterviewEvent.interview_session_id == interview.id)
+            .where(InterviewEvent.server_sequence > decision.source_event_watermark)
+            .where(InterviewEvent.source.in_(["CANDIDATE_VOICE", "NATIVE_EDITOR"]))
+            .order_by(InterviewEvent.server_sequence.asc())
+            .limit(1),
+        )
+        if newer_candidate_event is not None:
+            return ("SUPERSEDED", "Newer candidate behavior arrived after the source event.")
+        if decision.action == "PROBE":
+            budget_result = await self._probe_budget_result(interview.id)
+            if budget_result is not None:
+                return budget_result
+        return None
+
+    async def _probe_budget_result(self, session_id: UUID) -> tuple[str, str] | None:
+        budget = await self._session.scalar(
+            select(SessionBudget).where(SessionBudget.session_id == session_id).with_for_update(),
+        )
+        if budget is None:
+            return ("BUDGET_DENIED", "SessionBudget is unavailable.")
+        outstanding = await self._session.scalar(
+            select(func.count())
+            .select_from(InterviewerPrompt)
+            .where(InterviewerPrompt.interview_session_id == session_id)
+            .where(InterviewerPrompt.kind == "PROBE")
+            .where(InterviewerPrompt.status == "AUTHORIZED"),
+        )
+        if budget.probes_used + int(outstanding or 0) >= budget.max_probes:
+            return ("BUDGET_DENIED", "Probe budget is exhausted or already reserved.")
+        return None
+
+    async def _defer_reason(
+        self,
+        session_id: UUID,
+        runtime_state: PromptGateRuntimeState,
+    ) -> str | None:
+        if runtime_state.candidate_speaking:
+            return "Candidate currently owns the conversation floor."
+        if runtime_state.candidate_code_active:
+            return "Candidate is actively editing."
+        active = await self._session.scalar(
+            select(InterviewerPromptDelivery.id)
+            .where(InterviewerPromptDelivery.interview_session_id == session_id)
+            .where(InterviewerPromptDelivery.delivery_state == "STARTED")
+            .limit(1),
+        )
+        if active is not None:
+            return "A prompt delivery is already active."
+        return None
+
+    async def _accept_silence(self, decision: ExaminerDecision) -> PromptGateResult:
+        decision.status = "AUTHORIZED"
+        decision.policy_gate_outcome = "AUTHORIZED"
+        decision.policy_gate_reason = "Policy gate accepted Examiner silence; no prompt authorized."
+        await self._session.flush()
+        return PromptGateResult(
+            decision_id=decision.id,
+            disposition="AUTHORIZED",
+            decision_status=decision.status,
+            policy_gate_outcome=decision.policy_gate_outcome,
+            reason=decision.policy_gate_reason,
+        )
+
+    def _mark_decision(self, decision: ExaminerDecision, *, outcome: str, reason: str) -> None:
+        status_by_outcome = {
+            "STALE": "STALE",
+            "EXPIRED": "EXPIRED",
+            "SUPERSEDED": "SUPERSEDED",
+            "BUDGET_DENIED": "REJECTED",
+            "STAGE_INVALID": "REJECTED",
+            "LOW_CONFIDENCE": "REJECTED",
+            "REJECTED": "REJECTED",
+        }
+        decision.status = status_by_outcome.get(outcome, "REJECTED")
+        decision.policy_gate_outcome = outcome
+        decision.policy_gate_reason = reason
+
+    def _non_proposed_result(self, decision: ExaminerDecision) -> PromptGateResult:
+        if decision.status == "AUTHORIZED":
+            disposition = "AUTHORIZED"
+        else:
+            disposition = decision.policy_gate_outcome or decision.status
+        return PromptGateResult(
+            decision_id=decision.id,
+            disposition=disposition,
+            decision_status=decision.status,
+            policy_gate_outcome=decision.policy_gate_outcome,
+            reason=decision.policy_gate_reason or "ExaminerDecision is no longer proposed.",
+        )
+
+    async def _compose_candidate_safe_text(self, decision: ExaminerDecision) -> str:
+        if decision.action == "ASK":
+            return "Can you clarify that part of your approach?"
+        claim: CandidateClaim | None = None
+        if decision.target_claim_id is not None:
+            claim = await self._session.get(CandidateClaim, decision.target_claim_id)
+        strategy = decision.proposed_probe_strategy
+        if strategy == "ASSUMPTION_CHALLENGE":
+            if claim is not None:
+                return f"What makes that assumption safe: {claim.normalized_claim}?"
+            return "What makes that assumption safe?"
+        if strategy == "PROVE":
+            return "What invariant are you relying on here, and what guarantees it holds?"
+        if strategy == "COMPLEXITY":
+            return "Walk me through how you derived that complexity bound."
+        if strategy == "COUNTEREXAMPLE":
+            return "Can you think of an input where this reasoning might break?"
+        if strategy == "EDGE_CASE":
+            return "Which edge case is most likely to challenge this approach?"
+        if strategy == "TRADE_OFF":
+            return "What trade-off are you making with this choice?"
+        if strategy == "ALTERNATIVE":
+            return "What alternative approach would you compare this against?"
+        if strategy == "IMPLEMENTATION_CHOICE":
+            return "What makes this implementation choice safe for the invariant you need?"
+        if strategy == "CONSTRAINT_MUTATION":
+            return "How would your approach change if the constraint shifted?"
+        if strategy == "FAILURE_MODE":
+            return "What failure mode are you guarding against here?"
+        if strategy == "TRANSFER":
+            return "Where else would this reasoning transfer?"
+        return "Walk me through the reasoning behind that choice."
+
+    async def _lock_decision(self, session_id: UUID, decision_id: UUID) -> ExaminerDecision:
+        decision = await self._session.scalar(
+            select(ExaminerDecision)
+            .where(ExaminerDecision.interview_session_id == session_id)
+            .where(ExaminerDecision.id == decision_id)
+            .with_for_update(),
+        )
+        if decision is None:
+            raise PromptAuthorizationError("ExaminerDecision not found for session.")
+        return decision
+
+    async def _lock_session(self, session_id: UUID) -> InterviewSession:
+        interview = await self._session.scalar(
+            select(InterviewSession).where(InterviewSession.id == session_id).with_for_update(),
+        )
+        if interview is None:
+            raise PromptAuthorizationError("InterviewSession not found.")
+        return interview
+
+    async def _prompt_for_decision(
+        self,
+        session_id: UUID,
+        decision_id: UUID,
+    ) -> InterviewerPrompt | None:
+        prompt = await self._session.scalar(
+            select(InterviewerPrompt)
+            .where(InterviewerPrompt.interview_session_id == session_id)
+            .where(InterviewerPrompt.examiner_decision_id == decision_id)
+            .limit(1),
+        )
+        return cast(InterviewerPrompt | None, prompt)
+
+    async def _prompt_for_session(self, session_id: UUID, prompt_id: UUID) -> InterviewerPrompt:
+        prompt = await self._session.scalar(
+            select(InterviewerPrompt)
+            .where(InterviewerPrompt.interview_session_id == session_id)
+            .where(InterviewerPrompt.id == prompt_id),
+        )
+        if prompt is None:
+            raise PromptDeliveryPermitError("Prompt is unavailable.")
+        return prompt
+
+    async def _ensure_no_active_delivery(self, session_id: UUID) -> None:
+        active = await self._session.scalar(
+            select(InterviewerPromptDelivery.id)
+            .where(InterviewerPromptDelivery.interview_session_id == session_id)
+            .where(InterviewerPromptDelivery.delivery_state == "STARTED")
+            .limit(1),
+        )
+        if active is not None:
+            raise PromptDeliveryPermitError("A prompt delivery is already active.")

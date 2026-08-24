@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MutableRefObject } from "react";
+import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
 import {
@@ -23,6 +23,7 @@ export type RealtimeVoiceControls = {
   errorMessage: string | null;
   partialTranscript: string;
   lastFinalTranscript: string;
+  currentCounterQDeliveryText: string;
   sessionDebug: RealtimeSessionDebug;
   canonicalDebug: CanonicalControlDebug;
   enableMicrophone: () => Promise<void>;
@@ -30,11 +31,15 @@ export type RealtimeVoiceControls = {
   unmute: () => void;
   disconnect: () => void;
   speakDevelopmentPhrase: () => void;
+  evaluateExaminerDecision: (examinerDecisionId: string) => void;
+  deliverAuthorizedPrompt: (promptId: string) => void;
   observeCodeSnapshot: (
     sourceCode: string,
     trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
     idempotencyKey: string,
   ) => void;
+  noteCodeActivityStarted: () => void;
+  noteCodeActivityIdle: () => void;
 };
 
 export type RealtimeSessionDebug = {
@@ -55,6 +60,7 @@ export function useRealtimeVoice(
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [partialTranscript, setPartialTranscript] = useState("");
   const [lastFinalTranscript, setLastFinalTranscript] = useState("");
+  const [currentCounterQDeliveryText, setCurrentCounterQDeliveryText] = useState("");
   const [sessionDebug, setSessionDebug] = useState<RealtimeSessionDebug>({
     eventType: null,
     sessionType: null,
@@ -96,6 +102,7 @@ export function useRealtimeVoice(
         setIsMuted,
         setPartialTranscript,
         setLastFinalTranscript,
+        setCurrentCounterQDeliveryText,
         setSessionDebug,
         clientRef,
         controlClientRef,
@@ -122,8 +129,10 @@ export function useRealtimeVoice(
         return;
       }
       if (event.type === "authorized_prompt") {
-        clientRef.current?.speakAuthorizedDevelopmentPhrase(event.prompt.text, {
+        clientRef.current?.speakAuthorizedPrompt(event.prompt.text, {
           counterq_prompt_id: event.prompt.promptId,
+          counterq_prompt_origin: event.prompt.origin ?? "SYSTEM",
+          counterq_prompt_kind: event.prompt.kind ?? "INSTRUCTION",
         });
         return;
       }
@@ -171,6 +180,7 @@ export function useRealtimeVoice(
     setActivityState("Ready");
     setIsMuted(false);
     setPartialTranscript("");
+    setCurrentCounterQDeliveryText("");
     transcriptDraftsRef.current.clear();
     activeTranscriptKeyRef.current = null;
     setCanonicalDebug(emptyCanonicalDebug());
@@ -178,6 +188,14 @@ export function useRealtimeVoice(
 
   const speakDevelopmentPhrase = useCallback(() => {
     controlClientRef.current?.requestDevelopmentPrompt();
+  }, []);
+
+  const evaluateExaminerDecision = useCallback((examinerDecisionId: string) => {
+    controlClientRef.current?.requestExaminerDecisionPolicyGate(examinerDecisionId);
+  }, []);
+
+  const deliverAuthorizedPrompt = useCallback((promptId: string) => {
+    controlClientRef.current?.requestPromptDeliveryPermit(promptId);
   }, []);
 
   const observeCodeSnapshot = useCallback(
@@ -196,6 +214,14 @@ export function useRealtimeVoice(
     [],
   );
 
+  const noteCodeActivityStarted = useCallback(() => {
+    controlClientRef.current?.sendCandidateCodeActivityStarted();
+  }, []);
+
+  const noteCodeActivityIdle = useCallback(() => {
+    controlClientRef.current?.sendCandidateCodeActivityIdle();
+  }, []);
+
   useEffect(() => disconnect, [disconnect]);
 
   return {
@@ -204,6 +230,7 @@ export function useRealtimeVoice(
     errorMessage,
     partialTranscript,
     lastFinalTranscript,
+    currentCounterQDeliveryText,
     sessionDebug,
     canonicalDebug,
     enableMicrophone,
@@ -211,7 +238,11 @@ export function useRealtimeVoice(
     unmute,
     disconnect,
     speakDevelopmentPhrase,
+    evaluateExaminerDecision,
+    deliverAuthorizedPrompt,
     observeCodeSnapshot,
+    noteCodeActivityStarted,
+    noteCodeActivityIdle,
   };
 }
 
@@ -221,6 +252,7 @@ type RealtimeEventSetters = {
   setIsMuted: (muted: boolean) => void;
   setPartialTranscript: (text: string) => void;
   setLastFinalTranscript: (text: string) => void;
+  setCurrentCounterQDeliveryText: Dispatch<SetStateAction<string>>;
   setSessionDebug: (debug: RealtimeSessionDebug) => void;
   clientRef: MutableRefObject<RealtimeVoiceClient | null>;
   controlClientRef: MutableRefObject<RealtimeControlClient | null>;
@@ -235,6 +267,7 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setIsMuted,
     setPartialTranscript,
     setLastFinalTranscript,
+    setCurrentCounterQDeliveryText,
     setSessionDebug,
     clientRef,
     controlClientRef,
@@ -258,6 +291,7 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
   }
   if (event.type === "counterq_output_started") {
     setActivityState("Speaking");
+    setCurrentCounterQDeliveryText("");
     if (event.playbackStarted) {
       controlClientRef.current?.sendDeliveryStarted(
         event.responseId ?? null,
@@ -308,6 +342,7 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     setActivityState("Ready");
     setIsMuted(false);
     setPartialTranscript("");
+    setCurrentCounterQDeliveryText("");
     transcriptDraftsRef.current.clear();
     activeTranscriptKeyRef.current = null;
     setErrorMessage(null);
@@ -337,10 +372,12 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
     return;
   }
   if (event.type === "counterq_output_transcript_delta") {
+    setCurrentCounterQDeliveryText((current) => `${current}${event.text}`);
     controlClientRef.current?.noteOutputTranscriptDelta(event.responseId, event.text);
     return;
   }
   if (event.type === "counterq_output_transcript_final") {
+    setCurrentCounterQDeliveryText(event.text);
     controlClientRef.current?.noteOutputTranscriptFinal(event.responseId, event.text);
     return;
   }
@@ -416,6 +453,14 @@ function emptyCanonicalDebug(): CanonicalControlDebug {
       transcriptSegmentId: null,
       associatedCodeSnapshotId: null,
       associatedCodeSnapshotVersion: null,
+    },
+    lastPolicyGate: {
+      decisionId: null,
+      disposition: null,
+      decisionStatus: null,
+      policyGateOutcome: null,
+      promptId: null,
+      promptKind: null,
     },
   };
 }

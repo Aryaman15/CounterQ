@@ -146,6 +146,7 @@ class HookFakeClient {
     this.emit({ type: muted ? "muted" : "unmuted" });
   });
   speakAuthorizedDevelopmentPhrase = vi.fn();
+  speakAuthorizedPrompt = vi.fn();
   interruptActiveOutputForCandidateSpeech = vi.fn();
   private readonly listeners = new Set<(event: RealtimeClientEvent) => void>();
   private connectImpl: () => Promise<void> = async () => {
@@ -183,6 +184,10 @@ class HookFakeControlClient {
   sendCandidateSpeechStopped = vi.fn();
   sendCandidateTranscriptFinal = vi.fn();
   requestDevelopmentPrompt = vi.fn();
+  requestExaminerDecisionPolicyGate = vi.fn();
+  requestPromptDeliveryPermit = vi.fn();
+  sendCandidateCodeActivityStarted = vi.fn();
+  sendCandidateCodeActivityIdle = vi.fn();
   noteProviderResponseCreated = vi.fn();
   noteOutputTranscriptDelta = vi.fn();
   noteOutputTranscriptFinal = vi.fn();
@@ -258,6 +263,7 @@ function renderRealtimeHarness(
         <p data-testid="muted-state">{String(voice.isMuted)}</p>
         <p data-testid="partial-transcript">{voice.partialTranscript}</p>
         <p data-testid="final-transcript">{voice.lastFinalTranscript}</p>
+        <p data-testid="counterq-delivery-text">{voice.currentCounterQDeliveryText}</p>
         <p data-testid="session-transcription-model">{voice.sessionDebug.transcriptionModel}</p>
         <p data-testid="canonical-session">{voice.canonicalDebug.sessionId}</p>
         <p data-testid="pending-durable">{voice.canonicalDebug.pendingDurableMessages}</p>
@@ -276,6 +282,12 @@ function renderRealtimeHarness(
         </button>
         <button type="button" onClick={voice.speakDevelopmentPhrase}>
           phrase
+        </button>
+        <button type="button" onClick={() => voice.evaluateExaminerDecision("decision-1")}>
+          gate
+        </button>
+        <button type="button" onClick={() => voice.deliverAuthorizedPrompt("prompt-1")}>
+          deliver
         </button>
       </div>
     );
@@ -530,6 +542,50 @@ describe("Realtime voice foundation", () => {
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
   });
 
+  it("hook keeps policy gate and delivery permit separate from voice speech", async () => {
+    const client = new HookFakeClient();
+    const controlClient = new HookFakeControlClient();
+    renderRealtimeHarness(client, controlClient);
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+
+    fireEvent.click(screen.getByText("gate"));
+    expect(controlClient.requestExaminerDecisionPolicyGate).toHaveBeenCalledWith("decision-1");
+    expect(client.speakAuthorizedPrompt).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByText("deliver"));
+    expect(controlClient.requestPromptDeliveryPermit).toHaveBeenCalledWith("prompt-1");
+
+    controlClient.emit({
+      type: "authorized_prompt",
+      prompt: {
+        promptId: "prompt-1",
+        text: "What invariant holds?",
+        origin: "EXAMINER_DECISION",
+        kind: "PROBE",
+      },
+    });
+    expect(client.speakAuthorizedPrompt).toHaveBeenCalledWith("What invariant holds?", {
+      counterq_prompt_id: "prompt-1",
+      counterq_prompt_origin: "EXAMINER_DECISION",
+      counterq_prompt_kind: "PROBE",
+    });
+    expect(screen.getByTestId("counterq-delivery-text")).toHaveTextContent("");
+
+    act(() => {
+      client.emit({
+        type: "counterq_output_transcript_delta",
+        text: "What invariant",
+        responseId: "resp-1",
+        itemId: "item-1",
+        contentIndex: 0,
+      });
+    });
+    expect(screen.getByTestId("counterq-delivery-text")).toHaveTextContent("What invariant");
+  });
+
   it("uses backend-authorized dev prompt text before asking the provider to speak", async () => {
     const client = new HookFakeClient();
     const { controlClient } = renderRealtimeHarness(client);
@@ -551,9 +607,13 @@ describe("Realtime voice foundation", () => {
       });
     });
 
-    expect(client.speakAuthorizedDevelopmentPhrase).toHaveBeenCalledWith(
+    expect(client.speakAuthorizedPrompt).toHaveBeenCalledWith(
       "Walk me through the approach you're considering.",
-      { counterq_prompt_id: "prompt-1" },
+      {
+        counterq_prompt_id: "prompt-1",
+        counterq_prompt_origin: "SYSTEM",
+        counterq_prompt_kind: "INSTRUCTION",
+      },
     );
   });
 
@@ -905,6 +965,83 @@ describe("Realtime voice foundation", () => {
     );
   });
 
+  it("control client requests policy gate, then delivery permit before speaking", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: () => "client-instance",
+        setItem: vi.fn(),
+      },
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(0));
+    const socket = FakeControlWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await connectPromise;
+
+    client.requestExaminerDecisionPolicyGate("decision-1");
+    expect(socket.send).toHaveBeenLastCalledWith(
+      expect.stringContaining('"type":"examiner_decision_policy_gate_requested"'),
+    );
+    socket.receive({
+      type: "policy_gate_result",
+      client_event_id: "ctrl-2-stable-id",
+      examiner_decision_id: "decision-1",
+      disposition: "AUTHORIZED",
+      decision_status: "AUTHORIZED",
+      policy_gate_outcome: "AUTHORIZED",
+      reason: "authorized",
+      interviewer_prompt_id: "prompt-1",
+      prompt_kind: "PROBE",
+      probe_strategy: "PROVE",
+      candidate_safe_text: "What invariant holds?",
+    });
+
+    expect(events.some((event) => event.type === "authorized_prompt")).toBe(false);
+    const gateEvent = events.find((event) => event.type === "policy_gate_result");
+    expect(gateEvent).toMatchObject({
+      type: "policy_gate_result",
+      result: { disposition: "AUTHORIZED", promptId: "prompt-1" },
+    });
+
+    client.requestPromptDeliveryPermit("prompt-1");
+    expect(socket.send).toHaveBeenLastCalledWith(
+      expect.stringContaining('"type":"prompt_delivery_permit_requested"'),
+    );
+    socket.receive({
+      type: "prompt_delivery_permit",
+      client_event_id: "ctrl-3-stable-id",
+      interviewer_prompt_id: "prompt-1",
+      text: "What invariant holds?",
+      origin: "EXAMINER_DECISION",
+      kind: "PROBE",
+    });
+
+    expect(events.at(-1)).toMatchObject({
+      type: "authorized_prompt",
+      prompt: {
+        promptId: "prompt-1",
+        text: "What invariant holds?",
+        origin: "EXAMINER_DECISION",
+        kind: "PROBE",
+      },
+    });
+  });
+
   it("queues durable control messages until server hello marks the channel ready", async () => {
     const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
     const storage = new Map<string, string>();
@@ -1190,6 +1327,38 @@ describe("Realtime voice foundation", () => {
       "source 2",
       "EDIT_BURST",
       "candidate-code:EDIT_BURST:3:stable-code-id",
+    );
+    live.unmount();
+  });
+
+  it("emits ephemeral code activity started and idle around an edit burst", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    const noteActivityStarted = vi.fn();
+    const noteActivityIdle = vi.fn();
+    function Harness(props: { sourceCode: string }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: true,
+        sendSnapshot,
+        noteActivityStarted,
+        noteActivityIdle,
+        randomId: () => "stable-code-id",
+      });
+      return null;
+    }
+
+    const live = render(<Harness sourceCode="source 0" />);
+    live.rerender(<Harness sourceCode="source 1" />);
+    expect(noteActivityStarted).toHaveBeenCalledTimes(1);
+    expect(noteActivityIdle).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(noteActivityIdle).toHaveBeenCalledTimes(1);
+    expect(sendSnapshot).toHaveBeenLastCalledWith(
+      "source 1",
+      "EDIT_BURST",
+      "candidate-code:EDIT_BURST:2:stable-code-id",
     );
     live.unmount();
   });

@@ -152,8 +152,15 @@ export class RealtimeVoiceClient {
     phrase: string,
     metadata: Record<string, string> = {},
   ): void {
+    this.speakAuthorizedPrompt(phrase, metadata);
+  }
+
+  speakAuthorizedPrompt(
+    phrase: string,
+    metadata: Record<string, string> = {},
+  ): void {
     this.sendProviderEvent({
-      event_id: `counterq-dev-phrase-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
+      event_id: `counterq-authorized-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
       type: "response.create",
       response: {
         output_modalities: ["audio"],

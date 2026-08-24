@@ -14,6 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.interviews.floor import ConversationFloor
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, InterviewSession
+from app.interviews.prompt_authorization import (
+    PromptAuthorizationService,
+    PromptDeliveryPermit,
+    PromptGateResult,
+    PromptGateRuntimeState,
+)
 from app.interviews.prompt_policy import (
     ensure_no_active_delivery,
     validate_prompt_delivery_eligibility,
@@ -96,6 +102,18 @@ class DeliveryPersistenceResult:
     transcript_segment_id: UUID | None = None
     server_sequence: int | None = None
     observation: StructuredObservation | None = None
+
+
+@dataclass(frozen=True)
+class RealtimeControlRuntimeState:
+    candidate_speaking: bool = False
+    candidate_code_active: bool = False
+
+    def prompt_gate_state(self) -> PromptGateRuntimeState:
+        return PromptGateRuntimeState(
+            candidate_speaking=self.candidate_speaking,
+            candidate_code_active=self.candidate_code_active,
+        )
 
 
 class RealtimeControlService:
@@ -362,6 +380,35 @@ class RealtimeControlService:
             text=DEVELOPMENT_DELIVERY_VALIDATION_TEXT,
         )
 
+    async def evaluate_examiner_decision(
+        self,
+        *,
+        session_id: UUID,
+        decision_id: UUID,
+        runtime_state: RealtimeControlRuntimeState | None = None,
+    ) -> PromptGateResult:
+        return await PromptAuthorizationService(
+            self._session,
+            clock=self._clock,
+        ).evaluate_examiner_decision(
+            session_id=session_id,
+            decision_id=decision_id,
+            runtime_state=(runtime_state or RealtimeControlRuntimeState()).prompt_gate_state(),
+        )
+
+    async def permit_prompt_delivery(
+        self,
+        *,
+        session_id: UUID,
+        prompt_id: UUID,
+        runtime_state: RealtimeControlRuntimeState | None = None,
+    ) -> PromptDeliveryPermit:
+        return await PromptAuthorizationService(self._session, clock=self._clock).permit_delivery(
+            session_id=session_id,
+            prompt_id=prompt_id,
+            runtime_state=(runtime_state or RealtimeControlRuntimeState()).prompt_gate_state(),
+        )
+
     async def start_delivery(
         self,
         *,
@@ -390,11 +437,14 @@ class RealtimeControlService:
         validate_prompt_delivery_eligibility(prompt=prompt, examiner_decision=examiner_decision)
         await ensure_no_active_delivery(self._session, session_id)
         delivery_attempt = await self._next_delivery_attempt(prompt.id)
+        intended_text = (
+            prompt.intent if prompt.origin == "EXAMINER_DECISION" else message.intended_text
+        )
         delivery = await InterviewInteractionRepository(self._session).add_delivery(
             interview_session_id=session_id,
             interviewer_prompt_id=prompt.id,
             delivery_attempt=delivery_attempt,
-            intended_text=message.intended_text,
+            intended_text=intended_text,
             delivery_state="STARTED",
             started_at=message.started_at or self._clock(),
             realtime_provider_event_id=message.provider_response_id,
@@ -469,6 +519,10 @@ class RealtimeControlService:
         delivery.actual_transcript_segment_id = segment.id
         delivery.delivery_state = "DELIVERED"
         delivery.completed_at = message.completed_at or self._clock()
+        await PromptAuthorizationService(
+            self._session,
+            clock=self._clock,
+        ).consume_probe_budget_for_delivered_prompt(prompt)
         prompt.status = "DELIVERED"
         self.floor = self.floor.release()
         await self._session.flush()

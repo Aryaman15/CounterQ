@@ -69,6 +69,16 @@ class CandidateCodeSnapshotMessage(ClientMessageBase):
     idempotency_key: str | None = Field(default=None, max_length=128)
 
 
+class CandidateCodeActivityStartedMessage(ClientMessageBase):
+    type: Literal["candidate_code_activity_started"]
+    occurred_at: datetime | None = None
+
+
+class CandidateCodeActivityIdleMessage(ClientMessageBase):
+    type: Literal["candidate_code_activity_idle"]
+    occurred_at: datetime | None = None
+
+
 class RealtimeDisconnectedMessage(ClientMessageBase):
     type: Literal["realtime_disconnected"]
     provider_session_id: str | None = Field(default=None, max_length=256)
@@ -86,6 +96,16 @@ class RealtimeReconnectedMessage(ClientMessageBase):
 
 class DevelopmentAuthorizedPromptRequestMessage(ClientMessageBase):
     type: Literal["development_authorized_prompt_requested"]
+
+
+class ExaminerDecisionPolicyGateRequestMessage(ClientMessageBase):
+    type: Literal["examiner_decision_policy_gate_requested"]
+    examiner_decision_id: UUID
+
+
+class PromptDeliveryPermitRequestMessage(ClientMessageBase):
+    type: Literal["prompt_delivery_permit_requested"]
+    interviewer_prompt_id: UUID
 
 
 class CounterQDeliveryStartedMessage(ClientMessageBase):
@@ -127,9 +147,13 @@ ClientControlMessage = Annotated[
     | CandidateSpeechStoppedMessage
     | CandidateTranscriptFinalizedMessage
     | CandidateCodeSnapshotMessage
+    | CandidateCodeActivityStartedMessage
+    | CandidateCodeActivityIdleMessage
     | RealtimeDisconnectedMessage
     | RealtimeReconnectedMessage
     | DevelopmentAuthorizedPromptRequestMessage
+    | ExaminerDecisionPolicyGateRequestMessage
+    | PromptDeliveryPermitRequestMessage
     | CounterQDeliveryStartedMessage
     | CounterQDeliveryCompletedMessage
     | CounterQDeliveryInterruptedMessage,
@@ -179,6 +203,29 @@ class DevelopmentAuthorizedPromptMessage(BaseModel):
     origin: Literal["SYSTEM"] = "SYSTEM"
     kind: Literal["INSTRUCTION"] = "INSTRUCTION"
     status: Literal["AUTHORIZED"] = "AUTHORIZED"
+
+
+class PolicyGateResultMessage(BaseModel):
+    type: Literal["policy_gate_result"] = "policy_gate_result"
+    client_event_id: str
+    examiner_decision_id: UUID
+    disposition: str
+    decision_status: str
+    policy_gate_outcome: str | None
+    reason: str
+    interviewer_prompt_id: UUID | None = None
+    prompt_kind: str | None = None
+    probe_strategy: str | None = None
+    candidate_safe_text: str | None = None
+
+
+class PromptDeliveryPermitMessage(BaseModel):
+    type: Literal["prompt_delivery_permit"] = "prompt_delivery_permit"
+    client_event_id: str
+    interviewer_prompt_id: UUID
+    text: str
+    origin: str
+    kind: str
 
 
 class DeliveryAckMessage(BaseModel):

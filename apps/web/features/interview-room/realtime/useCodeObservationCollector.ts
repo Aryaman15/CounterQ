@@ -12,6 +12,8 @@ type UseCodeObservationCollectorOptions = {
     trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
     idempotencyKey: string,
   ) => void;
+  noteActivityStarted?: () => void;
+  noteActivityIdle?: () => void;
   delayMs?: number;
   randomId?: () => string;
 };
@@ -20,6 +22,8 @@ export function useCodeObservationCollector({
   sourceCode,
   controlReady,
   sendSnapshot,
+  noteActivityStarted,
+  noteActivityIdle,
   delayMs = CODE_EDIT_BURST_IDLE_MS,
   randomId = defaultRandomId,
 }: UseCodeObservationCollectorOptions): void {
@@ -51,13 +55,16 @@ export function useCodeObservationCollector({
       timerRef.current = null;
     }
     if (sourceCode === lastSubmittedSourceRef.current) {
+      noteActivityIdle?.();
       return;
     }
+    noteActivityStarted?.();
     timerRef.current = window.setTimeout(() => {
       timerRef.current = null;
       if (sourceCode === lastSubmittedSourceRef.current) {
         return;
       }
+      noteActivityIdle?.();
       lastSubmittedSourceRef.current = sourceCode;
       sendSnapshot(
         sourceCode,
@@ -65,16 +72,25 @@ export function useCodeObservationCollector({
         createCodeObservationIdempotencyKey("EDIT_BURST", ++burstCounterRef.current, randomId),
       );
     }, delayMs);
-  }, [controlReady, delayMs, randomId, sendSnapshot, sourceCode]);
+  }, [
+    controlReady,
+    delayMs,
+    noteActivityIdle,
+    noteActivityStarted,
+    randomId,
+    sendSnapshot,
+    sourceCode,
+  ]);
 
   useEffect(
     () => () => {
       if (timerRef.current !== null) {
         window.clearTimeout(timerRef.current);
         timerRef.current = null;
+        noteActivityIdle?.();
       }
     },
-    [],
+    [noteActivityIdle],
   );
 }
 
