@@ -47,6 +47,16 @@ const observedCanonicalSession = {
     deliveryState: "DELIVERED",
     providerResponseId: "response-1",
     actualTranscriptId: "segment-2",
+    localPlaybackState: "COMPLETED" as const,
+    canonicalState: "DELIVERED" as const,
+    outputTranscriptState: "FINAL" as const,
+    pendingTerminalEvent: "NONE" as const,
+    lifecycleEvents: [
+      "response.created",
+      "playback_start_observed",
+      "delivery_started_ack",
+      "delivery_delivered_ack",
+    ],
   },
   lastObservation: {
     kind: "CANDIDATE_TRANSCRIPT_FINALIZED",

@@ -609,6 +609,16 @@ export function InterviewerSurface({
                           canonicalDebug.lastDelivery.providerResponseId ?? "pending"
                         }; actual transcript ${
                           canonicalDebug.lastDelivery.actualTranscriptId ?? "none"
+                        }; local playback ${
+                          canonicalDebug.lastDelivery.localPlaybackState
+                        }; canonical ${
+                          canonicalDebug.lastDelivery.canonicalState ?? "pending"
+                        }; output transcript ${
+                          canonicalDebug.lastDelivery.outputTranscriptState
+                        }; pending terminal ${
+                          canonicalDebug.lastDelivery.pendingTerminalEvent
+                        }; lifecycle ${
+                          canonicalDebug.lastDelivery.lifecycleEvents.join(" -> ") || "none"
                         }`
                       : "No canonical delivery yet"}
                   </dd>

@@ -433,6 +433,11 @@ function emptyCanonicalDebug(): CanonicalControlDebug {
       deliveryState: null,
       providerResponseId: null,
       actualTranscriptId: null,
+      localPlaybackState: "NOT_STARTED",
+      canonicalState: null,
+      outputTranscriptState: "NONE",
+      pendingTerminalEvent: "NONE",
+      lifecycleEvents: [],
     },
     lastObservation: {
       kind: null,

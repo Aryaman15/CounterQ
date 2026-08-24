@@ -543,16 +543,33 @@ async def test_delivery_start_completion_and_interruption_persist_canonical_trut
     assert start.delivery_state == "STARTED"
     assert service.floor.state == "COUNTERQ_SPEAKING"
 
+    duplicate_start = await service.start_delivery(
+        session_id=interview.id,
+        message=CounterQDeliveryStartedMessage(
+            **client_base(2),
+            type="counterq_delivery_started",
+            interviewer_prompt_id=prompt.prompt_id,
+            intended_text=prompt.text,
+            provider_response_id="resp-1",
+            provider_item_id="assistant-item-1",
+            started_at=utcnow(),
+        ),
+    )
+    assert duplicate_start.delivery_id == start.delivery_id
+    assert duplicate_start.delivery_state == "STARTED"
+    assert duplicate_start.created is False
+
+    actual_delivered_transcript = "Actual provider delivered wording."
     completed = await service.complete_delivery(
         session_id=interview.id,
         message=CounterQDeliveryCompletedMessage(
-            **client_base(2),
+            **client_base(3),
             type="counterq_delivery_completed",
             interviewer_prompt_id=prompt.prompt_id,
             prompt_delivery_id=start.delivery_id,
             provider_response_id="resp-1",
             provider_item_id="assistant-item-1",
-            transcript=prompt.text,
+            transcript=actual_delivered_transcript,
             completed_at=utcnow() + timedelta(seconds=2),
         ),
     )
@@ -568,20 +585,37 @@ async def test_delivery_start_completion_and_interruption_persist_canonical_trut
     assert prompt_row.status == "DELIVERED"
     assert segment.speaker == "COUNTERQ"
     assert segment.delivery_state == "DELIVERED"
-    assert segment.text == prompt.text
+    assert segment.text == actual_delivered_transcript
+    assert segment.text != prompt.text
     assert completed.server_sequence == 1
     assert completed.event_id is not None
     completed_observation = await ObservationEngine(db_session).project_event(completed.event_id)
     assert completed_observation.kind == "COUNTERQ_DELIVERY_COMPLETED"
     assert completed_observation.prompt_delivery_id == start.delivery_id
     assert completed_observation.transcript_segment_id == segment.id
-    assert completed_observation.transcript_text == prompt.text
+    assert completed_observation.transcript_text == actual_delivered_transcript
+
+    duplicate_completed = await service.complete_delivery(
+        session_id=interview.id,
+        message=CounterQDeliveryCompletedMessage(
+            **client_base(4),
+            type="counterq_delivery_completed",
+            interviewer_prompt_id=prompt.prompt_id,
+            prompt_delivery_id=start.delivery_id,
+            provider_response_id="resp-1",
+            provider_item_id="assistant-item-1",
+            transcript=actual_delivered_transcript,
+            completed_at=utcnow() + timedelta(seconds=3),
+        ),
+    )
+    assert duplicate_completed.created is False
+    assert duplicate_completed.event_id == completed.event_id
 
     second_prompt = await service.create_development_authorized_prompt(session_id=interview.id)
     second_start = await service.start_delivery(
         session_id=interview.id,
         message=CounterQDeliveryStartedMessage(
-            **client_base(3),
+            **client_base(5),
             type="counterq_delivery_started",
             interviewer_prompt_id=second_prompt.prompt_id,
             intended_text=second_prompt.text,
@@ -591,7 +625,7 @@ async def test_delivery_start_completion_and_interruption_persist_canonical_trut
     interrupted = await service.interrupt_delivery(
         session_id=interview.id,
         message=CounterQDeliveryInterruptedMessage(
-            **client_base(4),
+            **client_base(6),
             type="counterq_delivery_interrupted",
             interviewer_prompt_id=second_prompt.prompt_id,
             prompt_delivery_id=second_start.delivery_id,
@@ -617,7 +651,7 @@ async def test_delivery_start_completion_and_interruption_persist_canonical_trut
     retry = await service.interrupt_delivery(
         session_id=interview.id,
         message=CounterQDeliveryInterruptedMessage(
-            **client_base(5),
+            **client_base(7),
             type="counterq_delivery_interrupted",
             interviewer_prompt_id=second_prompt.prompt_id,
             prompt_delivery_id=second_start.delivery_id,

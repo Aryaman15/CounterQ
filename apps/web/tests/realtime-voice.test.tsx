@@ -340,6 +340,73 @@ async function flushAsyncWork(): Promise<void> {
   await Promise.resolve();
 }
 
+async function connectedControlClient(): Promise<{
+  client: RealtimeControlClient;
+  socket: FakeControlWebSocket;
+}> {
+  const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+  const client = new RealtimeControlClient({
+    apiBaseUrl: "http://127.0.0.1:8000",
+    fetchFn: fetchFn as typeof fetch,
+    websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+    storage: {
+      getItem: () => "client-instance",
+      setItem: vi.fn(),
+    },
+    randomUUID: () => "stable-id",
+  });
+
+  const connectPromise = client.connectDevelopmentInterview();
+  await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(0));
+  const socket = FakeControlWebSocket.instances.at(-1)!;
+  socket.open();
+  socket.receive({
+    type: "server_hello",
+    interview_session_id: "session-1",
+    current_stage: "IMPLEMENTATION",
+    state_version: 0,
+    last_server_sequence: 0,
+  });
+  await connectPromise;
+  return { client, socket };
+}
+
+function activatePermittedPrompt(client: RealtimeControlClient, socket: FakeControlWebSocket): void {
+  client.requestPromptDeliveryPermit("prompt-1");
+  const permitRequest = lastSentControlMessage(socket, "prompt_delivery_permit_requested");
+  socket.receive({
+    type: "prompt_delivery_permit",
+    client_event_id: permitRequest.client_event_id,
+    interviewer_prompt_id: "prompt-1",
+    status: "PERMITTED",
+    reason: "Authorized prompt is valid for delivery.",
+    text: "Intended prompt text must not become actual transcript.",
+    origin: "EXAMINER_DECISION",
+    kind: "PROBE",
+  });
+}
+
+function sentControlMessages(
+  socket: FakeControlWebSocket,
+  type: string,
+): Array<Record<string, unknown>> {
+  return socket.send.mock.calls
+    .map((call) => JSON.parse(String(call[0])) as Record<string, unknown>)
+    .filter((message) => message.type === type);
+}
+
+function lastSentControlMessage(
+  socket: FakeControlWebSocket,
+  type: string,
+): Record<string, unknown> {
+  const messages = sentControlMessages(socket, type);
+  const last = messages.at(-1);
+  if (!last) {
+    throw new Error(`No sent control message of type ${type}`);
+  }
+  return last;
+}
+
 describe("Realtime voice foundation", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -1052,6 +1119,141 @@ describe("Realtime voice foundation", () => {
         kind: "PROBE",
       },
     });
+  });
+
+  it("control client buffers delivery completion until STARTED ack supplies canonical delivery identity", async () => {
+    const { client, socket } = await connectedControlClient();
+    activatePermittedPrompt(client, socket);
+
+    client.noteProviderResponseCreated("resp-1", "assistant-item-1");
+    client.sendDeliveryStarted("resp-1", "assistant-item-1");
+    const startMessage = lastSentControlMessage(socket, "counterq_delivery_started");
+    client.noteOutputTranscriptFinal("resp-1", "Actual delivered wording.");
+    client.sendDeliveryCompleted("resp-1");
+
+    expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(0);
+
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: startMessage.client_event_id,
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-1",
+      delivery_state: "STARTED",
+      interview_state_version: 0,
+      created: true,
+    });
+
+    const completions = sentControlMessages(socket, "counterq_delivery_completed");
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-1",
+      provider_response_id: "resp-1",
+      provider_item_id: "assistant-item-1",
+      transcript: "Actual delivered wording.",
+      idempotency_key: "counterq-delivered:delivery-1:resp-1",
+    });
+  });
+
+  it("control client waits for final output transcript when playback completes before transcript final", async () => {
+    const { client, socket } = await connectedControlClient();
+    activatePermittedPrompt(client, socket);
+
+    client.noteProviderResponseCreated("resp-2", "assistant-item-2");
+    client.sendDeliveryStarted("resp-2", "assistant-item-2");
+    const startMessage = lastSentControlMessage(socket, "counterq_delivery_started");
+    client.sendDeliveryCompleted("resp-2");
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: startMessage.client_event_id,
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-2",
+      delivery_state: "STARTED",
+      interview_state_version: 0,
+      created: true,
+    });
+
+    expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(0);
+
+    client.noteOutputTranscriptFinal("resp-2", "Final provider transcript.");
+
+    const completions = sentControlMessages(socket, "counterq_delivery_completed");
+    expect(completions).toHaveLength(1);
+    expect(completions[0]).toMatchObject({
+      prompt_delivery_id: "delivery-2",
+      provider_response_id: "resp-2",
+      transcript: "Final provider transcript.",
+    });
+  });
+
+  it("control client deduplicates playback start and completion observations", async () => {
+    const { client, socket } = await connectedControlClient();
+    activatePermittedPrompt(client, socket);
+
+    client.noteProviderResponseCreated("resp-3", "assistant-item-3");
+    client.sendDeliveryStarted("resp-3", "assistant-item-3");
+    client.sendDeliveryStarted("resp-3", "assistant-item-3");
+    expect(sentControlMessages(socket, "counterq_delivery_started")).toHaveLength(1);
+
+    const startMessage = lastSentControlMessage(socket, "counterq_delivery_started");
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: startMessage.client_event_id,
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-3",
+      delivery_state: "STARTED",
+      interview_state_version: 0,
+      created: true,
+    });
+    client.noteOutputTranscriptFinal("resp-3", "Once only.");
+    client.sendDeliveryCompleted("resp-3");
+    client.sendDeliveryCompleted("resp-3");
+
+    expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(1);
+  });
+
+  it("control client buffers interruption until STARTED ack when candidate cuts off output", async () => {
+    const { client, socket } = await connectedControlClient();
+    activatePermittedPrompt(client, socket);
+
+    client.noteProviderResponseCreated("resp-4", "assistant-item-4");
+    client.sendDeliveryStarted("resp-4", "assistant-item-4");
+    const startMessage = lastSentControlMessage(socket, "counterq_delivery_started");
+    client.sendDeliveryInterrupted("resp-4", "assistant-item-4", "output_audio_buffer.cleared", 640);
+
+    expect(sentControlMessages(socket, "counterq_delivery_interrupted")).toHaveLength(0);
+
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: startMessage.client_event_id,
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-4",
+      delivery_state: "STARTED",
+      interview_state_version: 0,
+      created: true,
+    });
+
+    expect(sentControlMessages(socket, "counterq_delivery_interrupted")).toHaveLength(1);
+    expect(lastSentControlMessage(socket, "counterq_delivery_interrupted")).toMatchObject({
+      prompt_delivery_id: "delivery-4",
+      provider_response_id: "resp-4",
+      provider_item_id: "assistant-item-4",
+      confirmed_by: "output_audio_buffer.cleared",
+      audio_end_ms: 640,
+    });
+  });
+
+  it("control client ignores mismatched provider response IDs for an active delivery", async () => {
+    const { client, socket } = await connectedControlClient();
+    activatePermittedPrompt(client, socket);
+
+    client.noteProviderResponseCreated("resp-real", "assistant-item-real");
+    client.sendDeliveryStarted("resp-other", "assistant-item-other");
+    client.noteOutputTranscriptFinal("resp-other", "Wrong response transcript.");
+    client.sendDeliveryCompleted("resp-other");
+
+    expect(sentControlMessages(socket, "counterq_delivery_started")).toHaveLength(0);
+    expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(0);
   });
 
   it("control client surfaces delivery permit expired stale and deferred without speaking", async () => {

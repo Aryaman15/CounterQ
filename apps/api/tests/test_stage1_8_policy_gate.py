@@ -174,7 +174,7 @@ async def test_newer_code_snapshot_marks_decision_stale(
 async def test_authorized_prompt_delivery_window_survives_original_decision_deadline(
     db_session: AsyncSession,
 ) -> None:
-    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    t0 = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
     _graph, decision, _snapshot = await proposed_decision(
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=8),
@@ -207,7 +207,7 @@ async def test_authorized_prompt_delivery_window_survives_original_decision_dead
 async def test_decision_expired_before_policy_gate_creates_no_prompt(
     db_session: AsyncSession,
 ) -> None:
-    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    t0 = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
     _graph, decision, _snapshot = await proposed_decision(
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=8),
@@ -232,7 +232,7 @@ async def test_decision_expired_before_policy_gate_creates_no_prompt(
 async def test_authorized_prompt_delivery_window_expiry_expires_prompt(
     db_session: AsyncSession,
 ) -> None:
-    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    t0 = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
     _graph, decision, _snapshot = await proposed_decision(
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=30),

@@ -74,6 +74,17 @@ export class RealtimeVoiceClient {
       this.peerConnection = peerConnection;
       this.remoteAudio = this.audioElementFactory();
       this.remoteAudio.autoplay = true;
+      const remoteAudioWithEvents = this.remoteAudio as HTMLAudioElement & {
+        addEventListener?: HTMLAudioElement["addEventListener"];
+        removeEventListener?: HTMLAudioElement["removeEventListener"];
+      };
+      if (typeof remoteAudioWithEvents.addEventListener === "function") {
+        const handlePlaying = () => this.emitBrowserPlaybackStarted();
+        remoteAudioWithEvents.addEventListener("playing", handlePlaying);
+        this.cleanupCallbacks.push(() => {
+          remoteAudioWithEvents.removeEventListener?.("playing", handlePlaying);
+        });
+      }
 
       this.addManagedListener(peerConnection, "connectionstatechange", () => {
         if (
@@ -88,11 +99,14 @@ export class RealtimeVoiceClient {
         const stream = event.streams[0] ?? new MediaStream([event.track]);
         if (this.remoteAudio) {
           this.remoteAudio.srcObject = stream;
-          void this.remoteAudio.play().catch(() => {
-            this.handleFatalTransportFailure(
-              "Browser blocked realtime audio playback. Re-enable voice after allowing audio.",
-            );
-          });
+          void this.remoteAudio
+            .play()
+            .then(() => this.emitBrowserPlaybackStarted())
+            .catch(() => {
+              this.handleFatalTransportFailure(
+                "Browser blocked realtime audio playback. Re-enable voice after allowing audio.",
+              );
+            });
         }
       };
 
@@ -299,6 +313,20 @@ export class RealtimeVoiceClient {
       this.activeAssistantItemId = null;
       this.outputStartedAtMs = null;
     }
+  }
+
+  private emitBrowserPlaybackStarted(): void {
+    if (!this.activeResponseId) {
+      return;
+    }
+    this.outputStartedAtMs = this.outputStartedAtMs ?? this.nowMs();
+    this.emit({
+      type: "counterq_output_started",
+      responseId: this.activeResponseId,
+      itemId: this.activeAssistantItemId,
+      providerEventId: "browser_audio.playing",
+      playbackStarted: true,
+    });
   }
 
   private elapsedOutputAudioMs(): number {

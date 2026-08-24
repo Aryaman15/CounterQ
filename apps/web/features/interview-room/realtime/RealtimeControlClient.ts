@@ -46,6 +46,22 @@ export type CanonicalDeliveryDebug = {
   deliveryState: string | null;
   providerResponseId: string | null;
   actualTranscriptId: string | null;
+  localPlaybackState: "NOT_STARTED" | "PLAYING" | "COMPLETED" | "INTERRUPTED";
+  canonicalState:
+    | "PERMITTED"
+    | "PLAYBACK_START_OBSERVED"
+    | "START_REQUESTED"
+    | "STARTED"
+    | "COMPLETION_OBSERVED"
+    | "COMPLETION_REQUESTED"
+    | "DELIVERED"
+    | "INTERRUPTION_OBSERVED"
+    | "INTERRUPTION_REQUESTED"
+    | "INTERRUPTED"
+    | null;
+  outputTranscriptState: "NONE" | "PARTIAL" | "FINAL";
+  pendingTerminalEvent: "NONE" | "COMPLETION" | "INTERRUPTION";
+  lifecycleEvents: string[];
 };
 
 export type CanonicalObservationDebug = {
@@ -123,7 +139,29 @@ type ActivePromptDelivery = {
   providerItemId: string | null;
   deliveryId: string | null;
   outputTranscript: string;
+  outputTranscriptState: "NONE" | "PARTIAL" | "FINAL";
+  localPlaybackState: "NOT_STARTED" | "PLAYING" | "COMPLETED" | "INTERRUPTED";
+  canonicalState: NonNullable<CanonicalDeliveryDebug["canonicalState"]>;
+  playbackStartObserved: boolean;
+  startRequested: boolean;
+  completionRequested: boolean;
+  interruptionRequested: boolean;
+  pendingTerminalEvent: PendingTerminalEvent | null;
 };
+
+type PendingTerminalEvent =
+  | {
+      kind: "COMPLETION";
+      providerResponseId: string;
+      providerItemId: string | null;
+    }
+  | {
+      kind: "INTERRUPTION";
+      providerResponseId: string;
+      providerItemId: string | null;
+      confirmedBy: string;
+      audioEndMs: number | null;
+    };
 
 export class RealtimeControlClient {
   private readonly apiBaseUrl: string;
@@ -258,66 +296,163 @@ export class RealtimeControlClient {
     if (!this.activeDelivery) {
       return;
     }
+    if (!this.acceptProviderResponse(providerResponseId)) {
+      return;
+    }
     this.activeDelivery.providerResponseId = providerResponseId;
-    this.activeDelivery.providerItemId = providerItemId;
-    this.patchDebug({
-      lastDelivery: {
-        ...this.debug.lastDelivery,
-        promptId: this.activeDelivery.promptId,
-        providerResponseId,
-      },
-    });
+    this.activeDelivery.providerItemId = providerItemId ?? this.activeDelivery.providerItemId;
+    this.recordDeliveryLifecycle("response.created");
+    this.syncDeliveryDebug();
+    this.maybeSendDeliveryStarted();
   }
 
   noteOutputTranscriptDelta(providerResponseId: string | null, text: string): void {
     if (!this.activeDelivery) {
       return;
     }
-    if (providerResponseId && providerResponseId !== this.activeDelivery.providerResponseId) {
+    if (!this.reconcileProviderResponse(providerResponseId)) {
       return;
     }
     this.activeDelivery.outputTranscript += text;
+    if (this.activeDelivery.outputTranscriptState !== "FINAL") {
+      this.activeDelivery.outputTranscriptState = "PARTIAL";
+    }
+    this.recordDeliveryLifecycle("response.output_audio_transcript.delta");
+    this.syncDeliveryDebug();
   }
 
   noteOutputTranscriptFinal(providerResponseId: string | null, text: string): void {
     if (!this.activeDelivery) {
       return;
     }
-    if (providerResponseId && providerResponseId !== this.activeDelivery.providerResponseId) {
+    if (
+      this.activeDelivery.completionRequested ||
+      this.activeDelivery.canonicalState === "DELIVERED"
+    ) {
+      return;
+    }
+    if (!this.reconcileProviderResponse(providerResponseId)) {
       return;
     }
     this.activeDelivery.outputTranscript = text;
+    this.activeDelivery.outputTranscriptState = "FINAL";
+    this.recordDeliveryLifecycle("response.output_audio_transcript.done");
+    this.syncDeliveryDebug();
+    this.maybeFlushPendingTerminalEvent();
   }
 
   sendDeliveryStarted(providerResponseId: string | null, providerItemId: string | null): void {
     if (!this.activeDelivery) {
       return;
     }
-    const responseId = providerResponseId ?? this.activeDelivery.providerResponseId;
-    this.activeDelivery.providerResponseId = responseId;
+    if (
+      this.activeDelivery.interruptionRequested ||
+      this.activeDelivery.canonicalState === "INTERRUPTED"
+    ) {
+      return;
+    }
+    if (!this.reconcileProviderResponse(providerResponseId)) {
+      return;
+    }
     this.activeDelivery.providerItemId = providerItemId ?? this.activeDelivery.providerItemId;
+    this.activeDelivery.playbackStartObserved = true;
+    this.activeDelivery.localPlaybackState = "PLAYING";
+    if (!this.activeDelivery.startRequested) {
+      this.activeDelivery.canonicalState = "PLAYBACK_START_OBSERVED";
+    }
+    this.recordDeliveryLifecycle("playback_start_observed");
+    this.syncDeliveryDebug();
+    this.maybeSendDeliveryStarted();
+  }
+
+  private maybeSendDeliveryStarted(): void {
+    if (!this.activeDelivery?.playbackStartObserved || this.activeDelivery.startRequested) {
+      return;
+    }
+    if (isPendingProviderResponseId(this.activeDelivery.providerResponseId)) {
+      return;
+    }
+    this.activeDelivery.startRequested = true;
+    this.activeDelivery.canonicalState = "START_REQUESTED";
+    this.recordDeliveryLifecycle("delivery_start_requested");
+    this.syncDeliveryDebug();
     this.sendDurable({
       type: "counterq_delivery_started",
       interviewer_prompt_id: this.activeDelivery.promptId,
       intended_text: this.activeDelivery.intendedText,
-      provider_response_id: responseId,
+      provider_response_id: this.activeDelivery.providerResponseId,
       provider_item_id: this.activeDelivery.providerItemId,
     });
   }
 
   sendDeliveryCompleted(providerResponseId: string | null): void {
-    if (!this.activeDelivery?.deliveryId || !this.activeDelivery.outputTranscript.trim()) {
+    if (!this.activeDelivery) {
       return;
     }
-    const responseId = providerResponseId ?? this.activeDelivery.providerResponseId;
+    if (!this.reconcileProviderResponse(providerResponseId)) {
+      return;
+    }
+    if (isPendingProviderResponseId(this.activeDelivery.providerResponseId)) {
+      return;
+    }
+    this.activeDelivery.localPlaybackState = "COMPLETED";
+    this.activeDelivery.canonicalState = "COMPLETION_OBSERVED";
+    this.activeDelivery.pendingTerminalEvent = {
+      kind: "COMPLETION",
+      providerResponseId: this.activeDelivery.providerResponseId,
+      providerItemId: this.activeDelivery.providerItemId,
+    };
+    this.recordDeliveryLifecycle("delivery_completion_observed");
+    this.syncDeliveryDebug();
+    this.maybeFlushPendingTerminalEvent();
+  }
+
+  private maybeFlushPendingTerminalEvent(): void {
+    if (!this.activeDelivery?.pendingTerminalEvent || !this.activeDelivery.deliveryId) {
+      return;
+    }
+    const terminal = this.activeDelivery.pendingTerminalEvent;
+    if (terminal.kind === "COMPLETION") {
+      if (
+        this.activeDelivery.completionRequested ||
+        this.activeDelivery.outputTranscriptState !== "FINAL" ||
+        !this.activeDelivery.outputTranscript.trim()
+      ) {
+        return;
+      }
+      this.activeDelivery.completionRequested = true;
+      this.activeDelivery.canonicalState = "COMPLETION_REQUESTED";
+      this.activeDelivery.pendingTerminalEvent = null;
+      this.recordDeliveryLifecycle("delivery_completed_sent");
+      this.syncDeliveryDebug();
+      this.sendDurable({
+        type: "counterq_delivery_completed",
+        interviewer_prompt_id: this.activeDelivery.promptId,
+        prompt_delivery_id: this.activeDelivery.deliveryId,
+        provider_response_id: terminal.providerResponseId,
+        provider_item_id: terminal.providerItemId,
+        transcript: this.activeDelivery.outputTranscript,
+        idempotency_key: `counterq-delivered:${this.activeDelivery.deliveryId}:${terminal.providerResponseId}`,
+      });
+      return;
+    }
+    if (this.activeDelivery.interruptionRequested) {
+      return;
+    }
+    this.activeDelivery.interruptionRequested = true;
+    this.activeDelivery.canonicalState = "INTERRUPTION_REQUESTED";
+    this.activeDelivery.pendingTerminalEvent = null;
+    this.recordDeliveryLifecycle("delivery_interrupted_sent");
+    this.syncDeliveryDebug();
     this.sendDurable({
-      type: "counterq_delivery_completed",
+      type: "counterq_delivery_interrupted",
       interviewer_prompt_id: this.activeDelivery.promptId,
       prompt_delivery_id: this.activeDelivery.deliveryId,
-      provider_response_id: responseId,
-      provider_item_id: this.activeDelivery.providerItemId,
-      transcript: this.activeDelivery.outputTranscript,
-      idempotency_key: `counterq-delivered:${this.activeDelivery.deliveryId}:${responseId}`,
+      provider_response_id: terminal.providerResponseId,
+      provider_item_id: terminal.providerItemId,
+      confirmed_by: terminal.confirmedBy,
+      audio_end_ms: terminal.audioEndMs,
+      idempotency_key: `counterq-interrupted:${this.activeDelivery.deliveryId}:${terminal.providerResponseId}`,
     });
   }
 
@@ -327,20 +462,28 @@ export class RealtimeControlClient {
     confirmedBy: string,
     audioEndMs: number | null,
   ): void {
-    if (!this.activeDelivery?.deliveryId) {
+    if (!this.activeDelivery) {
       return;
     }
-    const responseId = providerResponseId ?? this.activeDelivery.providerResponseId;
-    this.sendDurable({
-      type: "counterq_delivery_interrupted",
-      interviewer_prompt_id: this.activeDelivery.promptId,
-      prompt_delivery_id: this.activeDelivery.deliveryId,
-      provider_response_id: responseId,
-      provider_item_id: providerItemId ?? this.activeDelivery.providerItemId,
-      confirmed_by: confirmedBy,
-      audio_end_ms: audioEndMs,
-      idempotency_key: `counterq-interrupted:${this.activeDelivery.deliveryId}:${responseId}`,
-    });
+    if (!this.reconcileProviderResponse(providerResponseId)) {
+      return;
+    }
+    this.activeDelivery.providerItemId = providerItemId ?? this.activeDelivery.providerItemId;
+    if (isPendingProviderResponseId(this.activeDelivery.providerResponseId)) {
+      return;
+    }
+    this.activeDelivery.localPlaybackState = "INTERRUPTED";
+    this.activeDelivery.canonicalState = "INTERRUPTION_OBSERVED";
+    this.activeDelivery.pendingTerminalEvent = {
+      kind: "INTERRUPTION",
+      providerResponseId: this.activeDelivery.providerResponseId,
+      providerItemId: this.activeDelivery.providerItemId,
+      confirmedBy,
+      audioEndMs,
+    };
+    this.recordDeliveryLifecycle("delivery_interruption_observed");
+    this.syncDeliveryDebug();
+    this.maybeFlushPendingTerminalEvent();
   }
 
   noteRealtimeDisconnected(reason: string): void {
@@ -510,23 +653,8 @@ export class RealtimeControlClient {
         this.ackPending(clientEventId);
       }
       if (promptId && text) {
-        this.activeDelivery = {
-          promptId,
-          intendedText: text,
-          providerResponseId: `pending-${promptId}`,
-          providerItemId: null,
-          deliveryId: null,
-          outputTranscript: "",
-        };
-        this.patchDebug({
-          lastDelivery: {
-            promptId,
-            deliveryId: null,
-            deliveryState: "AUTHORIZED",
-            providerResponseId: null,
-            actualTranscriptId: null,
-          },
-        });
+        this.activeDelivery = this.createActiveDelivery(promptId, text, "PERMITTED");
+        this.syncDeliveryDebug();
         this.emit({ type: "authorized_prompt", prompt: { promptId, text } });
       }
       return;
@@ -563,23 +691,8 @@ export class RealtimeControlClient {
       this.patchDebug({ lastDeliveryPermit: result });
       this.emit({ type: "delivery_permit_result", result });
       if (promptId && text) {
-        this.activeDelivery = {
-          promptId,
-          intendedText: text,
-          providerResponseId: `pending-${promptId}`,
-          providerItemId: null,
-          deliveryId: null,
-          outputTranscript: "",
-        };
-        this.patchDebug({
-          lastDelivery: {
-            promptId,
-            deliveryId: null,
-            deliveryState: "PERMITTED",
-            providerResponseId: null,
-            actualTranscriptId: null,
-          },
-        });
+        this.activeDelivery = this.createActiveDelivery(promptId, text, "PERMITTED");
+        this.syncDeliveryDebug();
         this.emit({
           type: "authorized_prompt",
           prompt: {
@@ -677,6 +790,21 @@ export class RealtimeControlClient {
       const triggerClass = stringField(message.observation_trigger_class);
       if (this.activeDelivery && deliveryId) {
         this.activeDelivery.deliveryId = deliveryId;
+        if (deliveryState === "STARTED") {
+          this.activeDelivery.canonicalState = "STARTED";
+          this.recordDeliveryLifecycle("delivery_started_ack");
+        }
+        if (deliveryState === "DELIVERED") {
+          this.activeDelivery.canonicalState = "DELIVERED";
+          this.activeDelivery.pendingTerminalEvent = null;
+          this.recordDeliveryLifecycle("delivery_delivered_ack");
+        }
+        if (deliveryState === "INTERRUPTED") {
+          this.activeDelivery.canonicalState = "INTERRUPTED";
+          this.activeDelivery.localPlaybackState = "INTERRUPTED";
+          this.activeDelivery.pendingTerminalEvent = null;
+          this.recordDeliveryLifecycle("delivery_interrupted_ack");
+        }
       }
       this.patchDebug({
         lastServerSequence: sourceWatermark ?? this.debug.lastServerSequence,
@@ -697,8 +825,19 @@ export class RealtimeControlClient {
           deliveryState: deliveryState ?? this.debug.lastDelivery.deliveryState,
           providerResponseId: this.activeDelivery?.providerResponseId ?? this.debug.lastDelivery.providerResponseId,
           actualTranscriptId,
+          localPlaybackState:
+            this.activeDelivery?.localPlaybackState ?? this.debug.lastDelivery.localPlaybackState,
+          canonicalState:
+            this.activeDelivery?.canonicalState ?? this.debug.lastDelivery.canonicalState,
+          outputTranscriptState:
+            this.activeDelivery?.outputTranscriptState ?? this.debug.lastDelivery.outputTranscriptState,
+          pendingTerminalEvent:
+            this.activeDelivery?.pendingTerminalEvent?.kind ??
+            this.debug.lastDelivery.pendingTerminalEvent,
+          lifecycleEvents: this.debug.lastDelivery.lifecycleEvents,
         },
       });
+      this.maybeFlushPendingTerminalEvent();
       if (deliveryState === "STARTED" && promptId && deliveryId) {
         this.emit({
           type: "delivery_started",
@@ -734,6 +873,82 @@ export class RealtimeControlClient {
   private ackPending(clientEventId: string): void {
     this.pending.delete(clientEventId);
     this.patchDebug({ pendingDurableMessages: this.pending.size });
+  }
+
+  private createActiveDelivery(
+    promptId: string,
+    intendedText: string,
+    canonicalState: ActivePromptDelivery["canonicalState"],
+  ): ActivePromptDelivery {
+    return {
+      promptId,
+      intendedText,
+      providerResponseId: `pending-${promptId}`,
+      providerItemId: null,
+      deliveryId: null,
+      outputTranscript: "",
+      outputTranscriptState: "NONE",
+      localPlaybackState: "NOT_STARTED",
+      canonicalState,
+      playbackStartObserved: false,
+      startRequested: false,
+      completionRequested: false,
+      interruptionRequested: false,
+      pendingTerminalEvent: null,
+    };
+  }
+
+  private reconcileProviderResponse(providerResponseId: string | null): boolean {
+    if (!this.activeDelivery || providerResponseId === null) {
+      return true;
+    }
+    if (!this.acceptProviderResponse(providerResponseId)) {
+      return false;
+    }
+    this.activeDelivery.providerResponseId = providerResponseId;
+    return true;
+  }
+
+  private acceptProviderResponse(providerResponseId: string): boolean {
+    if (!this.activeDelivery) {
+      return false;
+    }
+    if (isPendingProviderResponseId(this.activeDelivery.providerResponseId)) {
+      return true;
+    }
+    return this.activeDelivery.providerResponseId === providerResponseId;
+  }
+
+  private syncDeliveryDebug(): void {
+    if (!this.activeDelivery) {
+      return;
+    }
+    this.patchDebug({
+      lastDelivery: {
+        promptId: this.activeDelivery.promptId,
+        deliveryId: this.activeDelivery.deliveryId,
+        deliveryState: this.activeDelivery.canonicalState,
+        providerResponseId: isPendingProviderResponseId(this.activeDelivery.providerResponseId)
+          ? null
+          : this.activeDelivery.providerResponseId,
+        actualTranscriptId: this.debug.lastDelivery.actualTranscriptId,
+        localPlaybackState: this.activeDelivery.localPlaybackState,
+        canonicalState: this.activeDelivery.canonicalState,
+        outputTranscriptState: this.activeDelivery.outputTranscriptState,
+        pendingTerminalEvent: this.activeDelivery.pendingTerminalEvent?.kind ?? "NONE",
+        lifecycleEvents: this.debug.lastDelivery.lifecycleEvents,
+      },
+    });
+  }
+
+  private recordDeliveryLifecycle(eventType: string): void {
+    const events = [...this.debug.lastDelivery.lifecycleEvents, eventType].slice(-12);
+    this.patchDebug({
+      lastDelivery: {
+        ...this.debug.lastDelivery,
+        lifecycleEvents: events,
+      },
+    });
   }
 
   private clientInstanceId(): string {
@@ -798,6 +1013,10 @@ function numberField(value: unknown): number | null {
   return typeof value === "number" ? value : null;
 }
 
+function isPendingProviderResponseId(providerResponseId: string): boolean {
+  return providerResponseId.startsWith("pending-");
+}
+
 function emptyDebug(): CanonicalControlDebug {
   return {
     sessionId: null,
@@ -817,6 +1036,11 @@ function emptyDebug(): CanonicalControlDebug {
       deliveryState: null,
       providerResponseId: null,
       actualTranscriptId: null,
+      localPlaybackState: "NOT_STARTED",
+      canonicalState: null,
+      outputTranscriptState: "NONE",
+      pendingTerminalEvent: "NONE",
+      lifecycleEvents: [],
     },
     lastObservation: {
       kind: null,

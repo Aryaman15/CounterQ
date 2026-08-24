@@ -834,7 +834,7 @@ async def test_live_examiner_reuses_existing_source_policy_decision_without_prov
 async def test_development_analyze_and_authorize_gates_immediately_after_reasoning_latency(
     tmp_path: Path,
 ) -> None:
-    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    t0 = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
     current_time = {"value": t0}
 
     class AdvancingProvider(FakeExaminerProvider):
@@ -913,7 +913,7 @@ async def test_development_analyze_and_authorize_gates_immediately_after_reasoni
 async def test_manual_policy_gate_after_human_delay_still_expires(
     tmp_path: Path,
 ) -> None:
-    t0 = datetime(2026, 8, 24, 12, 0, tzinfo=UTC)
+    t0 = datetime(2026, 8, 26, 12, 0, tzinfo=UTC)
     current_time = {"value": t0}
 
     class AdvancingProvider(FakeExaminerProvider):
