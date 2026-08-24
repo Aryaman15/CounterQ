@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import difflib
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -17,9 +19,11 @@ from app.interviews.prompt_policy import (
     validate_prompt_delivery_eligibility,
 )
 from app.interviews.runtime import AcceptEventCommand, IdempotencyConflict, InterviewRuntime
-from app.observation.models import TranscriptSegment
+from app.observation.engine import ObservationEngine, StructuredObservation
+from app.observation.models import CodeDiff, InterviewEvent, TranscriptSegment
 from app.observation.repository import ObservationRepository
 from app.realtime.control_protocol import (
+    CandidateCodeSnapshotMessage,
     CandidateTranscriptFinalizedMessage,
     CounterQDeliveryCompletedMessage,
     CounterQDeliveryInterruptedMessage,
@@ -51,6 +55,7 @@ class TranscriptPersistenceResult:
     server_sequence: int
     interview_state_version: int
     created: bool
+    observation: StructuredObservation | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +64,19 @@ class ConnectivityPersistenceResult:
     server_sequence: int
     interview_state_version: int
     created: bool
+
+
+@dataclass(frozen=True)
+class CodeSnapshotPersistenceResult:
+    snapshot_id: UUID
+    version_number: int
+    content_hash: str
+    interview_state_version: int
+    created: bool
+    event_id: UUID | None = None
+    diff_id: UUID | None = None
+    server_sequence: int | None = None
+    observation: StructuredObservation | None = None
 
 
 @dataclass(frozen=True)
@@ -77,6 +95,7 @@ class DeliveryPersistenceResult:
     event_id: UUID | None = None
     transcript_segment_id: UUID | None = None
     server_sequence: int | None = None
+    observation: StructuredObservation | None = None
 
 
 class RealtimeControlService:
@@ -147,6 +166,7 @@ class RealtimeControlService:
                 server_sequence=accepted.event.server_sequence,
                 interview_state_version=accepted.event.interview_state_version,
                 created=False,
+                observation=await ObservationEngine(self._session).project_event(accepted.event.id),
             )
 
         segment = await ObservationRepository(self._session).add_transcript_segment(
@@ -167,6 +187,112 @@ class RealtimeControlService:
             server_sequence=accepted.event.server_sequence,
             interview_state_version=accepted.event.interview_state_version,
             created=True,
+            observation=await ObservationEngine(self._session).project_event(accepted.event.id),
+        )
+
+    async def persist_candidate_code_snapshot(
+        self,
+        *,
+        session_id: UUID,
+        message: CandidateCodeSnapshotMessage,
+    ) -> CodeSnapshotPersistenceResult:
+        interview = await self._lock_interview(session_id)
+        normalized_source = normalize_source_code(message.source_code)
+        content_hash = content_sha256(normalized_source)
+        idempotency_key = message.idempotency_key or (
+            f"candidate-code:{message.trigger}:{message.client_event_id}"
+        )
+        existing_event = await self._event_for_idempotency(session_id, idempotency_key)
+        if existing_event is not None:
+            return await self._code_result_for_idempotent_event(
+                event=existing_event,
+                expected_content_hash=content_hash,
+                expected_language=message.language,
+                expected_trigger=message.trigger,
+            )
+
+        observations = ObservationRepository(self._session)
+        latest_snapshot = await observations.latest_code_snapshot(session_id)
+        if latest_snapshot is not None and latest_snapshot.content_hash == content_hash:
+            event = await self._session.get(InterviewEvent, latest_snapshot.created_from_event_id)
+            return CodeSnapshotPersistenceResult(
+                snapshot_id=latest_snapshot.id,
+                version_number=latest_snapshot.version_number,
+                content_hash=latest_snapshot.content_hash,
+                interview_state_version=interview.state_version,
+                created=False,
+                event_id=event.id if event else None,
+                server_sequence=event.server_sequence if event else None,
+            )
+
+        version_number = (latest_snapshot.version_number if latest_snapshot else 0) + 1
+        event_type = (
+            "CODE_SNAPSHOT_CREATED" if latest_snapshot is None else "MEANINGFUL_CODE_CHANGE"
+        )
+        payload: dict[str, object] = {
+            "language": message.language,
+            "trigger": message.trigger,
+            "content_hash": content_hash,
+            "version_number": version_number,
+            "interview_stage": interview.current_stage,
+        }
+        if latest_snapshot is not None:
+            payload["parent_snapshot_id"] = str(latest_snapshot.id)
+            payload["parent_version_number"] = latest_snapshot.version_number
+
+        accepted = await InterviewRuntime(self._session, clock=self._clock).accept_event(
+            AcceptEventCommand(
+                session_id=session_id,
+                event_type=event_type,
+                source="NATIVE_EDITOR",
+                occurred_at=message.occurred_at or self._clock(),
+                idempotency_key=idempotency_key,
+                payload=payload,
+                provenance={"client_event_id": message.client_event_id},
+                schema_version="code.snapshot.v1",
+                client_instance_id=message.client_instance_id,
+                client_sequence=message.client_sequence,
+            ),
+        )
+        snapshot = await observations.add_code_snapshot(
+            session_id=session_id,
+            version_number=version_number,
+            language=message.language,
+            source_code=normalized_source,
+            content_hash=content_hash,
+            created_from_event_id=accepted.event.id,
+            parent_snapshot_id=latest_snapshot.id if latest_snapshot else None,
+        )
+        accepted.event.code_snapshot_id = snapshot.id
+        diff: CodeDiff | None = None
+        if latest_snapshot is not None:
+            diff = await observations.add_code_diff(
+                session_id=session_id,
+                from_snapshot_id=latest_snapshot.id,
+                to_snapshot_id=snapshot.id,
+                diff_format="unified",
+                diff_content=unified_diff(
+                    from_source=latest_snapshot.source_code,
+                    to_source=normalized_source,
+                    from_label=f"v{latest_snapshot.version_number}",
+                    to_label=f"v{version_number}",
+                ),
+                change_summary=None,
+                significance=None,
+                created_from_event_id=accepted.event.id,
+            )
+        await self._session.flush()
+        observation = await ObservationEngine(self._session).project_event(accepted.event.id)
+        return CodeSnapshotPersistenceResult(
+            snapshot_id=snapshot.id,
+            version_number=snapshot.version_number,
+            content_hash=snapshot.content_hash,
+            interview_state_version=accepted.event.interview_state_version,
+            created=True,
+            event_id=accepted.event.id,
+            diff_id=diff.id if diff else None,
+            server_sequence=accepted.event.server_sequence,
+            observation=observation,
         )
 
     async def persist_realtime_connectivity_event(
@@ -346,6 +472,7 @@ class RealtimeControlService:
         prompt.status = "DELIVERED"
         self.floor = self.floor.release()
         await self._session.flush()
+        observation = await ObservationEngine(self._session).project_event(accepted.event.id)
         return DeliveryPersistenceResult(
             prompt_id=prompt.id,
             delivery_id=delivery.id,
@@ -355,6 +482,7 @@ class RealtimeControlService:
             server_sequence=accepted.event.server_sequence,
             interview_state_version=accepted.event.interview_state_version,
             created=accepted.created,
+            observation=observation,
         )
 
     async def interrupt_delivery(
@@ -363,6 +491,7 @@ class RealtimeControlService:
         session_id: UUID,
         message: CounterQDeliveryInterruptedMessage,
     ) -> DeliveryPersistenceResult:
+        interview = await self.ensure_session_exists(session_id)
         prompt = await self._prompt_for_session(session_id, message.interviewer_prompt_id)
         delivery = await self._delivery_for_session(session_id, message.prompt_delivery_id)
         idempotency_key = message.idempotency_key or (
@@ -373,6 +502,7 @@ class RealtimeControlService:
             "prompt_delivery_id": str(delivery.id),
             "provider_response_id": message.provider_response_id,
             "confirmed_by": message.confirmed_by,
+            "interview_stage": interview.current_stage,
         }
         if message.provider_item_id is not None:
             payload["provider_item_id"] = message.provider_item_id
@@ -401,6 +531,7 @@ class RealtimeControlService:
         prompt.status = "INTERRUPTED"
         self.floor = self.floor.candidate_speech_started()
         await self._session.flush()
+        observation = await ObservationEngine(self._session).project_event(accepted.event.id)
         return DeliveryPersistenceResult(
             prompt_id=prompt.id,
             delivery_id=delivery.id,
@@ -409,6 +540,7 @@ class RealtimeControlService:
             server_sequence=accepted.event.server_sequence,
             interview_state_version=accepted.event.interview_state_version,
             created=accepted.created,
+            observation=observation,
         )
 
     async def _prompt_for_session(self, session_id: UUID, prompt_id: UUID) -> InterviewerPrompt:
@@ -458,6 +590,64 @@ class RealtimeControlService:
         )
         return cast(TranscriptSegment | None, segment)
 
+    async def _lock_interview(self, session_id: UUID) -> InterviewSession:
+        interview = await self._session.scalar(
+            select(InterviewSession).where(InterviewSession.id == session_id).with_for_update(),
+        )
+        if interview is None:
+            raise RealtimeControlSessionNotFound(f"InterviewSession not found: {session_id}")
+        return interview
+
+    async def _event_for_idempotency(
+        self,
+        session_id: UUID,
+        idempotency_key: str,
+    ) -> InterviewEvent | None:
+        event = await self._session.scalar(
+            select(InterviewEvent)
+            .where(InterviewEvent.interview_session_id == session_id)
+            .where(InterviewEvent.idempotency_key == idempotency_key),
+        )
+        return cast(InterviewEvent | None, event)
+
+    async def _code_result_for_idempotent_event(
+        self,
+        *,
+        event: InterviewEvent,
+        expected_content_hash: str,
+        expected_language: str,
+        expected_trigger: str,
+    ) -> CodeSnapshotPersistenceResult:
+        if (
+            event.source != "NATIVE_EDITOR"
+            or event.event_type not in {"CODE_SNAPSHOT_CREATED", "MEANINGFUL_CODE_CHANGE"}
+            or event.payload.get("content_hash") != expected_content_hash
+            or event.payload.get("language") != expected_language
+            or event.payload.get("trigger") != expected_trigger
+        ):
+            raise IdempotencyConflict(
+                "Candidate code idempotency key conflicts with existing code observation"
+            )
+        observations = ObservationRepository(self._session)
+        snapshot = await observations.code_snapshot_for_event(event.id)
+        if snapshot is None:
+            raise RealtimeControlConflict(
+                "Idempotent code event exists without CodeSnapshot"
+            )
+        diff = await observations.code_diff_for_event(event.id)
+        observation = await ObservationEngine(self._session).project_event(event.id)
+        return CodeSnapshotPersistenceResult(
+            snapshot_id=snapshot.id,
+            version_number=snapshot.version_number,
+            content_hash=snapshot.content_hash,
+            interview_state_version=event.interview_state_version,
+            created=False,
+            event_id=event.id,
+            diff_id=diff.id if diff else None,
+            server_sequence=event.server_sequence,
+            observation=observation,
+        )
+
     async def _next_delivery_attempt(self, prompt_id: UUID) -> int:
         max_attempt = await self._session.scalar(
             select(func.max(InterviewerPromptDelivery.delivery_attempt)).where(
@@ -465,3 +655,29 @@ class RealtimeControlService:
             ),
         )
         return int(max_attempt or 0) + 1
+
+
+def normalize_source_code(source_code: str) -> str:
+    return source_code.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def content_sha256(source_code: str) -> str:
+    return hashlib.sha256(source_code.encode("utf-8")).hexdigest()
+
+
+def unified_diff(
+    *,
+    from_source: str,
+    to_source: str,
+    from_label: str,
+    to_label: str,
+) -> str:
+    diff_lines = difflib.unified_diff(
+        from_source.splitlines(),
+        to_source.splitlines(),
+        fromfile=from_label,
+        tofile=to_label,
+        lineterm="",
+    )
+    diff_text = "\n".join(diff_lines)
+    return f"{diff_text}\n" if diff_text else ""

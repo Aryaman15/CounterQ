@@ -10,6 +10,10 @@ import {
   type RealtimeClientEvent,
 } from "../features/interview-room/realtime/RealtimeVoiceClient";
 import { normalizeRealtimeEvent } from "../features/interview-room/realtime/events";
+import {
+  CODE_EDIT_BURST_IDLE_MS,
+  useCodeObservationCollector,
+} from "../features/interview-room/realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../features/interview-room/realtime/useRealtimeVoice";
 
 class FakeTrack {
@@ -187,6 +191,7 @@ class HookFakeControlClient {
   sendDeliveryInterrupted = vi.fn();
   noteRealtimeDisconnected = vi.fn();
   noteRealtimeReconnected = vi.fn();
+  sendCandidateCodeSnapshot = vi.fn();
   private readonly listeners = new Set<(event: RealtimeControlEvent) => void>();
 
   setConnectImpl(connectImpl: () => Promise<typeof fakeDevelopmentBootstrap>): void {
@@ -970,6 +975,250 @@ describe("Realtime voice foundation", () => {
 
     expect(client.pendingCount).toBe(0);
     expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
+  it("sends canonical code snapshots through the durable control queue and records safe metadata", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => {
+      expect(FakeControlWebSocket.instances.length).toBe(1);
+    });
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+
+    client.sendCandidateCodeSnapshot({
+      sourceCode: "class Solution {};",
+      language: "cpp",
+      trigger: "INITIAL_EDITOR_STATE",
+      idempotencyKey: "code-initial-1",
+    });
+    expect(socket.send).not.toHaveBeenCalled();
+
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await connectPromise;
+
+    const sent = JSON.parse(String(socket.send.mock.calls[0]?.[0])) as Record<string, unknown>;
+    expect(sent).toMatchObject({
+      type: "candidate_code_snapshot",
+      source_code: "class Solution {};",
+      language: "cpp",
+      trigger: "INITIAL_EDITOR_STATE",
+      idempotency_key: "code-initial-1",
+    });
+
+    socket.receive({
+      type: "durable_event_ack",
+      client_event_id: sent.client_event_id,
+      created: true,
+      interview_event_id: "event-code-1",
+      code_snapshot_id: "snapshot-1",
+      code_diff_id: null,
+      code_version: 1,
+      content_hash: "abcdef1234567890",
+      observation_kind: "CODE_SNAPSHOT_CREATED",
+      observation_trigger_class: "INTERVIEWER_CONTEXT",
+      observation_interview_stage: "IMPLEMENTATION",
+      server_sequence: 1,
+      interview_state_version: 0,
+    });
+
+    expect(client.pendingCount).toBe(0);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "debug_updated",
+        debug: expect.objectContaining({
+          lastCode: {
+            snapshotId: "snapshot-1",
+            version: 1,
+            hashPrefix: "abcdef123456",
+            diffId: null,
+            persistence: "ACKNOWLEDGED",
+          },
+          lastObservation: expect.objectContaining({
+            kind: "CODE_SNAPSHOT_CREATED",
+            sourceEventId: "event-code-1",
+            sourceEventWatermark: 1,
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("keeps the initial code snapshot immediate and waits 2500ms for edit bursts", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    function Harness(props: { sourceCode: string; controlReady: boolean }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: props.controlReady,
+        sendSnapshot,
+        randomId: () => "stable-code-id",
+      });
+      return <p data-testid="code-source-length">{props.sourceCode.length}</p>;
+    }
+
+    const live = render(<Harness sourceCode="class Solution {};" controlReady={false} />);
+    expect(sendSnapshot).not.toHaveBeenCalled();
+
+    live.rerender(<Harness sourceCode="class Solution {};" controlReady />);
+    expect(sendSnapshot).toHaveBeenCalledWith(
+      "class Solution {};",
+      "INITIAL_EDITOR_STATE",
+      "candidate-code:INITIAL_EDITOR_STATE:1:stable-code-id",
+    );
+
+    live.rerender(<Harness sourceCode="class Solution { int x; };" controlReady />);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendSnapshot).toHaveBeenLastCalledWith(
+      "class Solution { int x; };",
+      "EDIT_BURST",
+      "candidate-code:EDIT_BURST:2:stable-code-id",
+    );
+    expect(sendSnapshot).toHaveBeenCalledTimes(2);
+    live.unmount();
+  });
+
+  it("coalesces short natural pauses into one code observation containing the final source", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    function Harness(props: { sourceCode: string }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: true,
+        sendSnapshot,
+        randomId: () => "stable-code-id",
+      });
+      return null;
+    }
+
+    const live = render(<Harness sourceCode="source A" />);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+
+    live.rerender(<Harness sourceCode="source B" />);
+    await vi.advanceTimersByTimeAsync(900);
+    live.rerender(<Harness sourceCode="source C" />);
+    await vi.advanceTimersByTimeAsync(1_400);
+    live.rerender(<Harness sourceCode="source D" />);
+    await vi.advanceTimersByTimeAsync(2_000);
+    live.rerender(<Harness sourceCode="source E" />);
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS - 1);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(sendSnapshot).toHaveBeenCalledTimes(2);
+    expect(sendSnapshot).toHaveBeenLastCalledWith(
+      "source E",
+      "EDIT_BURST",
+      "candidate-code:EDIT_BURST:2:stable-code-id",
+    );
+    live.unmount();
+  });
+
+  it("does not create periodic code snapshots during continuous typing", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    function Harness(props: { sourceCode: string }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: true,
+        sendSnapshot,
+        randomId: () => "stable-code-id",
+      });
+      return null;
+    }
+
+    const live = render(<Harness sourceCode="source 0" />);
+    for (let index = 1; index <= 11; index += 1) {
+      live.rerender(<Harness sourceCode={`source ${index}`} />);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(sendSnapshot).toHaveBeenCalledTimes(2);
+    expect(sendSnapshot).toHaveBeenLastCalledWith(
+      "source 11",
+      "EDIT_BURST",
+      "candidate-code:EDIT_BURST:2:stable-code-id",
+    );
+    live.unmount();
+  });
+
+  it("emits one new code observation for each idle-separated edit burst", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    function Harness(props: { sourceCode: string }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: true,
+        sendSnapshot,
+        randomId: () => "stable-code-id",
+      });
+      return null;
+    }
+
+    const live = render(<Harness sourceCode="source 0" />);
+    live.rerender(<Harness sourceCode="source 1" />);
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(sendSnapshot).toHaveBeenCalledTimes(2);
+
+    live.rerender(<Harness sourceCode="source 2" />);
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(sendSnapshot).toHaveBeenCalledTimes(3);
+    expect(sendSnapshot).toHaveBeenLastCalledWith(
+      "source 2",
+      "EDIT_BURST",
+      "candidate-code:EDIT_BURST:3:stable-code-id",
+    );
+    live.unmount();
+  });
+
+  it("cancels a pending code-observation timer on unchanged source and unmount", async () => {
+    vi.useFakeTimers();
+    const sendSnapshot = vi.fn();
+    function Harness(props: { sourceCode: string }) {
+      useCodeObservationCollector({
+        sourceCode: props.sourceCode,
+        controlReady: true,
+        sendSnapshot,
+        randomId: () => "stable-code-id",
+      });
+      return null;
+    }
+
+    const live = render(<Harness sourceCode="source 0" />);
+    live.rerender(<Harness sourceCode="source 1" />);
+    await vi.advanceTimersByTimeAsync(1_000);
+    live.rerender(<Harness sourceCode="source 0" />);
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
+
+    live.rerender(<Harness sourceCode="source 2" />);
+    await vi.advanceTimersByTimeAsync(1_000);
+    live.unmount();
+    await vi.advanceTimersByTimeAsync(CODE_EDIT_BURST_IDLE_MS);
+    expect(sendSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("surfaces genuine backend semantic rejection after control is ready", async () => {

@@ -1,10 +1,12 @@
 from datetime import datetime
 from decimal import Decimal
+from typing import cast
 from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.observation.models import CodeDiff, CodeSnapshot, TranscriptSegment
+from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
 
 
 class ObservationRepository:
@@ -96,3 +98,41 @@ class ObservationRepository:
         self._session.add(diff)
         await self._session.flush()
         return diff
+
+    async def latest_code_snapshot(self, session_id: UUID) -> CodeSnapshot | None:
+        snapshot = await self._session.scalar(
+            select(CodeSnapshot)
+            .where(CodeSnapshot.interview_session_id == session_id)
+            .order_by(CodeSnapshot.version_number.desc())
+            .limit(1),
+        )
+        return cast(CodeSnapshot | None, snapshot)
+
+    async def code_snapshot_for_event(self, event_id: UUID) -> CodeSnapshot | None:
+        snapshot = await self._session.scalar(
+            select(CodeSnapshot).where(CodeSnapshot.created_from_event_id == event_id),
+        )
+        return cast(CodeSnapshot | None, snapshot)
+
+    async def code_diff_for_event(self, event_id: UUID) -> CodeDiff | None:
+        diff = await self._session.scalar(
+            select(CodeDiff).where(CodeDiff.created_from_event_id == event_id),
+        )
+        return cast(CodeDiff | None, diff)
+
+    async def latest_code_snapshot_at_or_before_event(
+        self,
+        *,
+        session_id: UUID,
+        server_sequence: int,
+    ) -> CodeSnapshot | None:
+        snapshot = await self._session.scalar(
+            select(CodeSnapshot)
+            .join(InterviewEvent, CodeSnapshot.created_from_event_id == InterviewEvent.id)
+            .where(CodeSnapshot.interview_session_id == session_id)
+            .where(InterviewEvent.interview_session_id == session_id)
+            .where(InterviewEvent.server_sequence <= server_sequence)
+            .order_by(CodeSnapshot.version_number.desc())
+            .limit(1),
+        )
+        return cast(CodeSnapshot | None, snapshot)

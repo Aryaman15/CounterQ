@@ -48,6 +48,26 @@ const observedCanonicalSession = {
     providerResponseId: "response-1",
     actualTranscriptId: "segment-2",
   },
+  lastObservation: {
+    kind: "CANDIDATE_TRANSCRIPT_FINALIZED",
+    sourceEventId: "event-1",
+    sourceEventWatermark: 17,
+    stateVersion: 3,
+    stage: "IMPLEMENTATION",
+    triggerClass: "VOICE_TURN_COMPLETED",
+  },
+  lastCode: {
+    snapshotId: "snapshot-2",
+    version: 2,
+    hashPrefix: "abc123def456",
+    diffId: "diff-1",
+    persistence: "ACKNOWLEDGED" as const,
+  },
+  lastVoice: {
+    transcriptSegmentId: "segment-1",
+    associatedCodeSnapshotId: "snapshot-2",
+    associatedCodeSnapshotVersion: 2,
+  },
 };
 
 vi.mock("@monaco-editor/react", () => ({
@@ -170,6 +190,10 @@ describe("Interview Room demo", () => {
     expect(screen.getByText(/session-1; control connected; pending 1/i)).toBeInTheDocument();
     expect(screen.getByText(/server sequence 17; state version 3/i)).toBeInTheDocument();
     expect(screen.getByText(/ACKNOWLEDGED; item item-1; event event-1; segment segment-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/CANDIDATE_TRANSCRIPT_FINALIZED; event event-1; watermark 17/i)).toBeInTheDocument();
+    expect(screen.getByText(/ACKNOWLEDGED; snapshot snapshot-2; version 2; hash abc123def456; diff diff-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/acknowledged; idle threshold 2500 ms/i)).toBeInTheDocument();
+    expect(screen.getByText(/segment segment-1; code snapshot snapshot-2; version 2/i)).toBeInTheDocument();
     expect(screen.getByText(/prompt prompt-1; delivery delivery-1; state DELIVERED/i)).toBeInTheDocument();
     expect(screen.getByText("Listening")).toBeInTheDocument();
 

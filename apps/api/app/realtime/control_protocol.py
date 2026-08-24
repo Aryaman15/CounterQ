@@ -60,6 +60,15 @@ class CandidateTranscriptFinalizedMessage(ClientMessageBase):
     idempotency_key: str | None = Field(default=None, max_length=128)
 
 
+class CandidateCodeSnapshotMessage(ClientMessageBase):
+    type: Literal["candidate_code_snapshot"]
+    source_code: str
+    language: str = Field(min_length=1, max_length=64)
+    trigger: Literal["INITIAL_EDITOR_STATE", "EDIT_BURST"]
+    occurred_at: datetime | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+
 class RealtimeDisconnectedMessage(ClientMessageBase):
     type: Literal["realtime_disconnected"]
     provider_session_id: str | None = Field(default=None, max_length=256)
@@ -117,6 +126,7 @@ ClientControlMessage = Annotated[
     | CandidateSpeechStartedMessage
     | CandidateSpeechStoppedMessage
     | CandidateTranscriptFinalizedMessage
+    | CandidateCodeSnapshotMessage
     | RealtimeDisconnectedMessage
     | RealtimeReconnectedMessage
     | DevelopmentAuthorizedPromptRequestMessage
@@ -146,6 +156,15 @@ class DurableEventAckMessage(BaseModel):
     created: bool
     interview_event_id: UUID | None = None
     transcript_segment_id: UUID | None = None
+    code_snapshot_id: UUID | None = None
+    code_diff_id: UUID | None = None
+    code_version: int | None = None
+    content_hash: str | None = None
+    observation_kind: str | None = None
+    observation_trigger_class: str | None = None
+    observation_interview_stage: str | None = None
+    associated_code_snapshot_id: UUID | None = None
+    associated_code_snapshot_version: int | None = None
     prompt_delivery_id: UUID | None = None
     interviewer_prompt_id: UUID | None = None
     server_sequence: int | None = None
@@ -173,6 +192,9 @@ class DeliveryAckMessage(BaseModel):
     server_sequence: int | None = None
     interview_state_version: int
     created: bool
+    observation_kind: str | None = None
+    observation_trigger_class: str | None = None
+    observation_interview_stage: str | None = None
 
 
 class ControlSignalAckMessage(BaseModel):

@@ -31,6 +31,29 @@ export type CanonicalDeliveryDebug = {
   actualTranscriptId: string | null;
 };
 
+export type CanonicalObservationDebug = {
+  kind: string | null;
+  sourceEventId: string | null;
+  sourceEventWatermark: number | null;
+  stateVersion: number | null;
+  stage: string | null;
+  triggerClass: string | null;
+};
+
+export type CanonicalCodeDebug = {
+  snapshotId: string | null;
+  version: number | null;
+  hashPrefix: string | null;
+  diffId: string | null;
+  persistence: "ACKNOWLEDGED" | "PENDING" | "FAILED";
+};
+
+export type CanonicalVoiceDebug = {
+  transcriptSegmentId: string | null;
+  associatedCodeSnapshotId: string | null;
+  associatedCodeSnapshotVersion: number | null;
+};
+
 export type CanonicalControlDebug = {
   sessionId: string | null;
   controlConnected: boolean;
@@ -39,6 +62,9 @@ export type CanonicalControlDebug = {
   stateVersion: number | null;
   lastCandidateFinal: CanonicalCandidateFinal;
   lastDelivery: CanonicalDeliveryDebug;
+  lastObservation: CanonicalObservationDebug;
+  lastCode: CanonicalCodeDebug;
+  lastVoice: CanonicalVoiceDebug;
 };
 
 export type RealtimeControlEvent =
@@ -289,6 +315,32 @@ export class RealtimeControlClient {
     });
   }
 
+  sendCandidateCodeSnapshot({
+    sourceCode,
+    language,
+    trigger,
+    idempotencyKey,
+  }: {
+    sourceCode: string;
+    language: string;
+    trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST";
+    idempotencyKey: string;
+  }): void {
+    this.sendDurable({
+      type: "candidate_code_snapshot",
+      source_code: sourceCode,
+      language,
+      trigger,
+      idempotency_key: idempotencyKey,
+    });
+    this.patchDebug({
+      lastCode: {
+        ...this.debug.lastCode,
+        persistence: "PENDING",
+      },
+    });
+  }
+
   private async openWebSocket(): Promise<void> {
     if (!this.bootstrap) {
       throw new Error("Development interview has not been bootstrapped.");
@@ -441,9 +493,25 @@ export class RealtimeControlClient {
       if (clientEventId) {
         this.ackPending(clientEventId);
       }
+      const observationKind = stringField(message.observation_kind);
+      const sourceEventId = stringField(message.interview_event_id);
+      const sourceWatermark = numberField(message.server_sequence);
+      const stateVersion = numberField(message.interview_state_version);
+      const observationStage = stringField(message.observation_interview_stage);
+      const triggerClass = stringField(message.observation_trigger_class);
       this.patchDebug({
-        lastServerSequence: numberField(message.server_sequence) ?? this.debug.lastServerSequence,
-        stateVersion: numberField(message.interview_state_version) ?? this.debug.stateVersion,
+        lastServerSequence: sourceWatermark ?? this.debug.lastServerSequence,
+        stateVersion: stateVersion ?? this.debug.stateVersion,
+        lastObservation: observationKind
+          ? {
+              kind: observationKind,
+              sourceEventId,
+              sourceEventWatermark: sourceWatermark,
+              stateVersion,
+              stage: observationStage,
+              triggerClass,
+            }
+          : this.debug.lastObservation,
       });
       if (message.transcript_segment_id) {
         this.patchDebug({
@@ -451,6 +519,23 @@ export class RealtimeControlClient {
             providerItemId: this.debug.lastCandidateFinal.providerItemId,
             eventId: stringField(message.interview_event_id),
             transcriptSegmentId: stringField(message.transcript_segment_id),
+            persistence: "ACKNOWLEDGED",
+          },
+          lastVoice: {
+            transcriptSegmentId: stringField(message.transcript_segment_id),
+            associatedCodeSnapshotId: stringField(message.associated_code_snapshot_id),
+            associatedCodeSnapshotVersion: numberField(message.associated_code_snapshot_version),
+          },
+        });
+      }
+      if (message.code_snapshot_id) {
+        const contentHash = stringField(message.content_hash);
+        this.patchDebug({
+          lastCode: {
+            snapshotId: stringField(message.code_snapshot_id),
+            version: numberField(message.code_version),
+            hashPrefix: contentHash ? contentHash.slice(0, 12) : null,
+            diffId: stringField(message.code_diff_id),
             persistence: "ACKNOWLEDGED",
           },
         });
@@ -466,12 +551,28 @@ export class RealtimeControlClient {
       const deliveryId = stringField(message.prompt_delivery_id);
       const deliveryState = stringField(message.delivery_state);
       const actualTranscriptId = stringField(message.actual_transcript_segment_id);
+      const observationKind = stringField(message.observation_kind);
+      const sourceEventId = stringField(message.interview_event_id);
+      const sourceWatermark = numberField(message.server_sequence);
+      const stateVersion = numberField(message.interview_state_version);
+      const observationStage = stringField(message.observation_interview_stage);
+      const triggerClass = stringField(message.observation_trigger_class);
       if (this.activeDelivery && deliveryId) {
         this.activeDelivery.deliveryId = deliveryId;
       }
       this.patchDebug({
-        lastServerSequence: numberField(message.server_sequence) ?? this.debug.lastServerSequence,
-        stateVersion: numberField(message.interview_state_version) ?? this.debug.stateVersion,
+        lastServerSequence: sourceWatermark ?? this.debug.lastServerSequence,
+        stateVersion: stateVersion ?? this.debug.stateVersion,
+        lastObservation: observationKind
+          ? {
+              kind: observationKind,
+              sourceEventId,
+              sourceEventWatermark: sourceWatermark,
+              stateVersion,
+              stage: observationStage,
+              triggerClass,
+            }
+          : this.debug.lastObservation,
         lastDelivery: {
           promptId: promptId ?? this.debug.lastDelivery.promptId,
           deliveryId: deliveryId ?? this.debug.lastDelivery.deliveryId,
@@ -496,8 +597,17 @@ export class RealtimeControlClient {
     if (type === "control_error") {
       const clientEventId = stringField(message.client_event_id);
       if (clientEventId) {
+        const pendingMessage = this.pending.get(clientEventId)?.message;
         this.pending.delete(clientEventId);
         this.patchDebug({ pendingDurableMessages: this.pending.size });
+        if (pendingMessage?.type === "candidate_code_snapshot") {
+          this.patchDebug({
+            lastCode: {
+              ...this.debug.lastCode,
+              persistence: "FAILED",
+            },
+          });
+        }
       }
       this.emit({ type: "error", message: "CounterQ control message was rejected." });
     }
@@ -589,6 +699,26 @@ function emptyDebug(): CanonicalControlDebug {
       deliveryState: null,
       providerResponseId: null,
       actualTranscriptId: null,
+    },
+    lastObservation: {
+      kind: null,
+      sourceEventId: null,
+      sourceEventWatermark: null,
+      stateVersion: null,
+      stage: null,
+      triggerClass: null,
+    },
+    lastCode: {
+      snapshotId: null,
+      version: null,
+      hashPrefix: null,
+      diffId: null,
+      persistence: "PENDING",
+    },
+    lastVoice: {
+      transcriptSegmentId: null,
+      associatedCodeSnapshotId: null,
+      associatedCodeSnapshotVersion: null,
     },
   };
 }

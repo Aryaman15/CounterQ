@@ -13,6 +13,7 @@ from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.runtime import IdempotencyConflict, InterviewRuntimeError
 from app.realtime.control_protocol import (
+    CandidateCodeSnapshotMessage,
     CandidateSpeechStartedMessage,
     CandidateSpeechStoppedMessage,
     CandidateTranscriptFinalizedMessage,
@@ -281,6 +282,7 @@ async def _handle_durable_control_message(
             session_id=interview_session_id,
             message=message,
         )
+        observation = transcript_result.observation
         return DurableEventAckMessage(
             client_event_id=message.client_event_id,
             created=transcript_result.created,
@@ -288,6 +290,35 @@ async def _handle_durable_control_message(
             transcript_segment_id=transcript_result.transcript_segment_id,
             server_sequence=transcript_result.server_sequence,
             interview_state_version=transcript_result.interview_state_version,
+            observation_kind=observation.kind if observation else None,
+            observation_trigger_class=observation.trigger_class if observation else None,
+            observation_interview_stage=observation.interview_stage if observation else None,
+            associated_code_snapshot_id=(
+                observation.associated_code_snapshot_id if observation else None
+            ),
+            associated_code_snapshot_version=(
+                observation.associated_code_snapshot_version if observation else None
+            ),
+        )
+    if isinstance(message, CandidateCodeSnapshotMessage):
+        code_result = await service.persist_candidate_code_snapshot(
+            session_id=interview_session_id,
+            message=message,
+        )
+        observation = code_result.observation
+        return DurableEventAckMessage(
+            client_event_id=message.client_event_id,
+            created=code_result.created,
+            interview_event_id=code_result.event_id,
+            code_snapshot_id=code_result.snapshot_id,
+            code_diff_id=code_result.diff_id,
+            code_version=code_result.version_number,
+            content_hash=code_result.content_hash,
+            server_sequence=code_result.server_sequence,
+            interview_state_version=code_result.interview_state_version,
+            observation_kind=observation.kind if observation else None,
+            observation_trigger_class=observation.trigger_class if observation else None,
+            observation_interview_stage=observation.interview_stage if observation else None,
         )
     if isinstance(message, RealtimeDisconnectedMessage | RealtimeReconnectedMessage):
         connectivity_result = await service.persist_realtime_connectivity_event(
@@ -328,6 +359,7 @@ async def _handle_durable_control_message(
             session_id=interview_session_id,
             message=message,
         )
+        observation = delivery_result.observation
         return DeliveryAckMessage(
             client_event_id=message.client_event_id,
             interviewer_prompt_id=delivery_result.prompt_id,
@@ -338,12 +370,16 @@ async def _handle_durable_control_message(
             server_sequence=delivery_result.server_sequence,
             interview_state_version=delivery_result.interview_state_version,
             created=delivery_result.created,
+            observation_kind=observation.kind if observation else None,
+            observation_trigger_class=observation.trigger_class if observation else None,
+            observation_interview_stage=observation.interview_stage if observation else None,
         )
     if isinstance(message, CounterQDeliveryInterruptedMessage):
         delivery_result = await service.interrupt_delivery(
             session_id=interview_session_id,
             message=message,
         )
+        observation = delivery_result.observation
         return DeliveryAckMessage(
             client_event_id=message.client_event_id,
             interviewer_prompt_id=delivery_result.prompt_id,
@@ -353,6 +389,9 @@ async def _handle_durable_control_message(
             server_sequence=delivery_result.server_sequence,
             interview_state_version=delivery_result.interview_state_version,
             created=delivery_result.created,
+            observation_kind=observation.kind if observation else None,
+            observation_trigger_class=observation.trigger_class if observation else None,
+            observation_interview_stage=observation.interview_stage if observation else None,
         )
     raise RealtimeControlError("Unsupported realtime control message")
 

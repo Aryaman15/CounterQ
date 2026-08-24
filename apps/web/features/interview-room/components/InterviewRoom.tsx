@@ -12,6 +12,7 @@ import {
 import { useDemoDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { DemoInterviewRoomFixture } from "../models/candidate-visible";
+import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
 import { ExecutionPanel } from "./ExecutionPanel";
@@ -37,6 +38,12 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const prefersReducedMotion = usePrefersReducedMotion();
   const remainingLabel = useDemoDeadlineTimer(fixture.serverNowIso, fixture.deadlineAtIso);
   const realtimeVoice = useRealtimeVoice();
+
+  useCodeObservationCollector({
+    sourceCode: editorCode,
+    controlReady: realtimeVoice.canonicalDebug.controlConnected,
+    sendSnapshot: realtimeVoice.observeCodeSnapshot,
+  });
 
   useEffect(() => {
     setProblemWidth(readStoredProblemWidth(window.localStorage));

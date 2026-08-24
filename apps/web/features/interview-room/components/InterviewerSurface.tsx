@@ -5,6 +5,7 @@ import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
 import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
+import { CODE_EDIT_BURST_IDLE_MS } from "../realtime/useCodeObservationCollector";
 import type { RealtimeSessionDebug } from "../realtime/useRealtimeVoice";
 import { renderDeliveredText } from "./deliveredText";
 import { VoicePresence } from "./VoicePresence";
@@ -224,6 +225,57 @@ export function InterviewerSurface({
                           canonicalDebug.lastCandidateFinal.transcriptSegmentId ?? "pending"
                         }`
                       : "No candidate final persisted"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last observation</dt>
+                  <dd>
+                    {canonicalDebug.lastObservation.kind
+                      ? `${canonicalDebug.lastObservation.kind}; event ${
+                          canonicalDebug.lastObservation.sourceEventId ?? "pending"
+                        }; watermark ${
+                          canonicalDebug.lastObservation.sourceEventWatermark ?? "pending"
+                        }; state ${
+                          canonicalDebug.lastObservation.stateVersion ?? "unknown"
+                        }; stage ${
+                          canonicalDebug.lastObservation.stage ?? "unknown"
+                        }; trigger ${
+                          canonicalDebug.lastObservation.triggerClass ?? "unknown"
+                        }`
+                      : "No structured observation acknowledged"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Code</dt>
+                  <dd>
+                    {canonicalDebug.lastCode.snapshotId
+                      ? `${canonicalDebug.lastCode.persistence}; snapshot ${
+                          canonicalDebug.lastCode.snapshotId
+                        }; version ${
+                          canonicalDebug.lastCode.version ?? "unknown"
+                        }; hash ${
+                          canonicalDebug.lastCode.hashPrefix ?? "unknown"
+                        }; diff ${canonicalDebug.lastCode.diffId ?? "none"}`
+                      : `No canonical code snapshot yet; ${canonicalDebug.lastCode.persistence}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Edit observation</dt>
+                  <dd>
+                    {canonicalDebug.lastCode.persistence.toLowerCase()}; idle threshold{" "}
+                    {CODE_EDIT_BURST_IDLE_MS} ms
+                  </dd>
+                </div>
+                <div>
+                  <dt>Voice code context</dt>
+                  <dd>
+                    {canonicalDebug.lastVoice.transcriptSegmentId
+                      ? `segment ${canonicalDebug.lastVoice.transcriptSegmentId}; code snapshot ${
+                          canonicalDebug.lastVoice.associatedCodeSnapshotId ?? "none"
+                        }; version ${
+                          canonicalDebug.lastVoice.associatedCodeSnapshotVersion ?? "none"
+                        }`
+                      : "No finalized voice observation yet"}
                   </dd>
                 </div>
                 <div>

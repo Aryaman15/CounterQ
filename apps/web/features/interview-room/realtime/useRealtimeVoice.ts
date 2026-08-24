@@ -30,6 +30,11 @@ export type RealtimeVoiceControls = {
   unmute: () => void;
   disconnect: () => void;
   speakDevelopmentPhrase: () => void;
+  observeCodeSnapshot: (
+    sourceCode: string,
+    trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
+    idempotencyKey: string,
+  ) => void;
 };
 
 export type RealtimeSessionDebug = {
@@ -175,6 +180,22 @@ export function useRealtimeVoice(
     controlClientRef.current?.requestDevelopmentPrompt();
   }, []);
 
+  const observeCodeSnapshot = useCallback(
+    (
+      sourceCode: string,
+      trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
+      idempotencyKey: string,
+    ) => {
+      controlClientRef.current?.sendCandidateCodeSnapshot({
+        sourceCode,
+        language: "cpp",
+        trigger,
+        idempotencyKey,
+      });
+    },
+    [],
+  );
+
   useEffect(() => disconnect, [disconnect]);
 
   return {
@@ -190,6 +211,7 @@ export function useRealtimeVoice(
     unmute,
     disconnect,
     speakDevelopmentPhrase,
+    observeCodeSnapshot,
   };
 }
 
@@ -374,6 +396,26 @@ function emptyCanonicalDebug(): CanonicalControlDebug {
       deliveryState: null,
       providerResponseId: null,
       actualTranscriptId: null,
+    },
+    lastObservation: {
+      kind: null,
+      sourceEventId: null,
+      sourceEventWatermark: null,
+      stateVersion: null,
+      stage: null,
+      triggerClass: null,
+    },
+    lastCode: {
+      snapshotId: null,
+      version: null,
+      hashPrefix: null,
+      diffId: null,
+      persistence: "PENDING",
+    },
+    lastVoice: {
+      transcriptSegmentId: null,
+      associatedCodeSnapshotId: null,
+      associatedCodeSnapshotVersion: null,
     },
   };
 }
