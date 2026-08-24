@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.ai_gateway.routes import router as ai_gateway_router
 from app.api.routes.health import router as health_router
 from app.config.settings import get_settings
 from app.core.logging import CorrelationIdMiddleware, configure_logging
@@ -27,6 +28,7 @@ def create_app() -> FastAPI:
     )
     app.add_middleware(CorrelationIdMiddleware)
     app.include_router(health_router)
+    app.include_router(ai_gateway_router)
     app.include_router(realtime_router)
     return app
 

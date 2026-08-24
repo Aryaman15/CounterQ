@@ -75,6 +75,159 @@
         "title": "CreateRealtimeSessionResponse",
         "type": "object"
       },
+      "DevelopmentReasoningSmokeRequest": {
+        "properties": {
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id"
+        ],
+        "title": "DevelopmentReasoningSmokeRequest",
+        "type": "object"
+      },
+      "DevelopmentReasoningSmokeResponse": {
+        "properties": {
+          "cached_input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cached Input Tokens"
+          },
+          "capability": {
+            "const": "STANDARD_REASONING",
+            "title": "Capability",
+            "type": "string"
+          },
+          "confidence": {
+            "title": "Confidence",
+            "type": "number"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "estimated_cost": {
+            "anyOf": [
+              {
+                "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Estimated Cost"
+          },
+          "input_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input Tokens"
+          },
+          "invocation_id": {
+            "format": "uuid",
+            "title": "Invocation Id",
+            "type": "string"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "model": {
+            "title": "Model",
+            "type": "string"
+          },
+          "output_tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output Tokens"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          },
+          "reasoning_budget_remaining": {
+            "title": "Reasoning Budget Remaining",
+            "type": "integer"
+          },
+          "reasoning_budget_used": {
+            "title": "Reasoning Budget Used",
+            "type": "integer"
+          },
+          "status": {
+            "const": "SUCCEEDED",
+            "title": "Status",
+            "type": "string"
+          },
+          "technical_note": {
+            "title": "Technical Note",
+            "type": "string"
+          },
+          "verdict": {
+            "enum": [
+              "GUARANTEED",
+              "NOT_GUARANTEED",
+              "UNCERTAIN"
+            ],
+            "title": "Verdict",
+            "type": "string"
+          }
+        },
+        "required": [
+          "invocation_id",
+          "status",
+          "provider",
+          "model",
+          "capability",
+          "verdict",
+          "technical_note",
+          "confidence",
+          "latency_ms",
+          "input_tokens",
+          "cached_input_tokens",
+          "output_tokens",
+          "estimated_cost",
+          "currency",
+          "reasoning_budget_used",
+          "reasoning_budget_remaining"
+        ],
+        "title": "DevelopmentReasoningSmokeResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -246,6 +399,47 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/ai/development-reasoning-smoke": {
+      "post": {
+        "operationId": "development_reasoning_smoke_api_ai_development_reasoning_smoke_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentReasoningSmokeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentReasoningSmokeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Reasoning Smoke",
+        "tags": [
+          "ai-gateway"
+        ]
+      }
+    },
     "/api/realtime/development-interview": {
       "post": {
         "operationId": "create_realtime_development_interview_api_realtime_development_interview_post",

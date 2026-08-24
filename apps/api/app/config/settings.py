@@ -70,6 +70,31 @@ class Settings(BaseSettings):
         validation_alias="COUNTERQ_REALTIME_CLIENT_SECRET_TTL_SECONDS",
     )
 
+    reasoning_provider: str = Field(
+        default="openai",
+        validation_alias="COUNTERQ_REASONING_PROVIDER",
+    )
+    reasoning_standard_model: str = Field(
+        default="gpt-5.6-terra",
+        validation_alias="COUNTERQ_REASONING_STANDARD_MODEL",
+    )
+    reasoning_strong_model: str = Field(
+        default="gpt-5.6-sol",
+        validation_alias="COUNTERQ_REASONING_STRONG_MODEL",
+    )
+    reasoning_standard_effort: str = Field(
+        default="medium",
+        validation_alias="COUNTERQ_REASONING_STANDARD_EFFORT",
+    )
+    reasoning_strong_effort: str = Field(
+        default="high",
+        validation_alias="COUNTERQ_REASONING_STRONG_EFFORT",
+    )
+    reasoning_timeout_seconds: float = Field(
+        default=20.0,
+        validation_alias="COUNTERQ_REASONING_TIMEOUT_SECONDS",
+    )
+
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:
     return Settings(_env_file=env_file)

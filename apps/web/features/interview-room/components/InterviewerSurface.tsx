@@ -5,6 +5,8 @@ import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
 import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
+import type { DevelopmentReasoningSmokeResponse } from "../realtime/reasoningSmoke";
+import { requestDevelopmentReasoningSmoke } from "../realtime/reasoningSmoke";
 import { CODE_EDIT_BURST_IDLE_MS } from "../realtime/useCodeObservationCollector";
 import type { RealtimeSessionDebug } from "../realtime/useRealtimeVoice";
 import { renderDeliveredText } from "./deliveredText";
@@ -48,6 +50,10 @@ export function InterviewerSurface({
     process.env.NODE_ENV !== "production" &&
     (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [reasoningSmokePending, setReasoningSmokePending] = useState(false);
+  const [reasoningSmokeResult, setReasoningSmokeResult] =
+    useState<DevelopmentReasoningSmokeResponse | null>(null);
+  const [reasoningSmokeError, setReasoningSmokeError] = useState<string | null>(null);
   const transcriptPopoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,6 +86,22 @@ export function InterviewerSurface({
       document.removeEventListener("pointerdown", handlePointerDown);
     };
   }, [transcriptOpen]);
+
+  const handleReasoningSmoke = async () => {
+    if (!canonicalDebug.sessionId || reasoningSmokePending) {
+      return;
+    }
+    setReasoningSmokePending(true);
+    setReasoningSmokeError(null);
+    try {
+      const result = await requestDevelopmentReasoningSmoke(canonicalDebug.sessionId);
+      setReasoningSmokeResult(result);
+    } catch {
+      setReasoningSmokeError("AI Gateway smoke request failed");
+    } finally {
+      setReasoningSmokePending(false);
+    }
+  };
 
   return (
     <section className="interviewer-surface" aria-labelledby="current-question-title">
@@ -264,6 +286,52 @@ export function InterviewerSurface({
                   <dd>
                     {canonicalDebug.lastCode.persistence.toLowerCase()}; idle threshold{" "}
                     {CODE_EDIT_BURST_IDLE_MS} ms
+                  </dd>
+                </div>
+                <div className="voice-dev-ai-gateway">
+                  <dt>AI Gateway</dt>
+                  <dd>
+                    <button
+                      type="button"
+                      className="voice-control-button voice-dev-button"
+                      onClick={handleReasoningSmoke}
+                      disabled={!canonicalDebug.sessionId || reasoningSmokePending}
+                    >
+                      {reasoningSmokePending ? "Reasoning..." : "Reasoning smoke"}
+                    </button>
+                    {reasoningSmokeError ? (
+                      <span className="voice-dev-inline-error">{reasoningSmokeError}</span>
+                    ) : null}
+                    {reasoningSmokeResult ? (
+                      <div className="voice-dev-reasoning-result" aria-live="polite">
+                        <p>AI GATEWAY</p>
+                        <span>
+                          {reasoningSmokeResult.status}; invocation{" "}
+                          {reasoningSmokeResult.invocation_id}; {reasoningSmokeResult.provider}/
+                          {reasoningSmokeResult.model}
+                        </span>
+                        <span>
+                          latency {reasoningSmokeResult.latency_ms ?? "unknown"} ms; tokens in{" "}
+                          {reasoningSmokeResult.input_tokens ?? "unknown"} out{" "}
+                          {reasoningSmokeResult.output_tokens ?? "unknown"}; cost{" "}
+                          {reasoningSmokeResult.estimated_cost
+                            ? `${reasoningSmokeResult.estimated_cost} ${
+                                reasoningSmokeResult.currency ?? ""
+                              }`
+                            : "unknown"}
+                        </span>
+                        <span>
+                          budget {reasoningSmokeResult.reasoning_budget_used} used /{" "}
+                          {reasoningSmokeResult.reasoning_budget_remaining} remaining
+                        </span>
+                        <p>RESULT</p>
+                        <span>
+                          {reasoningSmokeResult.verdict}; confidence{" "}
+                          {reasoningSmokeResult.confidence}
+                        </span>
+                        <span>{reasoningSmokeResult.technical_note}</span>
+                      </div>
+                    ) : null}
                   </dd>
                 </div>
                 <div>

@@ -4,6 +4,23 @@
  */
 
 export interface paths {
+    "/api/ai/development-reasoning-smoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Development Reasoning Smoke */
+        post: operations["development_reasoning_smoke_api_ai_development_reasoning_smoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/development-interview": {
         parameters: {
             query?: never;
@@ -93,6 +110,61 @@ export interface components {
             voice: string;
             /** Webrtc Url */
             webrtc_url: string;
+        };
+        /** DevelopmentReasoningSmokeRequest */
+        DevelopmentReasoningSmokeRequest: {
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+        };
+        /** DevelopmentReasoningSmokeResponse */
+        DevelopmentReasoningSmokeResponse: {
+            /** Cached Input Tokens */
+            cached_input_tokens: number | null;
+            /**
+             * Capability
+             * @constant
+             */
+            capability: "STANDARD_REASONING";
+            /** Confidence */
+            confidence: number;
+            /** Currency */
+            currency: string | null;
+            /** Estimated Cost */
+            estimated_cost: string | null;
+            /** Input Tokens */
+            input_tokens: number | null;
+            /**
+             * Invocation Id
+             * Format: uuid
+             */
+            invocation_id: string;
+            /** Latency Ms */
+            latency_ms: number | null;
+            /** Model */
+            model: string;
+            /** Output Tokens */
+            output_tokens: number | null;
+            /** Provider */
+            provider: string;
+            /** Reasoning Budget Remaining */
+            reasoning_budget_remaining: number;
+            /** Reasoning Budget Used */
+            reasoning_budget_used: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "SUCCEEDED";
+            /** Technical Note */
+            technical_note: string;
+            /**
+             * Verdict
+             * @enum {string}
+             */
+            verdict: "GUARANTEED" | "NOT_GUARANTEED" | "UNCERTAIN";
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -190,6 +262,39 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    development_reasoning_smoke_api_ai_development_reasoning_smoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentReasoningSmokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentReasoningSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_realtime_development_interview_api_realtime_development_interview_post: {
         parameters: {
             query?: never;

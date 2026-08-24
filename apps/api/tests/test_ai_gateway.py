@@ -1,0 +1,596 @@
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator, Mapping
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from httpx import ASGITransport, AsyncClient
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.ai_gateway.gateway import (
+    AIGateway,
+    PolicyVersionConflict,
+    ReasoningBudgetExceeded,
+    StructuredOutputValidationFailure,
+    get_or_create_policy_version,
+    policy_instruction_hash,
+)
+from app.ai_gateway.models import AIInvocation, AIPolicyVersion
+from app.ai_gateway.pricing import estimate_text_token_cost
+from app.ai_gateway.provider import (
+    ProviderReasoningResult,
+    ReasoningEffort,
+    ReasoningPolicyDescriptor,
+    ReasoningProviderError,
+    ReasoningRequest,
+    ReasoningUsage,
+)
+from app.ai_gateway.providers.openai_reasoning import OPENAI_RESPONSES_URL, OpenAIReasoningProvider
+from app.ai_gateway.routes import get_reasoning_provider_builder
+from app.config.settings import Settings, create_settings, get_settings
+from app.db.session import build_engine, dispose_engine
+from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
+from app.interviews.models import InterviewerPrompt, SessionBudget
+from app.main import create_app
+from app.realtime.control_protocol import RealtimeDevelopmentBootstrapRequest
+
+
+class SmokeResult(BaseModel):
+    verdict: str
+    technical_note: str
+    confidence: float = Field(ge=0, le=1)
+
+
+class FakeReasoningProvider:
+    provider_name = "fake"
+
+    def __init__(
+        self,
+        *,
+        output_data: dict[str, Any] | None = None,
+        error: ReasoningProviderError | None = None,
+        delay_seconds: float = 0,
+        assert_no_gateway_transaction: AIGateway | None = None,
+    ) -> None:
+        self.output_data = output_data or {
+            "verdict": "NOT_GUARANTEED",
+            "technical_note": (
+                "Average lookup is expected constant time; worst-case is not guaranteed."
+            ),
+            "confidence": 0.91,
+        }
+        self.error = error
+        self.delay_seconds = delay_seconds
+        self.assert_no_gateway_transaction = assert_no_gateway_transaction
+        self.calls = 0
+        self.requests: list[ReasoningRequest] = []
+        self.models: list[str] = []
+        self.efforts: list[str] = []
+        self.called_event = asyncio.Event()
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        self.calls += 1
+        self.called_event.set()
+        self.requests.append(request)
+        self.models.append(model)
+        self.efforts.append(reasoning_effort)
+        if self.assert_no_gateway_transaction is not None:
+            assert self.assert_no_gateway_transaction.active_transaction_count == 0
+        if self.delay_seconds:
+            await asyncio.sleep(self.delay_seconds)
+        if self.error is not None:
+            raise self.error
+        return ProviderReasoningResult(
+            output_data=self.output_data,
+            provider="fake",
+            model=model,
+            provider_model_version=f"{model}-2026-08-24",
+            provider_request_id="provider-request-1",
+            usage=ReasoningUsage(
+                input_tokens=100,
+                cached_input_tokens=20,
+                output_tokens=30,
+            ),
+            latency_ms=42,
+            retry_count=0,
+            estimated_cost=Decimal("0.000520"),
+            currency="USD",
+        )
+
+
+class RecordingResponsesClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self.response = response
+        self.url: str | None = None
+        self.headers: dict[str, str] | None = None
+        self.json: dict[str, Any] | None = None
+
+    async def post(
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str],
+        json: Mapping[str, Any],
+        request_timeout: float,
+    ) -> httpx.Response:
+        self.url = url
+        self.headers = dict(headers)
+        self.json = dict(json)
+        return self.response
+
+
+def settings(tmp_path: Path) -> Settings:
+    env_file = tmp_path / ".env"
+    env_file.write_text("COUNTERQ_APP_ENV=local\nOPENAI_API_KEY=test-key\n")
+    return create_settings(env_file=env_file)
+
+
+async def gateway_sessionmaker() -> AsyncIterator[
+    tuple[async_sessionmaker[AsyncSession], DevelopmentInterview]
+]:
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with maker() as session:
+            async with session.begin():
+                dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+        yield maker, dev
+    finally:
+        await engine.dispose()
+
+
+def policy(instructions: str = "Smoke policy") -> ReasoningPolicyDescriptor:
+    return ReasoningPolicyDescriptor(
+        policy_key=f"stage1_6_policy_{policy_instruction_hash(instructions)[-12:]}",
+        version="v1",
+        instructions=instructions,
+        configuration={"stage": "1.6"},
+    )
+
+
+async def call_gateway(
+    tmp_path: Path,
+    *,
+    capability: str = "STANDARD_REASONING",
+    provider: FakeReasoningProvider | None = None,
+    timeout_seconds: float | None = None,
+) -> tuple[AIGateway, FakeReasoningProvider, Any, DevelopmentInterview]:
+    async for maker, dev in gateway_sessionmaker():
+        fake_provider = provider or FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=fake_provider)
+        result = await gateway.reason_structured(
+            interview_session_id=dev.interview_session.id,
+            capability=capability,  # type: ignore[arg-type]
+            purpose="development_reasoning_smoke",
+            policy=policy(),
+            instructions="Smoke policy",
+            input_content="Fixed smoke input",
+            output_model=SmokeResult,
+            timeout_seconds=timeout_seconds,
+        )
+        return gateway, fake_provider, result, dev
+    raise AssertionError("sessionmaker fixture did not yield")
+
+
+async def test_standard_and_strong_reasoning_route_to_configured_models(tmp_path: Path) -> None:
+    _, standard_provider, standard, _ = await call_gateway(
+        tmp_path,
+        capability="STANDARD_REASONING",
+    )
+    _, strong_provider, strong, _ = await call_gateway(tmp_path, capability="STRONG_REASONING")
+
+    assert standard.model == "gpt-5.6-terra"
+    assert standard_provider.efforts == ["medium"]
+    assert strong.model == "gpt-5.6-sol"
+    assert strong_provider.efforts == ["high"]
+
+
+async def test_strict_structured_output_success_and_invalid_output_failure(
+    tmp_path: Path,
+) -> None:
+    _, _, result, _ = await call_gateway(tmp_path)
+    assert result.parsed.verdict == "NOT_GUARANTEED"
+
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider(output_data={"verdict": "UNCERTAIN"})
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        with pytest.raises(StructuredOutputValidationFailure):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("invalid output policy"),
+                instructions="invalid output policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+
+async def test_policy_version_hash_reuse_and_conflict(db_session: AsyncSession) -> None:
+    descriptor = policy("immutable instructions")
+
+    first = await get_or_create_policy_version(db_session, descriptor)
+    second = await get_or_create_policy_version(db_session, descriptor)
+
+    assert second.id == first.id
+    assert first.prompt_hash == policy_instruction_hash("immutable instructions")
+
+    with pytest.raises(PolicyVersionConflict):
+        await get_or_create_policy_version(
+            db_session,
+            ReasoningPolicyDescriptor(
+                policy_key=descriptor.policy_key,
+                version=descriptor.version,
+                instructions="changed instructions",
+                configuration=descriptor.configuration,
+            ),
+        )
+
+
+async def test_ai_invocation_lifecycle_success_budget_and_cost(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        result = await gateway.reason_structured(
+            interview_session_id=dev.interview_session.id,
+            capability="STANDARD_REASONING",
+            purpose="development_reasoning_smoke",
+            policy=policy("success policy"),
+            instructions="success policy",
+            input_content="Fixed smoke input",
+            output_model=SmokeResult,
+        )
+
+        async with maker() as session:
+            invocation = await session.get(AIInvocation, result.invocation_id)
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+
+        assert invocation is not None
+        assert budget is not None
+        assert invocation.status == "SUCCEEDED"
+        assert invocation.completed_at is not None
+        assert invocation.provider_request_id == "provider-request-1"
+        assert invocation.input_tokens == 100
+        assert invocation.cached_input_tokens == 20
+        assert invocation.output_tokens == 30
+        assert invocation.estimated_cost == Decimal("0.000520")
+        assert invocation.currency == "USD"
+        assert invocation.retry_count == 0
+        assert budget.deep_reasoning_used == 1
+        assert budget.strong_reasoning_used == 0
+        assert budget.probes_used == 0
+        assert budget.estimated_cost == Decimal("0.0005")
+
+
+async def test_provider_failure_and_timeout_update_invocation_status(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider(
+            error=ReasoningProviderError("RATE_LIMIT", "Provider rate limit reached")
+        )
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        with pytest.raises(ReasoningProviderError):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("failure policy"),
+                instructions="failure policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+        async with maker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(AIInvocation.error_class == "RATE_LIMIT")
+            )
+        assert invocation is not None
+        assert invocation.status == "FAILED"
+
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider(delay_seconds=0.05)
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        with pytest.raises(ReasoningProviderError):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("timeout policy"),
+                instructions="timeout policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+                timeout_seconds=0.001,
+            )
+        async with maker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(AIInvocation.error_class == "TIMEOUT")
+            )
+        assert invocation is not None
+        assert invocation.status == "TIMED_OUT"
+
+
+async def test_cancellation_updates_invocation_status(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider(delay_seconds=1)
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        task = asyncio.create_task(
+            gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("cancel policy"),
+                instructions="cancel policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+        )
+        await asyncio.wait_for(provider.called_event.wait(), timeout=1)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        async with maker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(AIInvocation.error_class == "CANCELLED")
+            )
+        assert invocation is not None
+        assert invocation.status == "CANCELLED"
+
+
+async def test_provider_call_occurs_with_no_gateway_transaction(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        provider.assert_no_gateway_transaction = gateway
+
+        await gateway.reason_structured(
+            interview_session_id=dev.interview_session.id,
+            capability="STANDARD_REASONING",
+            purpose="development_reasoning_smoke",
+            policy=policy("transaction boundary policy"),
+            instructions="transaction boundary policy",
+            input_content="Fixed smoke input",
+            output_model=SmokeResult,
+        )
+
+        assert provider.calls == 1
+
+
+async def test_reasoning_budgets_and_monetary_limit_prevent_provider_invocation(
+    tmp_path: Path,
+) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session:
+            async with session.begin():
+                budget = await session.get(SessionBudget, dev.interview_session.id)
+                assert budget is not None
+                budget.deep_reasoning_used = budget.max_deep_reasoning_calls
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("exhausted deep policy"),
+                instructions="exhausted deep policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+        assert provider.calls == 0
+
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session:
+            async with session.begin():
+                budget = await session.get(SessionBudget, dev.interview_session.id)
+                assert budget is not None
+                budget.estimated_cost = budget.hard_monetary_budget
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STRONG_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("monetary budget policy"),
+                instructions="monetary budget policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+        assert provider.calls == 0
+
+
+def test_known_and_unknown_pricing() -> None:
+    known = estimate_text_token_cost(
+        "gpt-5.6-terra",
+        ReasoningUsage(input_tokens=100, cached_input_tokens=20, output_tokens=30),
+    )
+    unknown = estimate_text_token_cost(
+        "unknown-model",
+        ReasoningUsage(input_tokens=100, output_tokens=30),
+    )
+
+    assert known == (Decimal("0.000524"), "USD")
+    assert unknown is None
+
+
+@pytest.mark.asyncio
+async def test_openai_adapter_targets_responses_api_and_structured_output(
+    tmp_path: Path,
+) -> None:
+    request = httpx.Request("POST", OPENAI_RESPONSES_URL)
+    response = httpx.Response(
+        200,
+        json={
+            "id": "resp-1",
+            "model": "gpt-5.6-terra",
+            "output_text": (
+                '{"verdict":"NOT_GUARANTEED","technical_note":"Average case only.",'
+                '"confidence":0.9}'
+            ),
+            "usage": {
+                "input_tokens": 100,
+                "input_tokens_details": {"cached_tokens": 20},
+                "output_tokens": 30,
+            },
+        },
+        request=request,
+    )
+    client = RecordingResponsesClient(response)
+    provider = OpenAIReasoningProvider(settings(tmp_path), http_client=client)
+
+    result = await provider.reason_structured(
+        ReasoningRequest(
+            capability="STANDARD_REASONING",
+            purpose="development_reasoning_smoke",
+            policy=policy("openai adapter policy"),
+            instructions="openai adapter policy",
+            input_content="Fixed smoke input",
+            output_schema_name="SmokeResult",
+            output_json_schema=SmokeResult.model_json_schema(),
+            timeout_seconds=5,
+        ),
+        model="gpt-5.6-terra",
+        reasoning_effort="medium",
+    )
+
+    assert client.url == OPENAI_RESPONSES_URL
+    assert client.json is not None
+    assert client.json["reasoning"] == {"effort": "medium"}
+    assert client.json["text"]["format"]["type"] == "json_schema"
+    assert client.json["text"]["format"]["strict"] is True
+    assert result.output_data["verdict"] == "NOT_GUARANTEED"
+    assert result.provider_request_id == "resp-1"
+
+
+@pytest.mark.asyncio
+async def test_provider_errors_do_not_expose_secret(tmp_path: Path) -> None:
+    request = httpx.Request("POST", OPENAI_RESPONSES_URL)
+    provider = OpenAIReasoningProvider(
+        settings(tmp_path),
+        http_client=RecordingResponsesClient(
+            httpx.Response(401, json={"error": "bad"}, request=request)
+        ),
+    )
+
+    with pytest.raises(ReasoningProviderError) as exc_info:
+        await provider.reason_structured(
+            ReasoningRequest(
+                capability="STANDARD_REASONING",
+                purpose="development_reasoning_smoke",
+                policy=policy("secret-safe policy"),
+                instructions="secret-safe policy",
+                input_content="Fixed smoke input",
+                output_schema_name="SmokeResult",
+                output_json_schema=SmokeResult.model_json_schema(),
+                timeout_seconds=5,
+            ),
+            model="gpt-5.6-terra",
+            reasoning_effort="medium",
+        )
+
+    assert exc_info.value.category == "AUTHENTICATION"
+    assert "test-key" not in exc_info.value.safe_message
+
+
+async def test_development_smoke_endpoint_blocks_production_and_creates_no_interpretations(
+    tmp_path: Path,
+) -> None:
+    production_settings = settings(tmp_path)
+    production_settings.app_env = "production"
+    fake_provider = FakeReasoningProvider()
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: production_settings
+    app.dependency_overrides[get_reasoning_provider_builder] = lambda: (
+        lambda _settings: fake_provider
+    )
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        blocked = await client.post(
+            "/api/ai/development-reasoning-smoke",
+            json={"interview_session_id": "018f0000-0000-7000-8000-000000000000"},
+        )
+
+    assert blocked.status_code == 403
+    assert fake_provider.calls == 0
+    app.dependency_overrides.clear()
+
+    local_settings = settings(tmp_path)
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: local_settings
+    app.dependency_overrides[get_reasoning_provider_builder] = lambda: (
+        lambda _settings: fake_provider
+    )
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+        bootstrap = await client.post(
+            "/api/realtime/development-interview",
+            json=RealtimeDevelopmentBootstrapRequest().model_dump(mode="json"),
+        )
+        assert bootstrap.status_code == 200
+        interview_session_id = bootstrap.json()["interview_session_id"]
+        result = await client.post(
+            "/api/ai/development-reasoning-smoke",
+            json={"interview_session_id": interview_session_id},
+        )
+
+    assert result.status_code == 200
+    body = result.json()
+    assert body["status"] == "SUCCEEDED"
+    assert body["model"] == "gpt-5.6-terra"
+    assert "OPENAI_API_KEY" not in str(body)
+
+    engine = build_engine()
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == interview_session_id)
+            )
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == interview_session_id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == interview_session_id)
+            )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == interview_session_id)
+            )
+            policy_count = await session.scalar(
+                select(func.count()).select_from(AIPolicyVersion)
+            )
+    finally:
+        await engine.dispose()
+
+    assert invocation_count == 1
+    assert claim_count == 0
+    assert decision_count == 0
+    assert prompt_count == 0
+    assert policy_count is not None and policy_count >= 1
+    app.dependency_overrides.clear()
+    await dispose_engine()

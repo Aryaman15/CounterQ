@@ -83,6 +83,7 @@ vi.mock("@monaco-editor/react", () => ({
 
 describe("Interview Room demo", () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     window.localStorage.clear();
     window.matchMedia = vi.fn().mockImplementation((query: string) => ({
       matches: false,
@@ -227,6 +228,141 @@ describe("Interview Room demo", () => {
     expect(screen.getByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
     expect(screen.queryByRole("dialog", { name: "DEVELOPMENT TRANSCRIPT" })).not.toBeInTheDocument();
+  });
+
+  it("runs the development-only reasoning smoke control without changing prompt or speaking", async () => {
+    const speakDevelopmentPhrase = vi.fn();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        invocation_id: "invocation-1",
+        status: "SUCCEEDED",
+        provider: "fake",
+        model: "gpt-5.6-terra",
+        capability: "STANDARD_REASONING",
+        verdict: "NOT_GUARANTEED",
+        technical_note: "Average lookup is expected constant time; worst-case is not guaranteed.",
+        confidence: 0.91,
+        latency_ms: 42,
+        input_tokens: 100,
+        cached_input_tokens: 20,
+        output_tokens: 30,
+        estimated_cost: "0.000520",
+        currency: "USD",
+        reasoning_budget_used: 1,
+        reasoning_budget_remaining: 7,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={speakDevelopmentPhrase}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning smoke" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("AI GATEWAY")).toBeInTheDocument();
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:8000/api/ai/development-reasoning-smoke",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ interview_session_id: "session-1" }),
+      }),
+    );
+    expect(screen.getByText(/SUCCEEDED; invocation invocation-1; fake\/gpt-5.6-terra/i)).toBeInTheDocument();
+    expect(screen.getByText("RESULT")).toBeInTheDocument();
+    expect(screen.getByText(/NOT_GUARANTEED; confidence 0.91/i)).toBeInTheDocument();
+    expect(screen.getByText(/Average lookup is expected constant time/i)).toBeInTheDocument();
+    expect(screen.getByText((_, node) => node?.textContent === "What guarantees that left never moves backwards?"))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/raw provider/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/OPENAI_API_KEY/i)).not.toBeInTheDocument();
+    expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
+  });
+
+  it("disables the reasoning smoke button while pending", async () => {
+    let resolveRequest: (value: unknown) => void = () => undefined;
+    const fetchPromise = new Promise((resolve) => {
+      resolveRequest = resolve;
+    });
+    vi.stubGlobal("fetch", vi.fn().mockReturnValue(fetchPromise));
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reasoning smoke" }));
+
+    expect(screen.getByRole("button", { name: "Reasoning..." })).toBeDisabled();
+
+    resolveRequest({
+      ok: true,
+      json: async () => ({
+        invocation_id: "invocation-2",
+        status: "SUCCEEDED",
+        provider: "fake",
+        model: "gpt-5.6-terra",
+        capability: "STANDARD_REASONING",
+        verdict: "UNCERTAIN",
+        technical_note: "Smoke complete.",
+        confidence: 0.5,
+        latency_ms: 12,
+        input_tokens: 1,
+        cached_input_tokens: 0,
+        output_tokens: 1,
+        estimated_cost: null,
+        currency: null,
+        reasoning_budget_used: 1,
+        reasoning_budget_remaining: 7,
+      }),
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Reasoning smoke" })).not.toBeDisabled();
+    });
+  });
+
+  it("does not call the reasoning endpoint during ordinary Interview Room render", () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<InterviewRoom fixture={demoInterviewFixture} />);
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("opens and closes recent conversation accessibly", () => {
