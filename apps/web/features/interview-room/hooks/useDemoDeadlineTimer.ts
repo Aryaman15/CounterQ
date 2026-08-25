@@ -30,3 +30,26 @@ export function useDemoDeadlineTimer(serverNowIso: string, deadlineAtIso: string
 
   return formatRemainingTime(baseSeconds - elapsedSeconds);
 }
+
+export function useAuthoritativeDeadlineTimer(
+  serverDeadlineAtIso: string | null,
+  fixtureServerNowIso: string,
+  fixtureDeadlineAtIso: string,
+): string {
+  const fallback = useDemoDeadlineTimer(fixtureServerNowIso, fixtureDeadlineAtIso);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!serverDeadlineAtIso) {
+      return;
+    }
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(intervalId);
+  }, [serverDeadlineAtIso]);
+
+  if (!serverDeadlineAtIso) {
+    return fallback;
+  }
+  return formatRemainingTime((Date.parse(serverDeadlineAtIso) - now) / 1000);
+}

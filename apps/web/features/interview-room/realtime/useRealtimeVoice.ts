@@ -26,6 +26,7 @@ export type RealtimeVoiceControls = {
   currentCounterQDeliveryText: string;
   sessionDebug: RealtimeSessionDebug;
   canonicalDebug: CanonicalControlDebug;
+  serverDeadlineAt: string | null;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -72,6 +73,7 @@ export function useRealtimeVoice(
   const [canonicalDebug, setCanonicalDebug] = useState<CanonicalControlDebug>(
     emptyCanonicalDebug(),
   );
+  const [serverDeadlineAt, setServerDeadlineAt] = useState<string | null>(null);
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const controlClientRef = useRef<RealtimeControlClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -124,6 +126,10 @@ export function useRealtimeVoice(
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
       });
     unsubscribeControlRef.current = controlClient.on((event) => {
+      if (event.type === "connected") {
+        setServerDeadlineAt(event.bootstrap.deadline_at);
+        return;
+      }
       if (event.type === "debug_updated") {
         setCanonicalDebug(event.debug);
         return;
@@ -184,6 +190,7 @@ export function useRealtimeVoice(
     transcriptDraftsRef.current.clear();
     activeTranscriptKeyRef.current = null;
     setCanonicalDebug(emptyCanonicalDebug());
+    setServerDeadlineAt(null);
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -233,6 +240,7 @@ export function useRealtimeVoice(
     currentCounterQDeliveryText,
     sessionDebug,
     canonicalDebug,
+    serverDeadlineAt,
     enableMicrophone,
     mute,
     unmute,

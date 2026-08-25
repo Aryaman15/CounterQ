@@ -11,12 +11,14 @@ from app.auth.repository import UserRepository
 from app.db.ids import uuid7
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
 from app.interviews.repository import InterviewRepository
+from app.interviews.template_policy import InterviewTemplate, template_policy
 from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
 from app.problems.repository import ProblemRepository
 
 
 @dataclass(frozen=True)
 class DevelopmentInterview:
+    template: InterviewTemplate
     user: User
     problem: Problem
     problem_version: ProblemVersion
@@ -31,8 +33,12 @@ async def create_development_interview(
     *,
     initial_stage: str = "SETUP",
     state_version: int = 0,
+    template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
 ) -> DevelopmentInterview:
     now = datetime.now(UTC)
+    policy = template_policy(template)
+    if policy.configured_duration_seconds is None:
+        raise ValueError("FULL_SIMULATION requires an explicit duration policy before use")
     suffix = uuid7()
     user = await UserRepository(session).add(
         external_auth_provider="dev",
@@ -71,7 +77,7 @@ async def create_development_interview(
         mode="SIMULATION",
         level="NEW_GRAD",
         language="cpp",
-        configured_duration_seconds=1_800,
+        configured_duration_seconds=policy.configured_duration_seconds,
         problem_source="CURATED",
     )
     interview_session = await interviews.add_session(
@@ -83,20 +89,21 @@ async def create_development_interview(
         state_version=state_version,
         status="ACTIVE",
         started_at=now,
-        deadline_at=now + timedelta(minutes=30),
+        deadline_at=now + timedelta(seconds=policy.configured_duration_seconds),
     )
     budget = await interviews.add_budget(
         session_id=interview_session.id,
-        max_duration_seconds=1_800,
-        max_probes=5,
-        max_deep_reasoning_calls=8,
-        max_strong_reasoning_calls=1,
+        max_duration_seconds=policy.configured_duration_seconds,
+        max_probes=policy.max_probes,
+        max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
+        max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5000"),
         hard_monetary_budget=Decimal("5.0000"),
         realtime_reserved_budget=Decimal("1.2500"),
     )
     return DevelopmentInterview(
+        template=template,
         user=user,
         problem=problem,
         problem_version=problem_version,

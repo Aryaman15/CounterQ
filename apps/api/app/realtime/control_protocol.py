@@ -17,9 +17,13 @@ class RealtimeDevelopmentBootstrapRequest(BaseModel):
 
 class RealtimeDevelopmentBootstrapResponse(BaseModel):
     interview_session_id: UUID
+    template: str
+    configured_duration_seconds: int
     current_stage: str
     state_version: int
     deadline_at: datetime
+    time_remaining_seconds: int
+    time_pressure: str
     control_websocket_path: str
     protocol_version: Literal["counterq.realtime.control.v1"] = CONTROL_PROTOCOL_VERSION
 
@@ -254,6 +258,8 @@ class DeliveryAckMessage(BaseModel):
     observation_kind: str | None = None
     observation_trigger_class: str | None = None
     observation_interview_stage: str | None = None
+    probe_budget_used: int | None = None
+    probe_budget_max: int | None = None
 
 
 class ControlSignalAckMessage(BaseModel):

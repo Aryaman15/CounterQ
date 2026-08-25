@@ -9,7 +9,7 @@ import {
   writeStoredEditorCode,
   writeStoredProblemWidth,
 } from "../hooks/localPersistence";
-import { useDemoDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
+import { useAuthoritativeDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { DemoInterviewRoomFixture } from "../models/candidate-visible";
 import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
@@ -36,8 +36,12 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
-  const remainingLabel = useDemoDeadlineTimer(fixture.serverNowIso, fixture.deadlineAtIso);
   const realtimeVoice = useRealtimeVoice();
+  const remainingLabel = useAuthoritativeDeadlineTimer(
+    realtimeVoice.serverDeadlineAt,
+    fixture.serverNowIso,
+    fixture.deadlineAtIso,
+  );
   const currentDeliveredTurn = useMemo(
     () =>
       realtimeVoice.currentCounterQDeliveryText

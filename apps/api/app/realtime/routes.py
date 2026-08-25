@@ -25,7 +25,7 @@ from app.examiner.coordinator import (
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.prompt_authorization import PromptAuthorizationError
-from app.interviews.runtime import IdempotencyConflict, InterviewRuntimeError
+from app.interviews.runtime import IdempotencyConflict, InterviewRuntime, InterviewRuntimeError
 from app.realtime.control_protocol import (
     CandidateCodeActivityIdleMessage,
     CandidateCodeActivityStartedMessage,
@@ -178,11 +178,16 @@ async def create_realtime_development_interview(
         dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
 
     interview = dev.interview_session
+    timing = await InterviewRuntime(session).time_policy(interview.id)
     return RealtimeDevelopmentBootstrapResponse(
         interview_session_id=interview.id,
+        template=dev.template,
+        configured_duration_seconds=dev.configuration.configured_duration_seconds,
         current_stage=interview.current_stage,
         state_version=interview.state_version,
         deadline_at=interview.deadline_at,
+        time_remaining_seconds=timing.time_remaining_seconds if timing else 0,
+        time_pressure=timing.pressure if timing else "NORMAL",
         control_websocket_path=f"/api/realtime/control/{interview.id}",
     )
 
@@ -492,6 +497,8 @@ async def _handle_durable_control_message(
             delivery_state=delivery_result.delivery_state,
             interview_state_version=delivery_result.interview_state_version,
             created=delivery_result.created,
+            probe_budget_used=(await service.session_budget(interview_session_id)).probes_used,
+            probe_budget_max=(await service.session_budget(interview_session_id)).max_probes,
         )
     if isinstance(message, CounterQDeliveryCompletedMessage):
         delivery_result = await service.complete_delivery(
@@ -512,6 +519,8 @@ async def _handle_durable_control_message(
             observation_kind=observation.kind if observation else None,
             observation_trigger_class=observation.trigger_class if observation else None,
             observation_interview_stage=observation.interview_stage if observation else None,
+            probe_budget_used=(await service.session_budget(interview_session_id)).probes_used,
+            probe_budget_max=(await service.session_budget(interview_session_id)).max_probes,
         )
     if isinstance(message, CounterQDeliveryInterruptedMessage):
         delivery_result = await service.interrupt_delivery(
@@ -531,6 +540,8 @@ async def _handle_durable_control_message(
             observation_kind=observation.kind if observation else None,
             observation_trigger_class=observation.trigger_class if observation else None,
             observation_interview_stage=observation.interview_stage if observation else None,
+            probe_budget_used=(await service.session_budget(interview_session_id)).probes_used,
+            probe_budget_max=(await service.session_budget(interview_session_id)).max_probes,
         )
     raise RealtimeControlError("Unsupported realtime control message")
 

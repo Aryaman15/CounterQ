@@ -1449,12 +1449,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 1 — Core Interaction Spike
+Stage 2A — Session Lifecycle + Authoritative State Machine
 
 Current Goal:
-Prove that CounterQ can observe candidate speech/code, reason over
-the exact candidate context, wait appropriately, and deliver or suppress
-a relevant technical question with correct causal provenance.
+Establish authoritative session lifecycle, timing, state versioning and
+transition history without beginning refresh/reconnect restoration or
+session completion workflows.
 ```
 
 Update only this small section as implementation progresses.

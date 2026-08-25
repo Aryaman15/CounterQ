@@ -383,6 +383,8 @@ export interface components {
         };
         /** RealtimeDevelopmentBootstrapResponse */
         RealtimeDevelopmentBootstrapResponse: {
+            /** Configured Duration Seconds */
+            configured_duration_seconds: number;
             /** Control Websocket Path */
             control_websocket_path: string;
             /** Current Stage */
@@ -405,6 +407,12 @@ export interface components {
             protocol_version: "counterq.realtime.control.v1";
             /** State Version */
             state_version: number;
+            /** Template */
+            template: string;
+            /** Time Pressure */
+            time_pressure: string;
+            /** Time Remaining Seconds */
+            time_remaining_seconds: number;
         };
         /** RealtimeTurnDetectionConfig */
         RealtimeTurnDetectionConfig: {

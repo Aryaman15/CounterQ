@@ -4,9 +4,13 @@ const MAX_PENDING_MESSAGES = 20;
 
 export type DevelopmentBootstrapResponse = {
   interview_session_id: string;
+  template: string;
+  configured_duration_seconds: number;
   current_stage: string;
   state_version: number;
   deadline_at: string;
+  time_remaining_seconds: number;
+  time_pressure: string;
   control_websocket_path: string;
   protocol_version: typeof CONTROL_PROTOCOL_VERSION;
 };
@@ -767,6 +771,8 @@ export class RealtimeControlClient {
       this.patchDebug({
         lastServerSequence: sourceWatermark ?? this.debug.lastServerSequence,
         stateVersion: stateVersion ?? this.debug.stateVersion,
+        probeBudgetUsed: numberField(message.probe_budget_used) ?? this.debug.probeBudgetUsed,
+        probeBudgetMax: numberField(message.probe_budget_max) ?? this.debug.probeBudgetMax,
         lastObservation: observationKind
           ? {
               kind: observationKind,

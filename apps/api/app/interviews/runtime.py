@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.ids import uuid7
 from app.interviews.models import (
+    InterviewConfiguration,
     InterviewerPromptDelivery,
     InterviewSession,
     InterviewStageTransition,
@@ -22,6 +23,8 @@ from app.interviews.state_machine import (
     require_transition,
     transition_may_bypass_active_delivery_guard,
 )
+from app.interviews.template_policy import template_for_duration
+from app.interviews.time_policy import TimePolicyResult, evaluate_time_policy
 from app.observation.models import InterviewEvent
 
 logger = structlog.get_logger(__name__)
@@ -150,7 +153,10 @@ class InterviewRuntime:
             interview, allow_completion=command.to_stage == "COMPLETED"
         )
         self._ensure_expected_version(interview, command.expected_state_version)
-        context = command.context or TransitionContext(trigger=command.trigger)
+        context = await self._authoritative_transition_context(
+            interview,
+            command.context or TransitionContext(trigger=command.trigger),
+        )
         require_transition(interview.current_stage, command.to_stage, context)
         await self._ensure_transition_not_ambiguous_with_active_delivery(interview.id, context)
 
@@ -204,6 +210,25 @@ class InterviewRuntime:
             state_version=new_state_version,
         )
         return transition
+
+    async def time_policy(self, session_id: UUID) -> TimePolicyResult | None:
+        interview = await self._lock_session(session_id)
+        configuration = await self._session.get(
+            InterviewConfiguration, interview.interview_configuration_id
+        )
+        if configuration is None:
+            return None
+        policy = template_for_duration(configuration.configured_duration_seconds)
+        if policy is None:
+            return None
+        stage_started_at = await self._stage_started_at(interview)
+        return evaluate_time_policy(
+            policy=policy,
+            current_stage=interview.current_stage,
+            stage_started_at=stage_started_at,
+            deadline_at=interview.deadline_at,
+            now=self._clock(),
+        )
 
     async def complete_interview(
         self,
@@ -340,3 +365,29 @@ class InterviewRuntime:
             raise ActivePromptDeliveryBlocksTransition(
                 "Normal stage transition cannot proceed while a PromptDelivery is active"
             )
+
+    async def _authoritative_transition_context(
+        self,
+        interview: InterviewSession,
+        context: TransitionContext,
+    ) -> TransitionContext:
+        timing = await self.time_policy(interview.id)
+        if timing is None:
+            return context
+        return replace(
+            context,
+            defense_reserve_reached=(
+                context.defense_reserve_reached or timing.protected_final_defense_reserve_reached
+            ),
+            wrap_only=context.wrap_only or timing.wrap_only,
+            mutation_skipped=context.mutation_skipped or timing.mutation_should_skip,
+        )
+
+    async def _stage_started_at(self, interview: InterviewSession) -> datetime:
+        latest_transition = await self._session.scalar(
+            select(InterviewStageTransition.occurred_at)
+            .where(InterviewStageTransition.interview_session_id == interview.id)
+            .order_by(InterviewStageTransition.state_version.desc())
+            .limit(1)
+        )
+        return latest_transition or interview.started_at

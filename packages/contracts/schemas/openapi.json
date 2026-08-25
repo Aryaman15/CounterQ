@@ -937,6 +937,10 @@
       },
       "RealtimeDevelopmentBootstrapResponse": {
         "properties": {
+          "configured_duration_seconds": {
+            "title": "Configured Duration Seconds",
+            "type": "integer"
+          },
           "control_websocket_path": {
             "title": "Control Websocket Path",
             "type": "string"
@@ -964,13 +968,29 @@
           "state_version": {
             "title": "State Version",
             "type": "integer"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          },
+          "time_pressure": {
+            "title": "Time Pressure",
+            "type": "string"
+          },
+          "time_remaining_seconds": {
+            "title": "Time Remaining Seconds",
+            "type": "integer"
           }
         },
         "required": [
           "interview_session_id",
+          "template",
+          "configured_duration_seconds",
           "current_stage",
           "state_version",
           "deadline_at",
+          "time_remaining_seconds",
+          "time_pressure",
           "control_websocket_path"
         ],
         "title": "RealtimeDevelopmentBootstrapResponse",
