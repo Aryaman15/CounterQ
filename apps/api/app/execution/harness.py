@@ -46,9 +46,10 @@ def _harness(language: str, values: list[str]) -> str:
 int main() {
     Solution solution;
     vector<string> cases = {__CASES__};
-    for (size_t index = 0; index < cases.size(); ++index)
+    for (size_t index = 0; index < cases.size(); ++index) {
         int actual = solution.lengthOfLongestSubstring(cases[index]);
         cout << "COUNTERQ_CASE\\t" << index + 1 << "\\t" << actual << "\\n";
+    }
 }
 """.replace("__CASES__", ", ".join(values))
     if language == "python":
@@ -63,9 +64,10 @@ public class Main {
     public static void main(String[] args) {
         Solution solution = new Solution();
         String[] cases = {__CASES__};
-        for (int index = 0; index < cases.length; index++)
+        for (int index = 0; index < cases.length; index++) {
             int actual = solution.lengthOfLongestSubstring(cases[index]);
             System.out.println("COUNTERQ_CASE\\t" + (index + 1) + "\\t" + actual);
+        }
     }
 }
 """.replace("__CASES__", ", ".join(values))

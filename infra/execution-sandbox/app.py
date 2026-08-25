@@ -69,6 +69,7 @@ class CppAdapter(LanguageAdapter):
 
 class PythonAdapter(LanguageAdapter):
     language, runtime_version = "python", "Python 3"
+    run_process_limit = 32
 
     def prepare(self, workdir: Path, source: str, harness: str) -> None:
         (workdir / "candidate.py").write_text(source + "\n" + harness, encoding="utf-8")
@@ -110,10 +111,28 @@ _ADAPTERS: dict[str, LanguageAdapter] = {
 
 @app.get("/health")
 def health() -> dict[str, object]:
-    return {
-        "status": "READY",
-        "languages": {language: adapter.runtime_version for language, adapter in _ADAPTERS.items()},
+    languages = {
+        language: _runtime_version(adapter)
+        for language, adapter in _ADAPTERS.items()
     }
+    return {
+        "status": "READY" if all(languages.values()) else "UNAVAILABLE",
+        "languages": languages,
+    }
+
+
+def _runtime_version(adapter: LanguageAdapter) -> str | None:
+    command = {
+        "cpp": ["g++", "--version"],
+        "python": ["python3", "--version"],
+        "java": ["java", "-version"],
+    }[adapter.language]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=2, check=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    version = (result.stdout or result.stderr).splitlines()
+    return version[0] if version else None
 
 
 @app.post("/execute")
