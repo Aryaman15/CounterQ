@@ -269,10 +269,22 @@ const fakeSessionResponse = {
 
 const fakeDevelopmentBootstrap = {
   interview_session_id: "session-1",
+  template: "STANDARD_CODING_INTERVIEW",
+  configured_duration_seconds: 1800,
   current_stage: "IMPLEMENTATION",
   state_version: 0,
   deadline_at: "2026-08-24T12:30:00Z",
+  time_remaining_seconds: 1800,
+  time_pressure: "NORMAL",
   control_websocket_path: "/api/realtime/control/session-1",
+  restoration: "CREATED" as const,
+  restore_protocol_version: "session.restore.v1" as const,
+  started_at: "2026-08-24T12:00:00Z",
+  latest_code_snapshot: null,
+  recent_conversation: [],
+  unresolved_prompt: null,
+  highest_client_sequence: 0,
+  last_server_sequence: 0,
   protocol_version: "counterq.realtime.control.v1" as const,
 };
 
@@ -382,6 +394,7 @@ async function connectedControlClient(): Promise<{
     storage: {
       getItem: () => "client-instance",
       setItem: vi.fn(),
+      removeItem: vi.fn(),
     },
     randomUUID: () => "stable-id",
   });
@@ -442,6 +455,7 @@ describe("Realtime voice foundation", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
     FakeControlWebSocket.instances.length = 0;
+    window.sessionStorage.clear();
   });
 
   it("starts Ready, not falsely Listening", () => {
@@ -1061,6 +1075,95 @@ describe("Realtime voice foundation", () => {
         }),
       }),
     );
+  });
+
+  it("restores a stored development session and preserves pending durable identity", async () => {
+    const storage = new Map<string, string>([
+      ["counterq:realtime-control:development-session-id", "session-1"],
+      ["counterq:realtime-control:client-instance-id", "client-instance"],
+    ]);
+    const storageAdapter = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+      removeItem: (key: string) => storage.delete(key),
+    };
+    const restoredBootstrap = {
+      ...fakeDevelopmentBootstrap,
+      restoration: "RESTORED" as const,
+      latest_code_snapshot: {
+        id: "snapshot-1",
+        version_number: 3,
+        language: "cpp",
+        source_code: "class Solution {};",
+        content_hash: "hash-1",
+      },
+      highest_client_sequence: 4,
+      last_server_sequence: 9,
+    };
+    let bootstrapBody = "";
+    const firstFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bootstrapBody = String(init?.body ?? "");
+      return new Response(JSON.stringify(restoredBootstrap));
+    });
+    const first = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: firstFetch as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: storageAdapter,
+      randomUUID: () => "stable-id",
+    });
+    const firstConnect = first.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(0));
+    const firstSocket = FakeControlWebSocket.instances.at(-1)!;
+    firstSocket.open();
+    firstSocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 9,
+      probe_budget_used: 1,
+      probe_budget_max: 5,
+    });
+    await firstConnect;
+    expect(JSON.parse(bootstrapBody)).toMatchObject({
+      interview_session_id: "session-1",
+      client_instance_id: "client-instance",
+    });
+
+    first.sendCandidateTranscriptFinal({
+      providerItemId: "restore-item-1",
+      contentIndex: 0,
+      transcript: "A pending durable transcript.",
+    });
+    const pending = lastSentControlMessage(firstSocket, "candidate_transcript_finalized");
+    expect(pending.client_sequence).toBe(6);
+
+    const secondFetch = vi.fn(async () => new Response(JSON.stringify(restoredBootstrap)));
+    const second = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: secondFetch as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: storageAdapter,
+      randomUUID: () => "next-id",
+    });
+    const secondConnect = second.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(1));
+    const secondSocket = FakeControlWebSocket.instances.at(-1)!;
+    secondSocket.open();
+    secondSocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 9,
+      probe_budget_used: 1,
+      probe_budget_max: 5,
+    });
+    await secondConnect;
+
+    expect(secondSocket.send).toHaveBeenCalledWith(expect.stringContaining(String(pending.client_event_id)));
+    expect(second.pendingCount).toBe(1);
   });
 
   it("control client requests policy gate, then delivery permit before speaking", async () => {
@@ -1684,6 +1787,23 @@ describe("Realtime voice foundation", () => {
     );
     expect(sendSnapshot).toHaveBeenCalledTimes(2);
     live.unmount();
+  });
+
+  it("does not emit a snapshot merely because canonical restore hydrated Monaco", () => {
+    const sendSnapshot = vi.fn();
+    function Harness() {
+      useCodeObservationCollector({
+        sourceCode: "class Solution {};",
+        canonicalSourceCode: "class Solution {};",
+        controlReady: true,
+        sendSnapshot,
+      });
+      return null;
+    }
+
+    render(<Harness />);
+
+    expect(sendSnapshot).not.toHaveBeenCalled();
   });
 
   it("coalesces short natural pauses into one code observation containing the final source", async () => {

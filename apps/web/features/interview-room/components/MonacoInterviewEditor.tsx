@@ -14,9 +14,10 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 type MonacoInterviewEditorProps = {
   value: string;
   onChange: (value: string) => void;
+  readOnly?: boolean;
 };
 
-export function MonacoInterviewEditor({ value, onChange }: MonacoInterviewEditorProps) {
+export function MonacoInterviewEditor({ value, onChange, readOnly = false }: MonacoInterviewEditorProps) {
   return (
     <div className="editor-shell" data-testid="monaco-editor-surface">
       <MonacoEditor
@@ -38,6 +39,7 @@ export function MonacoInterviewEditor({ value, onChange }: MonacoInterviewEditor
           padding: { top: 18, bottom: 18 },
           quickSuggestions: true,
           renderLineHighlight: "line",
+          readOnly,
           scrollBeyondLastLine: false,
           smoothScrolling: true,
           tabSize: 4,

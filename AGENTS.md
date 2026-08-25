@@ -1449,12 +1449,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 2A — Session Lifecycle + Authoritative State Machine
+Stage 2B — Refresh + Reconnect + Session Restoration
 
 Current Goal:
-Establish authoritative session lifecycle, timing, state versioning and
-transition history without beginning refresh/reconnect restoration or
-session completion workflows.
+Restore one active interview from PostgreSQL across browser refresh and short
+control reconnects without resetting durable session, code, timing, budget or
+candidate-visible delivery truth.
 ```
 
 Update only this small section as implementation progresses.

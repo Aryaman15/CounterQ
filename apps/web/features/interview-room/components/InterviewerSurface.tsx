@@ -29,7 +29,7 @@ type InterviewerSurfaceProps = {
   lastFinalTranscript: string;
   sessionDebug: RealtimeSessionDebug;
   canonicalDebug: CanonicalControlDebug;
-  currentTurn: DeliveredInterviewerTurn;
+  currentTurn: DeliveredInterviewerTurn | null;
   onEnableMicrophone: () => Promise<void>;
   onMute: () => void;
   onUnmute: () => void;
@@ -214,10 +214,18 @@ export function InterviewerSurface({
         {voiceError ? <p className="voice-error">{voiceError}</p> : null}
       </div>
       <div className="active-prompt">
-        <p id="current-question-title" className="active-prompt-label">
-          CounterQ
-        </p>
-        <p className="active-prompt-text">{renderDeliveredText(currentTurn.actualText)}</p>
+        {currentTurn ? (
+          <>
+            <p id="current-question-title" className="active-prompt-label">
+              CounterQ
+            </p>
+            <p className="active-prompt-text">{renderDeliveredText(currentTurn.actualText)}</p>
+          </>
+        ) : (
+          <p id="current-question-title" className="active-prompt-label">
+            CounterQ is ready when needed.
+          </p>
+        )}
       </div>
       <button type="button" className="conversation-button" onClick={onOpenConversation}>
         <History size={16} aria-hidden="true" />

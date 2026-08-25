@@ -25,7 +25,12 @@ from app.examiner.coordinator import (
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.prompt_authorization import PromptAuthorizationError
-from app.interviews.runtime import IdempotencyConflict, InterviewRuntime, InterviewRuntimeError
+from app.interviews.restoration import (
+    RESTORE_PROTOCOL_VERSION,
+    DevelopmentInterviewNotResumable,
+    SessionRestorationService,
+)
+from app.interviews.runtime import IdempotencyConflict, InterviewRuntimeError
 from app.realtime.control_protocol import (
     CandidateCodeActivityIdleMessage,
     CandidateCodeActivityStartedMessage,
@@ -52,6 +57,9 @@ from app.realtime.control_protocol import (
     RealtimeDevelopmentBootstrapResponse,
     RealtimeDisconnectedMessage,
     RealtimeReconnectedMessage,
+    RestoredCodeSnapshotMessage,
+    RestoredConversationTurnMessage,
+    RestoredUnresolvedPromptMessage,
     ServerHelloMessage,
     client_control_message_adapter,
 )
@@ -161,7 +169,7 @@ async def create_realtime_session(
     response_model=RealtimeDevelopmentBootstrapResponse,
 )
 async def create_realtime_development_interview(
-    _request: RealtimeDevelopmentBootstrapRequest,
+    request: RealtimeDevelopmentBootstrapRequest,
     settings: Annotated[Settings, Depends(get_settings)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> RealtimeDevelopmentBootstrapResponse:
@@ -174,21 +182,75 @@ async def create_realtime_development_interview(
             },
         )
 
-    async with session.begin():
-        dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+    restoration = "RESTORED" if request.interview_session_id is not None else "CREATED"
+    try:
+        async with session.begin():
+            if request.interview_session_id is None:
+                dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+                interview_session_id = dev.interview_session.id
+            else:
+                interview_session_id = request.interview_session_id
+            restored = await SessionRestorationService(session).restore(
+                interview_session_id=interview_session_id,
+                client_instance_id=request.client_instance_id,
+                reconcile_orphaned_deliveries=request.interview_session_id is not None,
+            )
+    except DevelopmentInterviewNotResumable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "category": "development_session_not_resumable",
+                "message": "The requested development interview is not available to restore",
+            },
+        ) from exc
 
-    interview = dev.interview_session
-    timing = await InterviewRuntime(session).time_policy(interview.id)
+    interview = restored.interview
     return RealtimeDevelopmentBootstrapResponse(
         interview_session_id=interview.id,
-        template=dev.template,
-        configured_duration_seconds=dev.configuration.configured_duration_seconds,
+        template=restored.template,
+        configured_duration_seconds=interview.configuration.configured_duration_seconds,
         current_stage=interview.current_stage,
         state_version=interview.state_version,
         deadline_at=interview.deadline_at,
-        time_remaining_seconds=timing.time_remaining_seconds if timing else 0,
-        time_pressure=timing.pressure if timing else "NORMAL",
+        time_remaining_seconds=restored.time_remaining_seconds,
+        time_pressure=restored.time_pressure,
         control_websocket_path=f"/api/realtime/control/{interview.id}",
+        restoration=restoration,
+        restore_protocol_version=RESTORE_PROTOCOL_VERSION,
+        started_at=interview.started_at,
+        latest_code_snapshot=(
+            RestoredCodeSnapshotMessage(
+                id=restored.code_snapshot.id,
+                version_number=restored.code_snapshot.version_number,
+                language=restored.code_snapshot.language,
+                source_code=restored.code_snapshot.source_code,
+                content_hash=restored.code_snapshot.content_hash,
+            )
+            if restored.code_snapshot is not None
+            else None
+        ),
+        recent_conversation=[
+            RestoredConversationTurnMessage(
+                id=turn.id,
+                speaker=turn.speaker,
+                text=turn.text,
+                sequence=turn.sequence,
+                occurred_at=turn.occurred_at,
+                delivery_state=turn.delivery_state,
+            )
+            for turn in restored.conversation
+        ],
+        unresolved_prompt=(
+            RestoredUnresolvedPromptMessage(
+                id=restored.unresolved_prompt.id,
+                kind=restored.unresolved_prompt.kind,
+                status="AUTHORIZED",
+            )
+            if restored.unresolved_prompt is not None
+            else None
+        ),
+        highest_client_sequence=restored.highest_client_sequence,
+        last_server_sequence=interview.last_server_sequence,
     )
 
 

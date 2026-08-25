@@ -11,7 +11,7 @@ import {
 } from "../hooks/localPersistence";
 import { useAuthoritativeDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
-import type { DemoInterviewRoomFixture } from "../models/candidate-visible";
+import type { DeliveredConversationRow, DemoInterviewRoomFixture } from "../models/candidate-visible";
 import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
@@ -33,6 +33,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const [endDialogOpen, setEndDialogOpen] = useState(false);
   const [executionExpanded, setExecutionExpanded] = useState(false);
   const [hasAttemptedRun, setHasAttemptedRun] = useState(false);
+  const [editorHydrated, setEditorHydrated] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const prefersReducedMotion = usePrefersReducedMotion();
@@ -42,20 +43,67 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     fixture.serverNowIso,
     fixture.deadlineAtIso,
   );
-  const currentDeliveredTurn = useMemo(
-    () =>
-      realtimeVoice.currentCounterQDeliveryText
-        ? {
-            ...fixture.currentDeliveredTurn,
-            actualText: realtimeVoice.currentCounterQDeliveryText,
-          }
-        : fixture.currentDeliveredTurn,
-    [fixture.currentDeliveredTurn, realtimeVoice.currentCounterQDeliveryText],
+  const currentDeliveredTurn = useMemo(() => {
+      const restoredTurn = realtimeVoice.restoredBootstrap?.recent_conversation
+        .filter((turn) => turn.speaker === "COUNTERQ")
+        .at(-1);
+      if (realtimeVoice.currentCounterQDeliveryText) {
+        return { ...fixture.currentDeliveredTurn, actualText: realtimeVoice.currentCounterQDeliveryText };
+      }
+      if (restoredTurn) {
+        const deliveryState: "DELIVERED" | "INTERRUPTED" =
+          restoredTurn.delivery_state === "INTERRUPTED" ? "INTERRUPTED" : "DELIVERED";
+        return {
+          id: restoredTurn.id,
+          speaker: "CounterQ" as const,
+          actualText: restoredTurn.text,
+          actualTranscriptSegmentId: restoredTurn.id,
+          deliveredAtLabel: "Restored",
+          deliveryState,
+        };
+      }
+      return realtimeVoice.restoredBootstrap ? null : fixture.currentDeliveredTurn;
+    },
+    [
+      fixture.currentDeliveredTurn,
+      realtimeVoice.currentCounterQDeliveryText,
+      realtimeVoice.restoredBootstrap,
+    ],
+  );
+
+  const recentConversation = useMemo(
+    (): DeliveredConversationRow[] => {
+      if (!realtimeVoice.restoredBootstrap) {
+        return fixture.recentConversation;
+      }
+      return realtimeVoice.restoredBootstrap.recent_conversation.map((turn) => {
+        if (turn.speaker === "COUNTERQ") {
+          return {
+            id: turn.id,
+            speaker: "CounterQ",
+            actualText: turn.text,
+            actualTranscriptSegmentId: turn.id,
+            deliveredAtLabel: "Restored",
+            deliveryState: turn.delivery_state === "INTERRUPTED" ? "INTERRUPTED" : "DELIVERED",
+          };
+        }
+        return {
+          id: turn.id,
+          speaker: "Candidate",
+          actualText: turn.text,
+          actualTranscriptSegmentId: turn.id,
+          deliveredAtLabel: "Restored",
+        };
+      });
+    },
+    [fixture.recentConversation, realtimeVoice.restoredBootstrap],
   );
 
   useCodeObservationCollector({
     sourceCode: editorCode,
     controlReady: realtimeVoice.canonicalDebug.controlConnected,
+    hydrated: editorHydrated,
+    canonicalSourceCode: realtimeVoice.restoredBootstrap?.latest_code_snapshot?.source_code ?? null,
     sendSnapshot: realtimeVoice.observeCodeSnapshot,
     noteActivityStarted: realtimeVoice.noteCodeActivityStarted,
     noteActivityIdle: realtimeVoice.noteCodeActivityIdle,
@@ -65,6 +113,19 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     setProblemWidth(readStoredProblemWidth(window.localStorage));
     setEditorCode(readStoredEditorCode(window.localStorage, fixture.starterCode));
   }, [fixture.starterCode]);
+
+  useEffect(() => {
+    if (realtimeVoice.restoredBootstrap) {
+      setEditorCode(
+        realtimeVoice.restoredBootstrap.latest_code_snapshot?.source_code ?? fixture.starterCode,
+      );
+      setEditorHydrated(true);
+      return;
+    }
+    if (realtimeVoice.isRestoring) {
+      setEditorHydrated(false);
+    }
+  }, [fixture.starterCode, realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap]);
 
   const persistProblemWidth = useCallback((nextWidth: number) => {
     setProblemWidth(writeStoredProblemWidth(window.localStorage, nextWidth));
@@ -145,7 +206,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
         onEndInterview={() => setEndDialogOpen(true)}
       />
 
-      <div ref={workspaceRef} className="workspace" style={workspaceStyle}>
+      <div ref={workspaceRef} className="workspace" style={workspaceStyle} aria-busy={realtimeVoice.isRestoring}>
         <ProblemPanel problem={fixture.problem} />
         <div
           className="workspace-resizer"
@@ -174,7 +235,11 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
               <span className="local-state">{fixture.persistenceState}</span>
             </div>
           </div>
-          <MonacoInterviewEditor value={editorCode} onChange={handleEditorChange} />
+          <MonacoInterviewEditor
+            value={editorCode}
+            onChange={handleEditorChange}
+            readOnly={realtimeVoice.isRestoring}
+          />
           <ExecutionPanel
             expanded={executionExpanded}
             hasAttemptedRun={hasAttemptedRun}
@@ -207,9 +272,12 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       />
       <RecentConversationDrawer
         open={conversationOpen}
-        rows={fixture.recentConversation}
+        rows={recentConversation}
         onClose={() => setConversationOpen(false)}
       />
+      {realtimeVoice.isRestoring ? (
+        <p className="restore-status" role="status">Restoring interview...</p>
+      ) : null}
       <EndInterviewDialog
         open={endDialogOpen}
         onCancel={() => setEndDialogOpen(false)}

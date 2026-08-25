@@ -7,6 +7,7 @@ import type { VoicePresenceState } from "../models/candidate-visible";
 import {
   RealtimeControlClient,
   type CanonicalControlDebug,
+  type DevelopmentBootstrapResponse,
 } from "./RealtimeControlClient";
 import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceClient";
 
@@ -27,6 +28,9 @@ export type RealtimeVoiceControls = {
   sessionDebug: RealtimeSessionDebug;
   canonicalDebug: CanonicalControlDebug;
   serverDeadlineAt: string | null;
+  restoredBootstrap: DevelopmentBootstrapResponse | null;
+  isRestoring: boolean;
+  controlReconnecting: boolean;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -74,6 +78,11 @@ export function useRealtimeVoice(
     emptyCanonicalDebug(),
   );
   const [serverDeadlineAt, setServerDeadlineAt] = useState<string | null>(null);
+  const [restoredBootstrap, setRestoredBootstrap] = useState<DevelopmentBootstrapResponse | null>(
+    null,
+  );
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [controlReconnecting, setControlReconnecting] = useState(false);
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const controlClientRef = useRef<RealtimeControlClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -128,6 +137,17 @@ export function useRealtimeVoice(
     unsubscribeControlRef.current = controlClient.on((event) => {
       if (event.type === "connected") {
         setServerDeadlineAt(event.bootstrap.deadline_at);
+        setRestoredBootstrap(event.bootstrap);
+        setIsRestoring(false);
+        setControlReconnecting(false);
+        return;
+      }
+      if (event.type === "reconnecting") {
+        setControlReconnecting(true);
+        return;
+      }
+      if (event.type === "disconnected") {
+        setControlReconnecting(true);
         return;
       }
       if (event.type === "debug_updated") {
@@ -153,6 +173,7 @@ export function useRealtimeVoice(
   const enableMicrophone = useCallback(async () => {
     setErrorMessage(null);
     setActivityState("Connecting");
+    setIsRestoring(true);
     const controlClient = ensureControlClient();
     const client = ensureClient();
     try {
@@ -160,6 +181,7 @@ export function useRealtimeVoice(
       await client.connect();
     } catch (error) {
       setActivityState("Error");
+      setIsRestoring(false);
       setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
@@ -191,6 +213,9 @@ export function useRealtimeVoice(
     activeTranscriptKeyRef.current = null;
     setCanonicalDebug(emptyCanonicalDebug());
     setServerDeadlineAt(null);
+    setRestoredBootstrap(null);
+    setIsRestoring(false);
+    setControlReconnecting(false);
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -241,6 +266,9 @@ export function useRealtimeVoice(
     sessionDebug,
     canonicalDebug,
     serverDeadlineAt,
+    restoredBootstrap,
+    isRestoring,
+    controlReconnecting,
     enableMicrophone,
     mute,
     unmute,

@@ -7,6 +7,8 @@ export const CODE_EDIT_BURST_IDLE_MS = 2500;
 type UseCodeObservationCollectorOptions = {
   sourceCode: string;
   controlReady: boolean;
+  hydrated?: boolean;
+  canonicalSourceCode?: string | null;
   sendSnapshot: (
     sourceCode: string,
     trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
@@ -21,6 +23,8 @@ type UseCodeObservationCollectorOptions = {
 export function useCodeObservationCollector({
   sourceCode,
   controlReady,
+  hydrated = true,
+  canonicalSourceCode = null,
   sendSnapshot,
   noteActivityStarted,
   noteActivityIdle,
@@ -33,12 +37,15 @@ export function useCodeObservationCollector({
   const burstCounterRef = useRef(0);
 
   useEffect(() => {
-    if (!controlReady) {
+    if (!controlReady || !hydrated) {
       return;
     }
     if (!hasSentInitialRef.current) {
       hasSentInitialRef.current = true;
       lastSubmittedSourceRef.current = sourceCode;
+      if (canonicalSourceCode === sourceCode) {
+        return;
+      }
       sendSnapshot(
         sourceCode,
         "INITIAL_EDITOR_STATE",
@@ -74,6 +81,8 @@ export function useCodeObservationCollector({
     }, delayMs);
   }, [
     controlReady,
+    canonicalSourceCode,
+    hydrated,
     delayMs,
     noteActivityIdle,
     noteActivityStarted,

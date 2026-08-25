@@ -1,19 +1,27 @@
+import type { components } from "@counterq/contracts/openapi";
+
 export const CONTROL_PROTOCOL_VERSION = "counterq.realtime.control.v1";
 const CLIENT_INSTANCE_STORAGE_KEY = "counterq:realtime-control:client-instance-id";
+const DEVELOPMENT_SESSION_STORAGE_KEY = "counterq:realtime-control:development-session-id";
+const CLIENT_SEQUENCE_STORAGE_PREFIX = "counterq:realtime-control:client-sequence:";
+const PENDING_STORAGE_PREFIX = "counterq:realtime-control:pending:";
 const MAX_PENDING_MESSAGES = 20;
+const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAY_MS = 750;
 
-export type DevelopmentBootstrapResponse = {
-  interview_session_id: string;
-  template: string;
-  configured_duration_seconds: number;
-  current_stage: string;
-  state_version: number;
-  deadline_at: string;
-  time_remaining_seconds: number;
-  time_pressure: string;
-  control_websocket_path: string;
-  protocol_version: typeof CONTROL_PROTOCOL_VERSION;
-};
+type GeneratedDevelopmentBootstrapResponse =
+  components["schemas"]["RealtimeDevelopmentBootstrapResponse"];
+
+export type DevelopmentBootstrapResponse = Omit<
+  GeneratedDevelopmentBootstrapResponse,
+  "latest_code_snapshot" | "unresolved_prompt"
+> &
+  Required<
+    Pick<
+      GeneratedDevelopmentBootstrapResponse,
+      "latest_code_snapshot" | "unresolved_prompt"
+    >
+  >;
 
 export type AuthorizedDevelopmentPrompt = {
   promptId: string;
@@ -112,6 +120,7 @@ export type CanonicalControlDebug = {
 
 export type RealtimeControlEvent =
   | { type: "connected"; bootstrap: DevelopmentBootstrapResponse }
+  | { type: "reconnecting" }
   | { type: "disconnected" }
   | { type: "debug_updated"; debug: CanonicalControlDebug }
   | { type: "authorized_prompt"; prompt: AuthorizedDevelopmentPrompt }
@@ -131,7 +140,7 @@ export type RealtimeControlClientOptions = {
   apiBaseUrl: string;
   fetchFn?: typeof fetch;
   websocketFactory?: (url: string) => ControlWebSocket;
-  storage?: Pick<Storage, "getItem" | "setItem">;
+  storage?: Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>;
   randomUUID?: () => string;
 };
 
@@ -175,7 +184,9 @@ export class RealtimeControlClient {
   private readonly apiBaseUrl: string;
   private readonly fetchFn: typeof fetch;
   private readonly websocketFactory: (url: string) => ControlWebSocket;
-  private readonly storage: Pick<Storage, "getItem" | "setItem"> | undefined;
+  private readonly storage:
+    | (Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>)
+    | undefined;
   private readonly randomUUID: () => string;
   private readonly listeners = new Set<RealtimeControlListener>();
   private readonly pending = new Map<string, PendingEnvelope>();
@@ -183,6 +194,9 @@ export class RealtimeControlClient {
   private bootstrap: DevelopmentBootstrapResponse | null = null;
   private controlReady = false;
   private clientSequence = 0;
+  private reconnectAttempts = 0;
+  private reconnectTimer: number | null = null;
+  private manualDisconnect = false;
   private activeDelivery: ActivePromptDelivery | null = null;
   private debug: CanonicalControlDebug = emptyDebug();
 
@@ -205,26 +219,53 @@ export class RealtimeControlClient {
 
   async connectDevelopmentInterview(): Promise<DevelopmentBootstrapResponse> {
     if (!this.bootstrap) {
+      await this.bootstrapDevelopmentInterview();
+    }
+
+    this.manualDisconnect = false;
+    await this.openWebSocket();
+    return this.bootstrap!;
+  }
+
+  private async bootstrapDevelopmentInterview(): Promise<void> {
+    const storedSessionId = this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY) ?? null;
+    const request = async (interviewSessionId: string | null) => {
       const response = await this.fetchFn(`${this.apiBaseUrl}/api/realtime/development-interview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ purpose: "interview_demo" }),
+        body: JSON.stringify({
+          purpose: "interview_demo",
+          interview_session_id: interviewSessionId,
+          client_instance_id: this.clientInstanceId(),
+          last_acknowledged_server_sequence: this.debug.lastServerSequence,
+        }),
       });
-      if (!response.ok) {
-        throw new Error("CounterQ could not create a development interview session.");
-      }
-      this.bootstrap = (await response.json()) as DevelopmentBootstrapResponse;
-      this.patchDebug({
-        sessionId: this.bootstrap.interview_session_id,
-        stateVersion: this.bootstrap.state_version,
-      });
+      return response;
+    };
+    let response = await request(storedSessionId);
+    if (response.status === 404 && storedSessionId) {
+      this.storage?.removeItem?.(DEVELOPMENT_SESSION_STORAGE_KEY);
+      response = await request(null);
     }
-
-    await this.openWebSocket();
-    return this.bootstrap;
+    if (!response.ok) {
+        throw new Error("CounterQ could not create a development interview session.");
+    }
+    this.bootstrap = (await response.json()) as DevelopmentBootstrapResponse;
+    this.storage?.setItem(DEVELOPMENT_SESSION_STORAGE_KEY, this.bootstrap.interview_session_id);
+    this.loadClientState(this.bootstrap);
+    this.patchDebug({
+      sessionId: this.bootstrap.interview_session_id,
+      stateVersion: this.bootstrap.state_version,
+      lastServerSequence: this.bootstrap.last_server_sequence,
+    });
   }
 
   disconnect(): void {
+    this.manualDisconnect = true;
+    if (this.reconnectTimer !== null) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.websocket?.close();
     this.websocket = null;
     this.controlReady = false;
@@ -582,6 +623,9 @@ export class RealtimeControlClient {
         this.controlReady = false;
         this.patchDebug({ controlConnected: false });
         this.emit({ type: "disconnected" });
+        if (!this.manualDisconnect) {
+          this.scheduleReconnect();
+        }
       }
     });
 
@@ -623,6 +667,7 @@ export class RealtimeControlClient {
       }
       this.pending.delete(oldest);
     }
+    this.persistPending();
     this.patchDebug({ pendingDurableMessages: this.pending.size });
     this.sendNow(wrapped);
     return clientEventId;
@@ -630,6 +675,7 @@ export class RealtimeControlClient {
 
   private wrapMessage(message: Record<string, unknown>): Record<string, unknown> {
     this.clientSequence += 1;
+    this.persistClientSequence();
     return {
       protocol_version: CONTROL_PROTOCOL_VERSION,
       client_event_id: `ctrl-${this.clientSequence}-${this.randomUUID()}`,
@@ -898,6 +944,7 @@ export class RealtimeControlClient {
       if (clientEventId) {
         const pendingMessage = this.pending.get(clientEventId)?.message;
         this.pending.delete(clientEventId);
+        this.persistPending();
         this.patchDebug({ pendingDurableMessages: this.pending.size });
         if (pendingMessage?.type === "candidate_code_snapshot") {
           this.patchDebug({
@@ -928,6 +975,7 @@ export class RealtimeControlClient {
 
   private ackPending(clientEventId: string): void {
     this.pending.delete(clientEventId);
+    this.persistPending();
     this.patchDebug({ pendingDurableMessages: this.pending.size });
   }
 
@@ -1015,6 +1063,70 @@ export class RealtimeControlClient {
     const next = this.randomUUID();
     this.storage?.setItem(CLIENT_INSTANCE_STORAGE_KEY, next);
     return next;
+  }
+
+  private loadClientState(bootstrap: DevelopmentBootstrapResponse): void {
+    const sequenceKey = `${CLIENT_SEQUENCE_STORAGE_PREFIX}${bootstrap.interview_session_id}`;
+    const storedSequence = Number.parseInt(this.storage?.getItem(sequenceKey) ?? "0", 10);
+    this.clientSequence = Math.max(
+      Number.isFinite(storedSequence) ? storedSequence : 0,
+      bootstrap.highest_client_sequence,
+    );
+    this.persistClientSequence();
+    this.pending.clear();
+    const stored = this.storage?.getItem(`${PENDING_STORAGE_PREFIX}${bootstrap.interview_session_id}`);
+    if (stored) {
+      try {
+        const envelopes = JSON.parse(stored) as PendingEnvelope[];
+        for (const envelope of envelopes.slice(-MAX_PENDING_MESSAGES)) {
+          if (envelope.clientEventId && envelope.message) {
+            this.pending.set(envelope.clientEventId, envelope);
+          }
+        }
+      } catch {
+        this.storage?.removeItem?.(`${PENDING_STORAGE_PREFIX}${bootstrap.interview_session_id}`);
+      }
+    }
+    this.patchDebug({ pendingDurableMessages: this.pending.size });
+  }
+
+  private persistClientSequence(): void {
+    if (!this.bootstrap) {
+      return;
+    }
+    this.storage?.setItem(
+      `${CLIENT_SEQUENCE_STORAGE_PREFIX}${this.bootstrap.interview_session_id}`,
+      String(this.clientSequence),
+    );
+  }
+
+  private persistPending(): void {
+    if (!this.bootstrap) {
+      return;
+    }
+    this.storage?.setItem(
+      `${PENDING_STORAGE_PREFIX}${this.bootstrap.interview_session_id}`,
+      JSON.stringify([...this.pending.values()].slice(-MAX_PENDING_MESSAGES)),
+    );
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnectTimer !== null || this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      return;
+    }
+    this.reconnectAttempts += 1;
+    this.emit({ type: "reconnecting" });
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = null;
+      // Re-read the candidate-safe canonical projection before reopening control.
+      // This reconciles missed server ordering without replaying hidden events.
+      void this.bootstrapDevelopmentInterview()
+        .then(() => this.openWebSocket())
+        .then(() => {
+          this.reconnectAttempts = 0;
+        })
+        .catch(() => this.scheduleReconnect());
+    }, RECONNECT_DELAY_MS);
   }
 
   private patchDebug(patch: Partial<CanonicalControlDebug>): void {

@@ -374,6 +374,12 @@ export interface components {
         };
         /** RealtimeDevelopmentBootstrapRequest */
         RealtimeDevelopmentBootstrapRequest: {
+            /** Client Instance Id */
+            client_instance_id?: string | null;
+            /** Interview Session Id */
+            interview_session_id?: string | null;
+            /** Last Acknowledged Server Sequence */
+            last_acknowledged_server_sequence?: number | null;
             /**
              * Purpose
              * @default interview_demo
@@ -394,17 +400,40 @@ export interface components {
              * Format: date-time
              */
             deadline_at: string;
+            /** Highest Client Sequence */
+            highest_client_sequence: number;
             /**
              * Interview Session Id
              * Format: uuid
              */
             interview_session_id: string;
+            /** Last Server Sequence */
+            last_server_sequence: number;
+            latest_code_snapshot?: components["schemas"]["RestoredCodeSnapshotMessage"] | null;
             /**
              * Protocol Version
              * @default counterq.realtime.control.v1
              * @constant
              */
             protocol_version: "counterq.realtime.control.v1";
+            /** Recent Conversation */
+            recent_conversation: components["schemas"]["RestoredConversationTurnMessage"][];
+            /**
+             * Restoration
+             * @enum {string}
+             */
+            restoration: "CREATED" | "RESTORED";
+            /**
+             * Restore Protocol Version
+             * @default session.restore.v1
+             * @constant
+             */
+            restore_protocol_version: "session.restore.v1";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
             /** State Version */
             state_version: number;
             /** Template */
@@ -413,6 +442,7 @@ export interface components {
             time_pressure: string;
             /** Time Remaining Seconds */
             time_remaining_seconds: number;
+            unresolved_prompt?: components["schemas"]["RestoredUnresolvedPromptMessage"] | null;
         };
         /** RealtimeTurnDetectionConfig */
         RealtimeTurnDetectionConfig: {
@@ -436,6 +466,61 @@ export interface components {
              * @constant
              */
             type: "semantic_vad";
+        };
+        /** RestoredCodeSnapshotMessage */
+        RestoredCodeSnapshotMessage: {
+            /** Content Hash */
+            content_hash: string;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Language */
+            language: string;
+            /** Source Code */
+            source_code: string;
+            /** Version Number */
+            version_number: number;
+        };
+        /** RestoredConversationTurnMessage */
+        RestoredConversationTurnMessage: {
+            /** Delivery State */
+            delivery_state?: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Occurred At
+             * Format: date-time
+             */
+            occurred_at: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Speaker
+             * @enum {string}
+             */
+            speaker: "CANDIDATE" | "COUNTERQ";
+            /** Text */
+            text: string;
+        };
+        /** RestoredUnresolvedPromptMessage */
+        RestoredUnresolvedPromptMessage: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "AUTHORIZED";
         };
         /** ValidationError */
         ValidationError: {

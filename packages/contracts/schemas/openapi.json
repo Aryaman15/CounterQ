@@ -925,6 +925,43 @@
       },
       "RealtimeDevelopmentBootstrapRequest": {
         "properties": {
+          "client_instance_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Instance Id"
+          },
+          "interview_session_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interview Session Id"
+          },
+          "last_acknowledged_server_sequence": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Acknowledged Server Sequence"
+          },
           "purpose": {
             "const": "interview_demo",
             "default": "interview_demo",
@@ -954,15 +991,59 @@
             "title": "Deadline At",
             "type": "string"
           },
+          "highest_client_sequence": {
+            "title": "Highest Client Sequence",
+            "type": "integer"
+          },
           "interview_session_id": {
             "format": "uuid",
             "title": "Interview Session Id",
             "type": "string"
           },
+          "last_server_sequence": {
+            "title": "Last Server Sequence",
+            "type": "integer"
+          },
+          "latest_code_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoredCodeSnapshotMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "protocol_version": {
             "const": "counterq.realtime.control.v1",
             "default": "counterq.realtime.control.v1",
             "title": "Protocol Version",
+            "type": "string"
+          },
+          "recent_conversation": {
+            "items": {
+              "$ref": "#/components/schemas/RestoredConversationTurnMessage"
+            },
+            "title": "Recent Conversation",
+            "type": "array"
+          },
+          "restoration": {
+            "enum": [
+              "CREATED",
+              "RESTORED"
+            ],
+            "title": "Restoration",
+            "type": "string"
+          },
+          "restore_protocol_version": {
+            "const": "session.restore.v1",
+            "default": "session.restore.v1",
+            "title": "Restore Protocol Version",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
             "type": "string"
           },
           "state_version": {
@@ -980,6 +1061,16 @@
           "time_remaining_seconds": {
             "title": "Time Remaining Seconds",
             "type": "integer"
+          },
+          "unresolved_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoredUnresolvedPromptMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -991,7 +1082,12 @@
           "deadline_at",
           "time_remaining_seconds",
           "time_pressure",
-          "control_websocket_path"
+          "control_websocket_path",
+          "restoration",
+          "started_at",
+          "recent_conversation",
+          "highest_client_sequence",
+          "last_server_sequence"
         ],
         "title": "RealtimeDevelopmentBootstrapResponse",
         "type": "object"
@@ -1026,6 +1122,115 @@
           "interrupt_response"
         ],
         "title": "RealtimeTurnDetectionConfig",
+        "type": "object"
+      },
+      "RestoredCodeSnapshotMessage": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "source_code": {
+            "title": "Source Code",
+            "type": "string"
+          },
+          "version_number": {
+            "title": "Version Number",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "version_number",
+          "language",
+          "source_code",
+          "content_hash"
+        ],
+        "title": "RestoredCodeSnapshotMessage",
+        "type": "object"
+      },
+      "RestoredConversationTurnMessage": {
+        "properties": {
+          "delivery_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery State"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "sequence": {
+            "title": "Sequence",
+            "type": "integer"
+          },
+          "speaker": {
+            "enum": [
+              "CANDIDATE",
+              "COUNTERQ"
+            ],
+            "title": "Speaker",
+            "type": "string"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "speaker",
+          "text",
+          "sequence",
+          "occurred_at"
+        ],
+        "title": "RestoredConversationTurnMessage",
+        "type": "object"
+      },
+      "RestoredUnresolvedPromptMessage": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "status": {
+            "const": "AUTHORIZED",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status"
+        ],
+        "title": "RestoredUnresolvedPromptMessage",
         "type": "object"
       },
       "ValidationError": {

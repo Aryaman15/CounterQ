@@ -13,6 +13,32 @@ CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
 
 class RealtimeDevelopmentBootstrapRequest(BaseModel):
     purpose: Literal["interview_demo"] = "interview_demo"
+    interview_session_id: UUID | None = None
+    client_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
+    last_acknowledged_server_sequence: int | None = Field(default=None, ge=0)
+
+
+class RestoredCodeSnapshotMessage(BaseModel):
+    id: UUID
+    version_number: int
+    language: str
+    source_code: str
+    content_hash: str
+
+
+class RestoredConversationTurnMessage(BaseModel):
+    id: UUID
+    speaker: Literal["CANDIDATE", "COUNTERQ"]
+    text: str
+    sequence: int
+    occurred_at: datetime
+    delivery_state: str | None = None
+
+
+class RestoredUnresolvedPromptMessage(BaseModel):
+    id: UUID
+    kind: str
+    status: Literal["AUTHORIZED"]
 
 
 class RealtimeDevelopmentBootstrapResponse(BaseModel):
@@ -25,6 +51,14 @@ class RealtimeDevelopmentBootstrapResponse(BaseModel):
     time_remaining_seconds: int
     time_pressure: str
     control_websocket_path: str
+    restoration: Literal["CREATED", "RESTORED"]
+    restore_protocol_version: Literal["session.restore.v1"] = "session.restore.v1"
+    started_at: datetime
+    latest_code_snapshot: RestoredCodeSnapshotMessage | None = None
+    recent_conversation: list[RestoredConversationTurnMessage]
+    unresolved_prompt: RestoredUnresolvedPromptMessage | None = None
+    highest_client_sequence: int
+    last_server_sequence: int
     protocol_version: Literal["counterq.realtime.control.v1"] = CONTROL_PROTOCOL_VERSION
 
 

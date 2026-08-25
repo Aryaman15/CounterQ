@@ -138,6 +138,19 @@ a:focus-visible,
   background: var(--bg);
 }
 
+.restore-status {
+  position: fixed;
+  right: 18px;
+  top: 64px;
+  z-index: 20;
+  margin: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-raised);
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 7px 10px;
+}
+
 .interview-header {
   display: grid;
   grid-template-columns: minmax(170px, 1fr) auto minmax(170px, 1fr);
