@@ -211,12 +211,15 @@ async def realtime_control_websocket(
                 ),
             )
             interview = await service.ensure_session_exists(interview_session_id)
+            budget = await service.session_budget(interview_session_id)
             await websocket.send_json(
                 ServerHelloMessage(
                     interview_session_id=interview.id,
                     current_stage=interview.current_stage,
                     state_version=interview.state_version,
                     last_server_sequence=interview.last_server_sequence,
+                    probe_budget_used=budget.probes_used,
+                    probe_budget_max=budget.max_probes,
                 ).model_dump(mode="json"),
             )
     except RealtimeControlError:

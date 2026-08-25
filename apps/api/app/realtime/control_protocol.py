@@ -172,6 +172,8 @@ class ServerHelloMessage(BaseModel):
     current_stage: str
     state_version: int
     last_server_sequence: int
+    probe_budget_used: int
+    probe_budget_max: int
 
 
 class DurableEventAckMessage(BaseModel):

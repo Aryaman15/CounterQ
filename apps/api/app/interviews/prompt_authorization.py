@@ -484,7 +484,8 @@ class PromptAuthorizationService:
         strategy = decision.proposed_probe_strategy
         if strategy == "ASSUMPTION_CHALLENGE":
             if claim is not None:
-                return f"What makes that assumption safe: {claim.normalized_claim}?"
+                excerpt = _claim_excerpt(claim.normalized_claim)
+                return f"You said {excerpt}. Is that actually guaranteed?"
             return "What makes that assumption safe?"
         if strategy == "PROVE":
             return "What invariant are you relying on here, and what guarantees it holds?"
@@ -539,7 +540,6 @@ class PromptAuthorizationService:
             .limit(1),
         )
         return cast(InterviewerPrompt | None, prompt)
-
     async def _prompt_for_session(self, session_id: UUID, prompt_id: UUID) -> InterviewerPrompt:
         prompt = await self._session.scalar(
             select(InterviewerPrompt)
@@ -563,3 +563,10 @@ class PromptAuthorizationService:
             .limit(1),
         )
         return active is not None
+
+
+def _claim_excerpt(claim: str, *, maximum_length: int = 180) -> str:
+    normalized = claim.strip().rstrip(".?! ")
+    if len(normalized) <= maximum_length:
+        return normalized
+    return f"{normalized[: maximum_length - 3].rstrip()}..."

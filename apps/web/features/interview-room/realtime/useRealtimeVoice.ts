@@ -424,6 +424,8 @@ function emptyCanonicalDebug(): CanonicalControlDebug {
     pendingDurableMessages: 0,
     lastServerSequence: null,
     stateVersion: null,
+    probeBudgetUsed: null,
+    probeBudgetMax: null,
     lastCandidateFinal: {
       providerItemId: null,
       eventId: null,

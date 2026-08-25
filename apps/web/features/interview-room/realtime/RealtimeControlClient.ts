@@ -95,6 +95,8 @@ export type CanonicalControlDebug = {
   pendingDurableMessages: number;
   lastServerSequence: number | null;
   stateVersion: number | null;
+  probeBudgetUsed: number | null;
+  probeBudgetMax: number | null;
   lastCandidateFinal: CanonicalCandidateFinal;
   lastDelivery: CanonicalDeliveryDebug;
   lastObservation: CanonicalObservationDebug;
@@ -666,6 +668,8 @@ export class RealtimeControlClient {
         controlConnected: true,
         lastServerSequence: numberField(message.last_server_sequence),
         stateVersion: numberField(message.state_version),
+        probeBudgetUsed: numberField(message.probe_budget_used),
+        probeBudgetMax: numberField(message.probe_budget_max),
       });
       if (this.bootstrap) {
         this.emit({ type: "connected", bootstrap: this.bootstrap });
@@ -1068,6 +1072,8 @@ function emptyDebug(): CanonicalControlDebug {
     pendingDurableMessages: 0,
     lastServerSequence: null,
     stateVersion: null,
+    probeBudgetUsed: null,
+    probeBudgetMax: null,
     lastCandidateFinal: {
       providerItemId: null,
       eventId: null,

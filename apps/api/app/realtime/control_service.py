@@ -14,7 +14,12 @@ from sqlalchemy.orm import selectinload
 
 from app.interviews.floor import ConversationFloor
 from app.interviews.interaction_repository import InterviewInteractionRepository
-from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, InterviewSession
+from app.interviews.models import (
+    InterviewerPrompt,
+    InterviewerPromptDelivery,
+    InterviewSession,
+    SessionBudget,
+)
 from app.interviews.prompt_authorization import (
     PromptAuthorizationService,
     PromptDeliveryPermit,
@@ -137,6 +142,12 @@ class RealtimeControlService:
         if interview is None:
             raise RealtimeControlSessionNotFound(f"InterviewSession not found: {session_id}")
         return interview
+
+    async def session_budget(self, session_id: UUID) -> SessionBudget:
+        budget = await self._session.get(SessionBudget, session_id)
+        if budget is None:
+            raise RealtimeControlSessionNotFound(f"SessionBudget not found: {session_id}")
+        return budget
 
     async def persist_candidate_transcript(
         self,

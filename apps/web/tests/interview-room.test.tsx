@@ -35,6 +35,8 @@ const observedCanonicalSession = {
   pendingDurableMessages: 1,
   lastServerSequence: 17,
   stateVersion: 3,
+  probeBudgetUsed: 1,
+  probeBudgetMax: 6,
   lastCandidateFinal: {
     providerItemId: "item-1",
     eventId: "event-1",

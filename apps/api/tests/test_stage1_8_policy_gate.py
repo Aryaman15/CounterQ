@@ -19,6 +19,7 @@ from app.interviews.prompt_authorization import (
 from app.observation.models import CodeSnapshot
 from app.realtime.control_protocol import (
     CounterQDeliveryCompletedMessage,
+    CounterQDeliveryInterruptedMessage,
     CounterQDeliveryStartedMessage,
 )
 from app.realtime.control_service import RealtimeControlService
@@ -103,6 +104,36 @@ async def test_probe_decision_authorizes_prompt_without_consuming_budget(
     assert budget.probes_used == 0
 
 
+async def test_assumption_challenge_uses_concise_candidate_safe_claim_wording(
+    db_session: AsyncSession,
+) -> None:
+    graph, decision, snapshot = await proposed_decision(
+        db_session,
+        strategy="ASSUMPTION_CHALLENGE",
+    )
+    claim = await ExaminerRepository(db_session).add_candidate_claim(
+        interview_session_id=decision.interview_session_id,
+        origin_kind="CODE",
+        normalized_claim="lookup is always guaranteed O(1).",
+        claim_type="COMPLEXITY",
+        extraction_confidence=Decimal("0.91"),
+        status="ACCEPTED_AS_INTERPRETATION",
+        ai_invocation_id=decision.ai_invocation_id,
+        ai_policy_version_id=decision.ai_policy_version_id,
+        source_event_id=decision.target_event_id,
+        source_code_snapshot_id=snapshot.id,
+    )
+    decision.target_claim_id = claim.id
+    gate = await PromptAuthorizationService(db_session).evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+
+    assert gate.candidate_safe_text == (
+        "You said lookup is always guaranteed O(1). Is that actually guaranteed?"
+    )
+
+
 async def test_wait_decision_accepts_silence_without_prompt(
     db_session: AsyncSession,
 ) -> None:
@@ -124,6 +155,41 @@ async def test_wait_decision_accepts_silence_without_prompt(
     assert result.disposition == "AUTHORIZED"
     assert result.prompt_id is None
     assert prompt_count is None
+
+
+@pytest.mark.parametrize("action", ["WAIT", "OBSERVE"])
+async def test_silent_examiner_actions_authorize_without_prompt_delivery_or_probe_budget(
+    db_session: AsyncSession,
+    action: str,
+) -> None:
+    _graph, decision, _snapshot = await proposed_decision(
+        db_session,
+        action=action,
+        strategy=None,
+        confidence=Decimal("0.95"),
+    )
+    result = await PromptAuthorizationService(db_session).evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    prompt_count = await db_session.scalar(
+        select(func.count())
+        .select_from(InterviewerPrompt)
+        .where(InterviewerPrompt.examiner_decision_id == decision.id)
+    )
+    delivery_count = await db_session.scalar(
+        select(func.count())
+        .select_from(InterviewerPromptDelivery)
+        .where(InterviewerPromptDelivery.interview_session_id == decision.interview_session_id)
+    )
+    budget = await db_session.get(SessionBudget, decision.interview_session_id)
+
+    assert result.disposition == "AUTHORIZED"
+    assert result.prompt_id is None
+    assert prompt_count == 0
+    assert delivery_count == 0
+    assert budget is not None
+    assert budget.probes_used == 0
 
 
 async def test_candidate_speaking_or_active_editing_defers_without_persisting_outcome(
@@ -431,3 +497,59 @@ async def test_delivery_completion_consumes_probe_budget_once(
         ),
     )
     assert budget.probes_used == 1
+
+
+async def test_probe_barge_in_interrupts_without_actual_transcript_or_budget_consumption(
+    db_session: AsyncSession,
+) -> None:
+    _graph, decision, _snapshot = await proposed_decision(db_session)
+    gate = await PromptAuthorizationService(db_session).evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    assert gate.prompt_id is not None
+    service = RealtimeControlService(db_session)
+    started = await service.start_delivery(
+        session_id=decision.interview_session_id,
+        message=CounterQDeliveryStartedMessage(
+            **client_base(10),
+            type="counterq_delivery_started",
+            interviewer_prompt_id=gate.prompt_id,
+            intended_text="untrusted browser wording",
+            provider_response_id="response-interrupted-probe",
+        ),
+    )
+    interrupted = await service.interrupt_delivery(
+        session_id=decision.interview_session_id,
+        message=CounterQDeliveryInterruptedMessage(
+            **client_base(11),
+            type="counterq_delivery_interrupted",
+            interviewer_prompt_id=gate.prompt_id,
+            prompt_delivery_id=started.delivery_id,
+            provider_response_id="response-interrupted-probe",
+            confirmed_by="candidate_speech",
+        ),
+    )
+    retry = await service.interrupt_delivery(
+        session_id=decision.interview_session_id,
+        message=CounterQDeliveryInterruptedMessage(
+            **client_base(12),
+            type="counterq_delivery_interrupted",
+            interviewer_prompt_id=gate.prompt_id,
+            prompt_delivery_id=started.delivery_id,
+            provider_response_id="response-interrupted-probe",
+            confirmed_by="candidate_speech",
+        ),
+    )
+    delivery = await db_session.get(InterviewerPromptDelivery, started.delivery_id)
+    budget = await db_session.get(SessionBudget, decision.interview_session_id)
+
+    assert interrupted.delivery_state == "INTERRUPTED"
+    assert retry.created is False
+    assert retry.event_id == interrupted.event_id
+    assert delivery is not None
+    assert delivery.delivery_state == "INTERRUPTED"
+    assert delivery.actual_transcript_segment_id is None
+    assert service.floor.state == "CANDIDATE_SPEAKING"
+    assert budget is not None
+    assert budget.probes_used == 0

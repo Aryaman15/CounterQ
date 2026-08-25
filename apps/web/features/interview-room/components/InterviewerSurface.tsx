@@ -301,6 +301,15 @@ export function InterviewerSurface({
                   </dd>
                 </div>
                 <div>
+                  <dt>Probe budget</dt>
+                  <dd>
+                    {typeof canonicalDebug.probeBudgetUsed === "number" &&
+                    typeof canonicalDebug.probeBudgetMax === "number"
+                      ? `${canonicalDebug.probeBudgetUsed} used / ${canonicalDebug.probeBudgetMax} max`
+                      : "Probe budget not observed"}
+                  </dd>
+                </div>
+                <div>
                   <dt>Last candidate final</dt>
                   <dd>
                     {canonicalDebug.lastCandidateFinal.providerItemId
