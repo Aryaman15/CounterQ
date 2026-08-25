@@ -9,11 +9,11 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage1_2_head() -> None:
+def test_alembic_configuration_has_stage3a_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202608230106"
+    assert script.get_current_head() == "202608260107"
 
 
 def test_stage1_2_migration_downgrades_and_upgrades_cleanly() -> None:
@@ -29,7 +29,7 @@ def test_stage1_2_migration_downgrades_and_upgrades_cleanly() -> None:
         command.upgrade(config, "head")
 
 
-def test_stage1_2_table_boundary_is_explicit() -> None:
+def test_stage3a_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -40,7 +40,8 @@ def test_stage1_2_table_boundary_is_explicit() -> None:
         "candidate_response_sources",
         "code_diffs",
         "code_snapshots",
-        "examiner_decisions",
+            "examiner_decisions",
+            "execution_runs",
         "interview_configurations",
         "interview_events",
         "interview_pack_versions",
@@ -51,15 +52,15 @@ def test_stage1_2_table_boundary_is_explicit() -> None:
         "problem_versions",
         "problems",
         "session_budgets",
-        "transcript_segments",
+            "transcript_segments",
+            "test_results",
         "users",
     }.issubset(table_names)
     assert {
         "assessments",
         "breakpoints",
         "candidate_profiles",
-        "evidence",
-        "execution_runs",
+            "evidence",
     }.isdisjoint(table_names)
 
 

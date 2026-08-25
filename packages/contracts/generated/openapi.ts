@@ -55,6 +55,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/execution/development-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Development Run */
+        post: operations["development_run_api_execution_development_runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/execution/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Execution Health */
+        get: operations["execution_health_api_execution_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/development-interview": {
         parameters: {
             query?: never;
@@ -355,6 +389,57 @@ export interface components {
              */
             verdict: "GUARANTEED" | "NOT_GUARANTEED" | "UNCERTAIN";
         };
+        /** DevelopmentRunRequest */
+        DevelopmentRunRequest: {
+            /** Client Event Id */
+            client_event_id: string;
+            /** Client Instance Id */
+            client_instance_id: string;
+            /** Client Sequence */
+            client_sequence: number;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Source Code */
+            source_code: string;
+        };
+        /** DevelopmentRunResponse */
+        DevelopmentRunResponse: {
+            /** Cases */
+            cases: components["schemas"]["VisibleCaseResponse"][];
+            /**
+             * Code Snapshot Id
+             * Format: uuid
+             */
+            code_snapshot_id: string;
+            /** Code Snapshot Version */
+            code_snapshot_version: number;
+            /** Compiler Output */
+            compiler_output: string;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /**
+             * Execution Run Id
+             * Format: uuid
+             */
+            execution_run_id: string;
+            /** Exit Code */
+            exit_code: number | null;
+            /** Output Truncated */
+            output_truncated: boolean;
+            /** Status */
+            status: string;
+            /** Stderr */
+            stderr: string;
+            /** Stdout */
+            stdout: string;
+            /** Timed Out */
+            timed_out: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -541,6 +626,25 @@ export interface components {
             /** Error Type */
             type: string;
         };
+        /** VisibleCaseResponse */
+        VisibleCaseResponse: {
+            /** Actual Output */
+            actual_output: string | null;
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Expected Output */
+            expected_output: string | null;
+            /** Failure Classification */
+            failure_classification: string | null;
+            /** Identifier */
+            identifier: string;
+            /** Input Json */
+            input_json: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+        };
     };
     responses: never;
     parameters: never;
@@ -645,6 +749,61 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_run_api_execution_development_runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    execution_health_api_execution_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: string;
+                    };
                 };
             };
         };

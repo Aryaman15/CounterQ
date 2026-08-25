@@ -886,6 +886,141 @@
         "title": "DevelopmentReasoningSmokeResponse",
         "type": "object"
       },
+      "DevelopmentRunRequest": {
+        "properties": {
+          "client_event_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Event Id",
+            "type": "string"
+          },
+          "client_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Instance Id",
+            "type": "string"
+          },
+          "client_sequence": {
+            "minimum": 1.0,
+            "title": "Client Sequence",
+            "type": "integer"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "source_code": {
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Source Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "source_code",
+          "idempotency_key",
+          "client_event_id",
+          "client_instance_id",
+          "client_sequence"
+        ],
+        "title": "DevelopmentRunRequest",
+        "type": "object"
+      },
+      "DevelopmentRunResponse": {
+        "properties": {
+          "cases": {
+            "items": {
+              "$ref": "#/components/schemas/VisibleCaseResponse"
+            },
+            "title": "Cases",
+            "type": "array"
+          },
+          "code_snapshot_id": {
+            "format": "uuid",
+            "title": "Code Snapshot Id",
+            "type": "string"
+          },
+          "code_snapshot_version": {
+            "title": "Code Snapshot Version",
+            "type": "integer"
+          },
+          "compiler_output": {
+            "title": "Compiler Output",
+            "type": "string"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "execution_run_id": {
+            "format": "uuid",
+            "title": "Execution Run Id",
+            "type": "string"
+          },
+          "exit_code": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exit Code"
+          },
+          "output_truncated": {
+            "title": "Output Truncated",
+            "type": "boolean"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          },
+          "timed_out": {
+            "title": "Timed Out",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "execution_run_id",
+          "code_snapshot_id",
+          "code_snapshot_version",
+          "status",
+          "stdout",
+          "stderr",
+          "compiler_output",
+          "exit_code",
+          "timed_out",
+          "output_truncated",
+          "duration_ms",
+          "cases"
+        ],
+        "title": "DevelopmentRunResponse",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1304,6 +1439,78 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "VisibleCaseResponse": {
+        "properties": {
+          "actual_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Output"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "expected_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Output"
+          },
+          "failure_classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Classification"
+          },
+          "identifier": {
+            "title": "Identifier",
+            "type": "string"
+          },
+          "input_json": {
+            "additionalProperties": true,
+            "title": "Input Json",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "input_json",
+          "expected_output",
+          "actual_output",
+          "status",
+          "duration_ms",
+          "failure_classification"
+        ],
+        "title": "VisibleCaseResponse",
+        "type": "object"
       }
     }
   },
@@ -1434,6 +1641,72 @@
         "summary": "Development Analyze Latest",
         "tags": [
           "examiner"
+        ]
+      }
+    },
+    "/api/execution/development-runs": {
+      "post": {
+        "operationId": "development_run_api_execution_development_runs_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Run",
+        "tags": [
+          "execution"
+        ]
+      }
+    },
+    "/api/execution/health": {
+      "get": {
+        "operationId": "execution_health_api_execution_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Execution Health Api Execution Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Execution Health",
+        "tags": [
+          "execution"
         ]
       }
     },

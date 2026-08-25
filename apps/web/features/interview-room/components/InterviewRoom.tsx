@@ -16,7 +16,7 @@ import { useCodeObservationCollector } from "../realtime/useCodeObservationColle
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import type { RealtimeVoiceControls } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
-import { ExecutionPanel } from "./ExecutionPanel";
+import { ExecutionPanel, type ExecutionViewResult } from "./ExecutionPanel";
 import { InterviewHeader } from "./InterviewHeader";
 import { InterviewerSurface } from "./InterviewerSurface";
 import { MonacoInterviewEditor } from "./MonacoInterviewEditor";
@@ -34,6 +34,9 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const [endDialogOpen, setEndDialogOpen] = useState(false);
   const [executionExpanded, setExecutionExpanded] = useState(false);
   const [hasAttemptedRun, setHasAttemptedRun] = useState(false);
+  const [executionRunning, setExecutionRunning] = useState(false);
+  const [executionResult, setExecutionResult] = useState<ExecutionViewResult | null>(null);
+  const [executionError, setExecutionError] = useState<string | null>(null);
   const [editorHydrated, setEditorHydrated] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
@@ -153,6 +156,58 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     writeStoredEditorCode(window.localStorage, nextValue);
   }, []);
 
+  const runCurrentCode = useCallback(async () => {
+    if (terminal || realtimeVoice.completionPending || executionRunning) return;
+    setHasAttemptedRun(true);
+    setExecutionExpanded(true);
+    setExecutionRunning(true);
+    setExecutionError(null);
+    try {
+      const bootstrap = await realtimeVoice.ensureControlSession();
+      const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `run-${Date.now()}`;
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/execution/development-runs`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            interview_session_id: bootstrap.interview_session_id,
+            source_code: editorCode,
+            idempotency_key: idempotencyKey,
+            client_event_id: `run-${idempotencyKey}`,
+            client_instance_id: "interview-room-run",
+            client_sequence: Date.now(),
+          }),
+        },
+      );
+      if (!response.ok) throw new Error("Code execution is temporarily unavailable.");
+      const result = await response.json() as {
+        status: string; stdout: string; stderr: string; compiler_output: string;
+        timed_out: boolean; output_truncated: boolean;
+        cases: Array<{ identifier: string; input_json: Record<string, unknown>; expected_output: string | null; actual_output: string | null; status: string }>;
+      };
+      setExecutionResult({
+        status: result.status,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        compilerOutput: result.compiler_output,
+        timedOut: result.timed_out,
+        outputTruncated: result.output_truncated,
+        cases: result.cases.map((testCase) => ({
+          identifier: testCase.identifier,
+          inputJson: testCase.input_json,
+          expectedOutput: testCase.expected_output,
+          actualOutput: testCase.actual_output,
+          status: testCase.status,
+        })),
+      });
+    } catch (error) {
+      setExecutionError(error instanceof Error ? error.message : "Code execution is unavailable.");
+    } finally {
+      setExecutionRunning(false);
+    }
+  }, [editorCode, executionRunning, realtimeVoice, terminal]);
+
   const updateWidthFromClientX = useCallback(
     (clientX: number) => {
       const bounds = workspaceRef.current?.getBoundingClientRect();
@@ -261,11 +316,11 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           <ExecutionPanel
             expanded={executionExpanded}
             hasAttemptedRun={hasAttemptedRun}
-            onRun={() => {
-              setHasAttemptedRun(true);
-              setExecutionExpanded(true);
-            }}
+            onRun={runCurrentCode}
             onToggle={() => setExecutionExpanded((current) => !current)}
+            running={executionRunning}
+            result={executionResult}
+            error={executionError}
             disabled={Boolean(terminal) || realtimeVoice.completionPending}
           />
         </section>

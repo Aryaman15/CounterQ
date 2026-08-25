@@ -61,6 +61,16 @@ async def create_development_interview(
         content_hash=f"sha256:longest-substring-{suffix}",
         schema_version="problem.v1",
     )
+    problem_version.io_schema_json = {
+        "execution": {
+            "harness": "longest_substring_v1",
+            "visible_cases": [
+                {"s": "abcabcbb", "expected": 3},
+                {"s": "bbbbb", "expected": 1},
+                {"s": "pwwkew", "expected": 3},
+            ],
+        }
+    }
     pack_version = await problems.add_interview_pack_version(
         problem_version=problem_version,
         schema_version="interview-pack.v1",

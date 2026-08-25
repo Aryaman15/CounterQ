@@ -106,6 +106,18 @@ class Settings(BaseSettings):
         default=12.0,
         validation_alias="COUNTERQ_AUTHORIZED_PROMPT_DELIVERY_WINDOW_SECONDS",
     )
+    execution_provider: str = Field(
+        default="local_sandbox",
+        validation_alias="COUNTERQ_EXECUTION_PROVIDER",
+    )
+    execution_sandbox_url: str = Field(
+        default="http://127.0.0.1:8010",
+        validation_alias="COUNTERQ_EXECUTION_SANDBOX_URL",
+    )
+    execution_compile_timeout_seconds: int = Field(default=8, ge=1, le=20)
+    execution_run_timeout_seconds: int = Field(default=2, ge=1, le=10)
+    execution_memory_limit_mb: int = Field(default=192, ge=64, le=512)
+    execution_output_limit_bytes: int = Field(default=65536, ge=1024, le=131072)
 
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:

@@ -31,7 +31,50 @@ services:
     volumes:
       - counterq-redis-data:/data
 
+  execution-sandbox:
+    build:
+      context: ../execution-sandbox
+    container_name: counterq-execution-sandbox
+    read_only: true
+    tmpfs:
+      # The candidate binary must execute from the ephemeral workspace. The
+      # read-only filesystem, dropped capabilities, internal network and
+      # process/memory limits provide the remaining isolation boundaries.
+      - /tmp:rw,exec,nosuid,size=256m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: 1.0
+    networks:
+      - sandbox
+
+  execution-sandbox-proxy:
+    image: nginx:1.27-alpine
+    container_name: counterq-execution-sandbox-proxy
+    depends_on:
+      - execution-sandbox
+    ports:
+      - "127.0.0.1:8010:8010"
+    volumes:
+      - ../execution-sandbox/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx:rw,noexec,nosuid,size=16m
+      - /var/run:rw,noexec,nosuid,size=8m
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - sandbox
+      - execution-gateway
+
+networks:
+  sandbox:
+    internal: true
+  execution-gateway:
+
 volumes:
   counterq-postgres-data:
   counterq-redis-data:
-

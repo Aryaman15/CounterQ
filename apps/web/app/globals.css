@@ -480,6 +480,14 @@ a:focus-visible,
   margin: 4px 0;
 }
 
+.run-spinner { animation: spin 0.8s linear infinite; }
+.execution-result { display: grid; gap: 8px; }
+.execution-result > p { display: flex; justify-content: space-between; gap: 12px; }
+.execution-case { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.execution-case code { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.execution-result pre { max-height: 140px; overflow: auto; margin: 0; padding: 10px; border: 1px solid var(--line); background: #101318; color: #d7b5ae; font-size: 12px; white-space: pre-wrap; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .execution-unavailable {
   color: #f0d38e !important;
   font-weight: 700;

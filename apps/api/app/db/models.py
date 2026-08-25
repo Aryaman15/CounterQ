@@ -3,6 +3,7 @@
 from app.ai_gateway.models import AIInvocation, AIPolicyVersion
 from app.auth.models import User
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.execution.models import ExecutionRun, TestResult
 from app.interviews.models import (
     CandidateResponse,
     CandidateResponseSource,
@@ -25,6 +26,7 @@ __all__ = [
     "CodeDiff",
     "CodeSnapshot",
     "ExaminerDecision",
+    "ExecutionRun",
     "InterviewConfiguration",
     "InterviewEvent",
     "InterviewPackVersion",
@@ -36,5 +38,6 @@ __all__ = [
     "ProblemVersion",
     "SessionBudget",
     "TranscriptSegment",
+    "TestResult",
     "User",
 ]

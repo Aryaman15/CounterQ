@@ -1449,11 +1449,11 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 2D — Durable Interview Core Adversarial Acceptance Gate
+Stage 3A — Execution Domain + Isolated C++ Vertical Slice
 
 Current Goal:
-Prove the durable interview core preserves canonical state through retries,
-reconnects, refreshes, deadline expiry and terminal races.
+Run one exact canonical C++ CodeSnapshot through an isolated executor and
+persist bounded execution truth for the active interview session.
 ```
 
 Update only this small section as implementation progresses.

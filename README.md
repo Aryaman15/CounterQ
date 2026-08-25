@@ -1,6 +1,6 @@
 # CounterQ
 
-CounterQ is in Stage 1: Core Interaction Spike development. The repository now contains the canonical Stage 1 persistence/runtime foundation, the `/interview/demo` Interview Room preview with Monaco, and the first realtime voice transport foundation.
+CounterQ is in Stage 3A development. The repository includes the Core Interaction Spike, the `/interview/demo` Interview Room, and a local C++ execution vertical slice that sends exact canonical code snapshots to an isolated local sandbox.
 
 The current realtime path is a development spike: FastAPI mints short-lived OpenAI Realtime browser credentials, and the browser connects directly to OpenAI over WebRTC. It does not implement Examiner reasoning, adaptive probes, canonical realtime transcript persistence, reports, Evidence, CounterMap, or Mastery.
 
@@ -45,7 +45,7 @@ pnpm run infra:up
 pnpm run infra:down
 ```
 
-PostgreSQL runs on `localhost:5432`; Redis runs on `localhost:6379`.
+PostgreSQL runs on `localhost:5432`; Redis runs on `localhost:6379`. The isolated execution sandbox is available to the local API through `http://127.0.0.1:8010`; it is not an application container and must remain the only local process that compiles or runs candidate C++.
 
 ## Development
 
@@ -64,6 +64,8 @@ http://127.0.0.1:3000/interview/demo
 ```
 
 For live realtime voice, start web and API, open the demo route, then use **Enable microphone**. Real provider testing consumes OpenAI API credit.
+
+The **Run** control is a development-only C++ vertical slice. It creates a canonical code snapshot and shows only bounded visible-case results. It does not execute code in FastAPI or expose hidden-test judgment.
 
 ## Tests
 

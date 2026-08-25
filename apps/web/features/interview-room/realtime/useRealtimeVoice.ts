@@ -37,6 +37,7 @@ export type RealtimeVoiceControls = {
   completionPending: boolean;
   endInterview: () => void;
   completeForDeadline: () => void;
+  ensureControlSession: () => Promise<DevelopmentBootstrapResponse>;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -232,6 +233,15 @@ export function useRealtimeVoice(
     }
   }, [completionPending, ensureClient, ensureControlClient, restoredBootstrap, terminalSession]);
 
+  const ensureControlSession = useCallback(async () => {
+    if (terminalSession || completionPending) {
+      throw new Error("Interview is no longer active.");
+    }
+    setErrorMessage(null);
+    const bootstrap = await ensureControlClient().connectDevelopmentInterview();
+    return bootstrap;
+  }, [completionPending, ensureControlClient, terminalSession]);
+
   const endInterview = useCallback(() => {
     if (terminalSession || completionPending) {
       return;
@@ -359,6 +369,7 @@ export function useRealtimeVoice(
     completionPending,
     endInterview,
     completeForDeadline,
+    ensureControlSession,
     enableMicrophone,
     mute,
     unmute,
