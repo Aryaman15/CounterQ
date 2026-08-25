@@ -13,8 +13,21 @@ export const hiddenInternalFixtureFields = {
   intendedUndeliveredPromptText: "UNDISCLOSED_INTENDED_PROMPT_DO_NOT_RENDER",
 };
 
+export const developmentStarterCode = {
+  cpp: demoStarterCode,
+  python: `class Solution:
+    def lengthOfLongestSubstring(self, s: str) -> int:
+        pass`,
+  java: `class Solution {
+    public int lengthOfLongestSubstring(String s) {
+        return 0;
+    }
+}`,
+} as const;
+
 export const demoInterviewFixture: DemoInterviewRoomFixture = {
   mode: "SIMULATION",
+  language: "cpp",
   languageLabel: "C++17",
   serverNowIso: "2026-08-23T10:08:18.000Z",
   deadlineAtIso: "2026-08-23T10:30:00.000Z",

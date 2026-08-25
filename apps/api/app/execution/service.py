@@ -10,7 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.execution.harness import cpp_harness_for_problem
+from app.execution.harness import harness_for_problem
 from app.execution.models import ExecutionRun
 from app.execution.provider import ExecutionOutcome, ExecutionRequest, ExecutorProvider
 from app.execution.repository import ExecutionRepository
@@ -59,7 +59,8 @@ class ExecutionService:
         interview = await InterviewRuntime(
             self._session, clock=self._clock
         ).ensure_activity_allowed(command.session_id)
-        snapshot = await self._canonical_snapshot(command)
+        language = await self._configured_language(interview)
+        snapshot = await self._canonical_snapshot(command, language)
         run_event = await InterviewRuntime(self._session, clock=self._clock).accept_event(
             AcceptEventCommand(
                 session_id=command.session_id,
@@ -101,6 +102,7 @@ class ExecutionService:
             return run
         run.status = outcome.status
         run.provider_run_id = outcome.provider_run_id
+        run.runtime_version = outcome.runtime_version
         run.stdout = _bounded(outcome.stdout, self._output_limit_bytes)
         run.stderr = _bounded(outcome.stderr, self._output_limit_bytes)
         run.compiler_output = _bounded(outcome.compiler_output, self._output_limit_bytes)
@@ -159,7 +161,7 @@ class ExecutionService:
             )
         return run
 
-    async def _canonical_snapshot(self, command: RunCommand) -> CodeSnapshot:
+    async def _canonical_snapshot(self, command: RunCommand, language: str) -> CodeSnapshot:
         result = await RealtimeControlService(
             self._session, clock=self._clock
         ).persist_candidate_code_snapshot(
@@ -170,7 +172,7 @@ class ExecutionService:
                 client_instance_id=command.client_instance_id,
                 client_sequence=command.client_sequence,
                 source_code=command.source_code,
-                language="cpp",
+                language=language,
                 trigger="EDIT_BURST",
                 idempotency_key=f"run-snapshot:{command.idempotency_key}",
             ),
@@ -190,9 +192,12 @@ class ExecutionService:
         problem = await self._session.get(ProblemVersion, problem_version.problem_version_id)
         if problem is None:
             raise ValueError("Problem version was not found")
-        harness, cases = cpp_harness_for_problem(problem.io_schema_json)
+        language = await self._configured_language(problem_version)
+        if snapshot.language != language or run.language != language:
+            raise ValueError("Canonical execution language is inconsistent")
+        harness, cases = harness_for_problem(problem.io_schema_json, language)
         return ExecutionRequest(
-            language=snapshot.language,
+            language=language,
             source_code=snapshot.source_code,
             harness=harness,
             cases=cases,
@@ -201,6 +206,16 @@ class ExecutionService:
             memory_limit_mb=self._memory_limit_mb,
             output_limit_bytes=self._output_limit_bytes,
         )
+
+    async def _configured_language(self, interview: InterviewSession) -> str:
+        from app.interviews.models import InterviewConfiguration
+
+        configuration = await self._session.get(
+            InterviewConfiguration, interview.interview_configuration_id
+        )
+        if configuration is None or configuration.language not in {"cpp", "python", "java"}:
+            raise ValueError("Interview has no supported configured language")
+        return configuration.language
 
 
 def _bounded(value: str, byte_limit: int) -> str:

@@ -68,6 +68,7 @@ class LocalSandboxExecutorProvider:
         return ExecutionOutcome(
             status=data["status"],
             provider_run_id=cast(str | None, data.get("provider_run_id")),
+            runtime_version=cast(str | None, data.get("runtime_version")),
             stdout=cast(str, data.get("stdout", "")),
             stderr=cast(str, data.get("stderr", "")),
             compiler_output=cast(str, data.get("compiler_output", "")),

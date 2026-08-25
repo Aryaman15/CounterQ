@@ -273,6 +273,7 @@ const fakeSessionResponse = {
 
 const fakeDevelopmentBootstrap = {
   interview_session_id: "session-1",
+  language: "cpp" as const,
   template: "STANDARD_CODING_INTERVIEW",
   configured_duration_seconds: 1800,
   current_stage: "IMPLEMENTATION",

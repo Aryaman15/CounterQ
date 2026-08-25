@@ -46,7 +46,7 @@ services:
     cap_drop:
       - ALL
     pids_limit: 128
-    mem_limit: 768m
+    mem_limit: 1536m
     cpus: 1.0
     networks:
       - sandbox

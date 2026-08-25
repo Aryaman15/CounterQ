@@ -44,7 +44,8 @@ export type DemoProblem = {
 
 export type DemoInterviewRoomFixture = {
   mode: "SIMULATION";
-  languageLabel: "C++17";
+  language: "cpp" | "python" | "java";
+  languageLabel: "C++17" | "Python 3" | "Java 21";
   serverNowIso: string;
   deadlineAtIso: string;
   persistenceState: DemoPersistenceState;

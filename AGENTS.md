@@ -1449,11 +1449,11 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 3A — Execution Domain + Isolated C++ Vertical Slice
+Stage 3B — Python + Java Execution Parity + Sandbox Hardening
 
 Current Goal:
-Run one exact canonical C++ CodeSnapshot through an isolated executor and
-persist bounded execution truth for the active interview session.
+Run exact canonical C++/Python/Java CodeSnapshots through one isolated,
+language-neutral executor and persist bounded execution truth safely.
 ```
 
 Update only this small section as implementation progresses.

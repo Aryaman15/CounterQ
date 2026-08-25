@@ -14,15 +14,16 @@ const MonacoEditor = dynamic(() => import("@monaco-editor/react"), {
 type MonacoInterviewEditorProps = {
   value: string;
   onChange: (value: string) => void;
+  language?: "cpp" | "python" | "java";
   readOnly?: boolean;
 };
 
-export function MonacoInterviewEditor({ value, onChange, readOnly = false }: MonacoInterviewEditorProps) {
+export function MonacoInterviewEditor({ value, onChange, language = "cpp", readOnly = false }: MonacoInterviewEditorProps) {
   return (
     <div className="editor-shell" data-testid="monaco-editor-surface">
       <MonacoEditor
         height="100%"
-        language="cpp"
+        language={language}
         theme="vs-dark"
         value={value}
         onChange={(nextValue) => onChange(nextValue ?? "")}

@@ -169,6 +169,20 @@ describe("Interview Room demo", () => {
     expect(await screen.findByLabelText("C++ code editor")).toBeInTheDocument();
   });
 
+  it("selects a development language before creating an interview session", () => {
+    render(<InterviewRoom fixture={demoInterviewFixture} />);
+
+    const selector = screen.getByRole("combobox", { name: "Development execution language" });
+    fireEvent.change(selector, { target: { value: "python" } });
+
+    expect(selector).toHaveValue("python");
+    expect(screen.getByRole("heading", { name: "solution.py" })).toBeInTheDocument();
+    expect(screen.getAllByText("Python 3").length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("C++ code editor")).toHaveValue(
+      "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        pass",
+    );
+  });
+
   it("shows the required header state without durable stage labels", () => {
     render(<InterviewRoom fixture={demoInterviewFixture} />);
 

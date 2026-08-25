@@ -463,6 +463,12 @@ export interface components {
             client_instance_id?: string | null;
             /** Interview Session Id */
             interview_session_id?: string | null;
+            /**
+             * Language
+             * @default cpp
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
             /** Last Acknowledged Server Sequence */
             last_acknowledged_server_sequence?: number | null;
             /**
@@ -494,6 +500,11 @@ export interface components {
              * Format: uuid
              */
             interview_session_id: string;
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
             /** Last Server Sequence */
             last_server_sequence: number;
             latest_code_snapshot?: components["schemas"]["RestoredCodeSnapshotMessage"] | null;

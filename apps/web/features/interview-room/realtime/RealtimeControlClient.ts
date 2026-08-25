@@ -146,6 +146,7 @@ type ControlWebSocket = Pick<
 
 export type RealtimeControlClientOptions = {
   apiBaseUrl: string;
+  developmentLanguage?: "cpp" | "python" | "java";
   fetchFn?: typeof fetch;
   websocketFactory?: (url: string) => ControlWebSocket;
   storage?: Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>;
@@ -196,6 +197,7 @@ export class RealtimeControlClient {
     | (Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>)
     | undefined;
   private readonly randomUUID: () => string;
+  private developmentLanguage: "cpp" | "python" | "java";
   private readonly listeners = new Set<RealtimeControlListener>();
   private readonly pending = new Map<string, PendingEnvelope>();
   private websocket: ControlWebSocket | null = null;
@@ -212,6 +214,7 @@ export class RealtimeControlClient {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, "");
     this.fetchFn = options.fetchFn ?? fetch.bind(globalThis);
     this.storage = options.storage ?? globalThis.sessionStorage;
+    this.developmentLanguage = options.developmentLanguage ?? "cpp";
     this.randomUUID = options.randomUUID ?? (() => globalThis.crypto?.randomUUID?.() ?? fallbackId());
     this.websocketFactory = options.websocketFactory ?? ((url) => new WebSocket(url));
   }
@@ -227,6 +230,10 @@ export class RealtimeControlClient {
 
   hasStoredDevelopmentSession(): boolean {
     return Boolean(this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY));
+  }
+
+  setDevelopmentLanguage(language: "cpp" | "python" | "java"): void {
+    this.developmentLanguage = language;
   }
 
   async restoreExistingDevelopmentInterview(): Promise<DevelopmentBootstrapResponse | null> {
@@ -264,6 +271,7 @@ export class RealtimeControlClient {
           interview_session_id: interviewSessionId,
           client_instance_id: this.clientInstanceId(),
           last_acknowledged_server_sequence: this.debug.lastServerSequence,
+          language: this.developmentLanguage,
         }),
       });
       return response;

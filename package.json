@@ -19,6 +19,8 @@
     "eval:stage2d": "uv run --directory apps/api pytest tests/evaluation/stage2d -q",
     "eval:stage3a": "uv run --directory apps/api pytest tests/evaluation/stage3a -q",
     "eval:stage3a:sandbox": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3a-sandbox.ps1",
+    "eval:stage3b": "uv run --directory apps/api pytest tests/evaluation/stage3b -q",
+    "eval:stage3b:sandbox": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3b-sandbox.ps1",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",
     "lint:frontend": "pnpm --filter @counterq/web lint",
     "lint:backend": "uv run --directory apps/api ruff check .",

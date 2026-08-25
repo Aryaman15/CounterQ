@@ -1085,6 +1085,16 @@
             ],
             "title": "Interview Session Id"
           },
+          "language": {
+            "default": "cpp",
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
           "last_acknowledged_server_sequence": {
             "anyOf": [
               {
@@ -1145,6 +1155,15 @@
           "interview_session_id": {
             "format": "uuid",
             "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
             "type": "string"
           },
           "last_server_sequence": {
@@ -1241,6 +1260,7 @@
         },
         "required": [
           "interview_session_id",
+          "language",
           "template",
           "configured_duration_seconds",
           "current_stage",

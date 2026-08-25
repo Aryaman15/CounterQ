@@ -16,6 +16,7 @@ class RealtimeDevelopmentBootstrapRequest(BaseModel):
     interview_session_id: UUID | None = None
     client_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
     last_acknowledged_server_sequence: int | None = Field(default=None, ge=0)
+    language: Literal["cpp", "python", "java"] = "cpp"
 
 
 class RestoredCodeSnapshotMessage(BaseModel):
@@ -43,6 +44,7 @@ class RestoredUnresolvedPromptMessage(BaseModel):
 
 class RealtimeDevelopmentBootstrapResponse(BaseModel):
     interview_session_id: UUID
+    language: Literal["cpp", "python", "java"]
     template: str
     configured_duration_seconds: int
     current_stage: str

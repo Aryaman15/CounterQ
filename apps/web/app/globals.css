@@ -401,6 +401,23 @@ a:focus-visible,
   font-weight: 700;
 }
 
+.development-language-picker select {
+  appearance: none;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 5px 24px 5px 8px;
+}
+
+.development-language-picker select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+
 .local-state {
   color: var(--amber);
 }

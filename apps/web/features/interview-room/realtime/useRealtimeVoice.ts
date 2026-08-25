@@ -15,6 +15,7 @@ import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceCl
 type UseRealtimeVoiceOptions = {
   clientFactory?: () => RealtimeVoiceClient;
   controlClientFactory?: () => RealtimeControlClient;
+  developmentLanguage?: "cpp" | "python" | "java";
 };
 
 type RealtimeActivityState = Exclude<VoicePresenceState, "Muted">;
@@ -66,7 +67,7 @@ export type RealtimeSessionDebug = {
 export function useRealtimeVoice(
   options: UseRealtimeVoiceOptions = {},
 ): RealtimeVoiceControls {
-  const { clientFactory, controlClientFactory } = options;
+  const { clientFactory, controlClientFactory, developmentLanguage = "cpp" } = options;
   const [activityState, setActivityState] = useState<RealtimeActivityState>("Ready");
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -139,12 +140,16 @@ export function useRealtimeVoice(
 
   const ensureControlClient = useCallback(() => {
     if (controlClientRef.current) {
+      (controlClientRef.current as RealtimeControlClient & {
+        setDevelopmentLanguage?: (language: "cpp" | "python" | "java") => void;
+      }).setDevelopmentLanguage?.(developmentLanguage);
       return controlClientRef.current;
     }
     const controlClient =
       controlClientFactory?.() ??
       new RealtimeControlClient({
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
+        developmentLanguage,
       });
     unsubscribeControlRef.current = controlClient.on((event) => {
       if (event.type === "connected") {
@@ -209,7 +214,7 @@ export function useRealtimeVoice(
     });
     controlClientRef.current = controlClient;
     return controlClient;
-  }, [controlClientFactory, terminalSession]);
+  }, [controlClientFactory, developmentLanguage, terminalSession]);
 
   const enableMicrophone = useCallback(async () => {
     if (terminalSession || completionPending) {
@@ -314,12 +319,12 @@ export function useRealtimeVoice(
       pendingCodeSourceRef.current = sourceCode;
       controlClientRef.current?.sendCandidateCodeSnapshot({
         sourceCode,
-        language: "cpp",
+        language: restoredBootstrap?.language ?? developmentLanguage,
         trigger,
         idempotencyKey,
       });
     },
-    [],
+    [developmentLanguage, restoredBootstrap?.language],
   );
 
   const noteCodeActivityStarted = useCallback(() => {

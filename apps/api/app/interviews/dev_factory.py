@@ -34,6 +34,7 @@ async def create_development_interview(
     initial_stage: str = "SETUP",
     state_version: int = 0,
     template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
+    language: str = "cpp",
 ) -> DevelopmentInterview:
     now = datetime.now(UTC)
     policy = template_policy(template)
@@ -86,7 +87,7 @@ async def create_development_interview(
     configuration = await interviews.add_configuration(
         mode="SIMULATION",
         level="NEW_GRAD",
-        language="cpp",
+        language=language,
         configured_duration_seconds=policy.configured_duration_seconds,
         problem_source="CURATED",
     )

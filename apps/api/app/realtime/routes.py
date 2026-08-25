@@ -1,6 +1,6 @@
 from collections.abc import Callable
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 import structlog
@@ -191,7 +191,9 @@ async def create_realtime_development_interview(
     try:
         async with session.begin():
             if request.interview_session_id is None:
-                dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+                dev = await create_development_interview(
+                    session, initial_stage="IMPLEMENTATION", language=request.language
+                )
                 interview_session_id = dev.interview_session.id
             else:
                 interview_session_id = request.interview_session_id
@@ -212,6 +214,7 @@ async def create_realtime_development_interview(
     interview = restored.interview
     return RealtimeDevelopmentBootstrapResponse(
         interview_session_id=interview.id,
+        language=cast(Literal["cpp", "python", "java"], interview.configuration.language),
         template=restored.template,
         configured_duration_seconds=interview.configuration.configured_duration_seconds,
         current_stage=interview.current_stage,

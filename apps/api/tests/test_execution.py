@@ -46,7 +46,11 @@ async def test_run_uses_exact_canonical_snapshot_and_persists_visible_results(
     assert completed.status == "SUCCEEDED"
     assert retry.id == run.id and not retry_created
     assert len(provider.requests) == 1
-    assert await db_session.scalar(select(func.count()).select_from(ExecutionTestResult)) == 3
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(ExecutionTestResult)
+        .where(ExecutionTestResult.execution_run_id == run.id)
+    ) == 3
     events = list(
         (await db_session.scalars(select(InterviewEvent).order_by(InterviewEvent.server_sequence))).all()
     )
@@ -112,3 +116,35 @@ async def test_completed_session_cannot_start_run(db_session: AsyncSession) -> N
                 client_sequence=1,
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("language", "source"),
+    [
+        ("cpp", "class Solution { public: int lengthOfLongestSubstring(string s) { return 3; } };"),
+        ("python", "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        return 3"),
+        ("java", "class Solution { public int lengthOfLongestSubstring(String s) { return 3; } }"),
+    ],
+)
+async def test_configured_language_owns_snapshot_and_harness(
+    db_session: AsyncSession, language: str, source: str
+) -> None:
+    development = await create_development_interview(
+        db_session, initial_stage="IMPLEMENTATION", language=language
+    )
+    provider = FakeExecutorProvider(ExecutionOutcome("SUCCEEDED", f"{language}-run"))
+    service = ExecutionService(db_session, provider)
+    run, request, created = await service.begin(
+        RunCommand(
+            session_id=development.interview_session.id,
+            source_code=source,
+            idempotency_key=f"{language}-run",
+            client_event_id=f"{language}-event",
+            client_instance_id="language-test",
+            client_sequence=1,
+        )
+    )
+    assert created and run.language == language and request.language == language
+    assert provider.requests == []
+    await service.complete(run.id, await service.execute(request))
+    assert provider.requests[0].harness

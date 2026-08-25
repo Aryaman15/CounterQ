@@ -12,6 +12,7 @@ import {
 import { useAuthoritativeDeadlineTimer } from "../hooks/useDemoDeadlineTimer";
 import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { DeliveredConversationRow, DemoInterviewRoomFixture } from "../models/candidate-visible";
+import { developmentStarterCode } from "../fixtures/demoInterview";
 import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import type { RealtimeVoiceControls } from "../realtime/useRealtimeVoice";
@@ -28,8 +29,11 @@ type InterviewRoomProps = {
 };
 
 export function InterviewRoom({ fixture }: InterviewRoomProps) {
+  const [selectedLanguage, setSelectedLanguage] = useState<"cpp" | "python" | "java">(
+    fixture.language,
+  );
   const [problemWidth, setProblemWidth] = useState(35);
-  const [editorCode, setEditorCode] = useState(fixture.starterCode);
+  const [editorCode, setEditorCode] = useState<string>(developmentStarterCode[fixture.language]);
   const [conversationOpen, setConversationOpen] = useState(false);
   const [endDialogOpen, setEndDialogOpen] = useState(false);
   const [executionExpanded, setExecutionExpanded] = useState(false);
@@ -40,8 +44,11 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const [editorHydrated, setEditorHydrated] = useState(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
+  const previousSelectedLanguageRef = useRef(selectedLanguage);
   const prefersReducedMotion = usePrefersReducedMotion();
-  const realtimeVoice = useRealtimeVoice();
+  const realtimeVoice = useRealtimeVoice({ developmentLanguage: selectedLanguage });
+  const configuredLanguage = realtimeVoice.restoredBootstrap?.language ?? selectedLanguage;
+  const languageLabel = languageLabelFor(configuredLanguage);
   const remainingLabel = useAuthoritativeDeadlineTimer(
     realtimeVoice.serverDeadlineAt,
     fixture.serverNowIso,
@@ -133,6 +140,23 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     setProblemWidth(readStoredProblemWidth(window.localStorage));
     setEditorCode(readStoredEditorCode(window.localStorage, fixture.starterCode));
   }, [fixture.starterCode]);
+
+  useEffect(() => {
+    if (
+      previousSelectedLanguageRef.current !== selectedLanguage &&
+      !realtimeVoice.restoredBootstrap &&
+      !realtimeVoice.isRestoring
+    ) {
+      setEditorCode(developmentStarterCode[selectedLanguage]);
+    }
+    previousSelectedLanguageRef.current = selectedLanguage;
+  }, [realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap, selectedLanguage]);
+
+  useEffect(() => {
+    if (realtimeVoice.restoredBootstrap) {
+      setSelectedLanguage(realtimeVoice.restoredBootstrap.language);
+    }
+  }, [realtimeVoice.restoredBootstrap]);
 
   useEffect(() => {
     if (realtimeVoice.restoredBootstrap) {
@@ -301,16 +325,33 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           <div className="editor-toolbar">
             <div>
               <p className="panel-kicker">Workspace</p>
-              <h2 id="editor-title">Solution.cpp</h2>
+              <h2 id="editor-title">{sourceFilenameFor(configuredLanguage)}</h2>
             </div>
             <div className="editor-meta">
-              <span>{fixture.languageLabel}</span>
+              {!realtimeVoice.restoredBootstrap && !realtimeVoice.isRestoring ? (
+                <label className="development-language-picker">
+                  <span className="sr-only">Development execution language</span>
+                  <select
+                    aria-label="Development execution language"
+                    value={selectedLanguage}
+                    onChange={(event) =>
+                      setSelectedLanguage(event.target.value as "cpp" | "python" | "java")
+                    }
+                  >
+                    <option value="cpp">C++17</option>
+                    <option value="python">Python 3</option>
+                    <option value="java">Java 21</option>
+                  </select>
+                </label>
+              ) : null}
+              <span>{languageLabel}</span>
               <span className="local-state">{codePersistenceState(editorCode, realtimeVoice)}</span>
             </div>
           </div>
           <MonacoInterviewEditor
             value={editorCode}
             onChange={handleEditorChange}
+            language={configuredLanguage}
             readOnly={realtimeVoice.isRestoring || Boolean(terminal) || realtimeVoice.completionPending}
           />
           <ExecutionPanel
@@ -369,6 +410,14 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       <span className="storage-key-marker" data-storage-key={DEMO_SPLITTER_STORAGE_KEY} aria-hidden="true" />
     </main>
   );
+}
+
+function languageLabelFor(language: "cpp" | "python" | "java"): "C++17" | "Python 3" | "Java 21" {
+  return language === "cpp" ? "C++17" : language === "python" ? "Python 3" : "Java 21";
+}
+
+function sourceFilenameFor(language: "cpp" | "python" | "java"): string {
+  return language === "cpp" ? "Solution.cpp" : language === "python" ? "solution.py" : "Solution.java";
 }
 
 export function codePersistenceState(

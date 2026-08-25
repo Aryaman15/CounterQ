@@ -43,6 +43,7 @@ class ExecutionCaseOutcome:
 class ExecutionOutcome:
     status: str
     provider_run_id: str | None
+    runtime_version: str | None = None
     stdout: str = ""
     stderr: str = ""
     compiler_output: str = ""
