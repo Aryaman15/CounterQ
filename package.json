@@ -12,6 +12,7 @@
     "test": "pnpm run test:frontend && pnpm run test:backend",
     "test:frontend": "pnpm --filter @counterq/web test",
     "test:backend": "uv run --directory apps/api pytest",
+    "eval:stage1": "uv run --directory apps/api pytest tests/evaluation/stage1 -q",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",
     "lint:frontend": "pnpm --filter @counterq/web lint",
     "lint:backend": "uv run --directory apps/api ruff check .",
@@ -25,4 +26,3 @@
     "migrate:create": "uv run --directory apps/api alembic revision --autogenerate -m"
   }
 }
-
