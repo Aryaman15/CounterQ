@@ -45,8 +45,20 @@ class ExaminerClaimOutput(StrictReasoningOutputModel):
 
 class ExaminerDecisionOutput(StrictReasoningOutputModel):
     action: ExaminerAction
-    target_kind: ExaminerTargetKind
-    target_claim_index: int | None = Field(ge=0)
+    target_kind: ExaminerTargetKind = Field(
+        description=(
+            "Primary diagnostic target: CLAIM for an extracted candidate claim; "
+            "CODE_SNAPSHOT for implementation behavior; EVENT only when neither "
+            "claim nor code snapshot is the better target; NONE for WAIT or OBSERVE."
+        )
+    )
+    target_claim_index: int | None = Field(
+        ge=0,
+        description=(
+            "Required only when target_kind is CLAIM: the zero-based index of one "
+            "returned claim. For NONE, EVENT, and CODE_SNAPSHOT this must be JSON null."
+        ),
+    )
     proposed_probe_strategy: ExaminerProbeStrategy | None
     technical_rationale: str = Field(max_length=900)
     confidence: float = Field(ge=0, le=1)

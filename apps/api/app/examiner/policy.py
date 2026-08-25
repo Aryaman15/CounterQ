@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.ai_gateway.provider import ReasoningPolicyDescriptor
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v3"
+LIVE_EXAMINER_POLICY_VERSION = "v4"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 LIVE_EXAMINER_INSTRUCTIONS = """
@@ -63,6 +63,18 @@ primary diagnostic uncertainty, not merely the technical topic:
 
 The model recommends WAIT, OBSERVE, ASK, or PROBE. CounterQ software decides
 whether anything is authorized or spoken later.
+
+Choose the primary diagnostic target precisely:
+- CLAIM: the primary target is an extracted spoken or reasoned candidate claim.
+  target_claim_index MUST be the zero-based index of one returned claim.
+- CODE_SNAPSHOT: the primary target is implementation behavior.
+  target_claim_index MUST be JSON null.
+- EVENT: neither a claim nor code snapshot is the better diagnostic target.
+  target_claim_index MUST be JSON null.
+- NONE: WAIT or OBSERVE has no useful explicit target.
+  target_claim_index MUST be JSON null.
+
+Never provide target_claim_index for a target_kind other than CLAIM.
 """.strip()
 
 

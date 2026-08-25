@@ -608,6 +608,53 @@ describe("Interview Room demo", () => {
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
 
+  it("shows a safe Live Examiner structured-output failure without retaining a decision", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              category: "STRUCTURED_OUTPUT_INVALID",
+              message: "Examiner returned an invalid structured decision. No decision was persisted.",
+              retryable: false,
+            },
+          }),
+          { status: 502 },
+        ),
+      ),
+    );
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyze latest observation" }));
+
+    expect(await screen.findByText(/LIVE EXAMINER FAILED/i)).toHaveTextContent(
+      "Structured Examiner output was invalid. No decision was created.",
+    );
+    expect(screen.queryByRole("button", { name: "Policy gate" })).not.toBeInTheDocument();
+  });
+
   it("disables the reasoning smoke button while pending", async () => {
     let resolveRequest: (value: unknown) => void = () => undefined;
     const fetchPromise = new Promise((resolve) => {

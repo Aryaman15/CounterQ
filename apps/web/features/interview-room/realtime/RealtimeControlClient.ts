@@ -20,11 +20,13 @@ export type AuthorizedDevelopmentPrompt = {
 
 export type PolicyGateDebug = {
   decisionId: string | null;
+  requestState?: "IDLE" | "REQUESTED" | "RECEIVED" | "FAILED";
   disposition: string | null;
   decisionStatus: string | null;
   policyGateOutcome: string | null;
   promptId: string | null;
   promptKind: string | null;
+  reason?: string | null;
 };
 
 export type DeliveryPermitDebug = {
@@ -271,6 +273,21 @@ export class RealtimeControlClient {
   }
 
   requestExaminerDecisionPolicyGate(examinerDecisionId: string): void {
+    const controlConnected = this.websocket?.readyState === WebSocket.OPEN && this.controlReady;
+    this.patchDebug({
+      lastPolicyGate: {
+        decisionId: examinerDecisionId,
+        requestState: "REQUESTED",
+        disposition: null,
+        decisionStatus: null,
+        policyGateOutcome: null,
+        promptId: null,
+        promptKind: null,
+        reason: controlConnected
+          ? "Policy gate request sent."
+          : "CONTROL DISCONNECTED; policy request pending/not sent.",
+      },
+    });
     this.sendDurable({
       type: "examiner_decision_policy_gate_requested",
       examiner_decision_id: examinerDecisionId,
@@ -677,11 +694,13 @@ export class RealtimeControlClient {
       }
       const result: PolicyGateDebug = {
         decisionId: stringField(message.examiner_decision_id),
+        requestState: "RECEIVED",
         disposition: stringField(message.disposition),
         decisionStatus: stringField(message.decision_status),
         policyGateOutcome: stringField(message.policy_gate_outcome),
         promptId: stringField(message.interviewer_prompt_id),
         promptKind: stringField(message.prompt_kind),
+        reason: stringField(message.reason),
       };
       this.patchDebug({ lastPolicyGate: result });
       this.emit({ type: "policy_gate_result", result });
@@ -873,6 +892,20 @@ export class RealtimeControlClient {
             lastCode: {
               ...this.debug.lastCode,
               persistence: "FAILED",
+            },
+          });
+        }
+        if (pendingMessage?.type === "examiner_decision_policy_gate_requested") {
+          this.patchDebug({
+            lastPolicyGate: {
+              decisionId: stringField(pendingMessage.examiner_decision_id),
+              requestState: "FAILED",
+              disposition: null,
+              decisionStatus: null,
+              policyGateOutcome: null,
+              promptId: null,
+              promptKind: null,
+              reason: stringField(message.message) ?? "Policy gate request was rejected.",
             },
           });
         }
@@ -1075,11 +1108,13 @@ function emptyDebug(): CanonicalControlDebug {
     },
     lastPolicyGate: {
       decisionId: null,
+      requestState: "IDLE",
       disposition: null,
       decisionStatus: null,
       policyGateOutcome: null,
       promptId: null,
       promptKind: null,
+      reason: null,
     },
     lastDeliveryPermit: {
       promptId: null,

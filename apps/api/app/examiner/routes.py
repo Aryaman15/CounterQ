@@ -8,6 +8,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from app.ai_gateway.gateway import StructuredOutputValidationFailure
 from app.ai_gateway.provider import ReasoningProvider, ReasoningProviderError
 from app.ai_gateway.routes import get_reasoning_provider_builder
 from app.config.environment import development_spike_enabled
@@ -153,6 +154,17 @@ async def development_analyze_latest(
     coordinator = coordinator_builder(settings, provider_builder)
     try:
         result = await coordinator.analyze_latest(request.interview_session_id)
+    except StructuredOutputValidationFailure as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "category": exc.category,
+                "message": (
+                    "Examiner returned an invalid structured decision. No decision was persisted."
+                ),
+                "retryable": False,
+            },
+        ) from exc
     except ReasoningProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -202,6 +214,17 @@ async def development_analyze_and_authorize(
     )
     try:
         result = await workflow.analyze_and_authorize_latest(request.interview_session_id)
+    except StructuredOutputValidationFailure as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "category": exc.category,
+                "message": (
+                    "Examiner returned an invalid structured decision. No decision was persisted."
+                ),
+                "retryable": False,
+            },
+        ) from exc
     except ReasoningProviderError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

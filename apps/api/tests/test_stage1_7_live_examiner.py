@@ -380,13 +380,27 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
     with pytest.raises(ValidationError):
         ExaminerAnalysisResult.model_validate(invalid_index)
 
+    missing_claim_index = transcript_probe_output()
+    missing_claim_index["decision"]["target_claim_index"] = None
+    with pytest.raises(ValidationError):
+        ExaminerAnalysisResult.model_validate(missing_claim_index)
 
-def test_live_examiner_policy_v3_guides_primary_strategy_and_stable_code_selection() -> None:
+    code_target = code_probe_output()
+    assert ExaminerAnalysisResult.model_validate(code_target).decision.target_claim_index is None
+    for target_kind in ("CODE_SNAPSHOT", "EVENT", "NONE"):
+        invalid_non_claim_target = code_probe_output()
+        invalid_non_claim_target["decision"]["target_kind"] = target_kind
+        invalid_non_claim_target["decision"]["target_claim_index"] = 0
+        with pytest.raises(ValidationError):
+            ExaminerAnalysisResult.model_validate(invalid_non_claim_target)
+
+
+def test_live_examiner_policy_v4_guides_primary_strategy_stable_code_and_targets() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v3"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v3"
+    assert descriptor.version == "v4"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v4"
     assert "primary diagnostic uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the technical topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid guarantee" in LIVE_EXAMINER_INSTRUCTIONS
@@ -401,6 +415,11 @@ def test_live_examiner_policy_v3_guides_primary_strategy_and_stable_code_selecti
     assert "STABLE_AFTER_EDIT_BURST" in LIVE_EXAMINER_INSTRUCTIONS
     assert "stable enough to reason about" in LIVE_EXAMINER_INSTRUCTIONS
     assert "Do not require Run or a declared-done signal" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "target_claim_index MUST be JSON null" in LIVE_EXAMINER_INSTRUCTIONS
+    schema = ExaminerAnalysisResult.model_json_schema()
+    decision_schema = schema["$defs"]["ExaminerDecisionOutput"]["properties"]
+    assert "Primary diagnostic target" in decision_schema["target_kind"]["description"]
+    assert "zero-based index" in decision_schema["target_claim_index"]["description"]
 
 
 async def test_live_examiner_transcript_persists_claim_and_proposed_decision(
@@ -1196,3 +1215,76 @@ async def test_live_examiner_development_endpoint_blocks_production_and_returns_
         )
     assert blocked.status_code == 403
     await dispose_engine()
+
+
+async def test_live_examiner_invalid_structured_output_returns_safe_failure_and_recovers(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        invalid_output = code_probe_output()
+        invalid_output["decision"]["target_claim_index"] = 0
+        fake_provider = FakeExaminerProvider(output_data=invalid_output)
+        local_settings = settings(tmp_path)
+        app = create_app()
+        app.dependency_overrides[get_settings] = lambda: local_settings
+        app.dependency_overrides[get_reasoning_provider_builder] = lambda: (
+            lambda _settings: fake_provider
+        )
+        app.dependency_overrides[get_live_examiner_coordinator_builder] = lambda: (
+            lambda _settings, _provider_builder: LiveExaminerCoordinator(
+                settings=local_settings,
+                sessionmaker=maker,
+                provider=fake_provider,
+                registry=LiveExaminerTaskRegistry(),
+            )
+        )
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+                failed = await client.post(
+                    "/api/examiner/development-analyze-latest",
+                    json={"interview_session_id": str(dev.interview_session.id)},
+                )
+                fake_provider.output_data = transcript_probe_output()
+                recovered = await client.post(
+                    "/api/examiner/development-analyze-latest",
+                    json={"interview_session_id": str(dev.interview_session.id)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        async with maker() as session:
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
+            )
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.interview_session_id == dev.interview_session.id)
+                    .order_by(AIInvocation.started_at.asc())
+                )
+            )
+
+        assert failed.status_code == 502
+        assert failed.json()["detail"] == {
+            "category": "STRUCTURED_OUTPUT_INVALID",
+            "message": (
+                "Examiner returned an invalid structured decision. No decision was persisted."
+            ),
+            "retryable": False,
+        }
+        assert recovered.status_code == 200
+        assert recovered.json()["status"] == "PROPOSED"
+        assert claim_count == 1
+        assert decision_count == 1
+        assert [invocation.status for invocation in invocations] == ["FAILED", "SUCCEEDED"]
+        assert invocations[0].error_class == "STRUCTURED_OUTPUT_INVALID"
+        assert fake_provider.calls == 2

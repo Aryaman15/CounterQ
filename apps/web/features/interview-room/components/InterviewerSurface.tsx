@@ -10,6 +10,7 @@ import type {
   DevelopmentAnalyzeLatestResponse,
 } from "../realtime/liveExaminer";
 import {
+  DevelopmentExaminerRequestError,
   requestDevelopmentAnalyzeAndAuthorize,
   requestDevelopmentLiveExaminerAnalysis,
 } from "../realtime/liveExaminer";
@@ -128,12 +129,18 @@ export function InterviewerSurface({
     }
     setLiveExaminerPending(true);
     setLiveExaminerError(null);
+    setLiveExaminerResult(null);
     setAnalyzeAuthorizeResult(null);
     try {
       const result = await requestDevelopmentLiveExaminerAnalysis(canonicalDebug.sessionId);
       setLiveExaminerResult(result);
-    } catch {
-      setLiveExaminerError("Live Examiner analysis request failed");
+    } catch (error) {
+      setLiveExaminerError(
+        error instanceof DevelopmentExaminerRequestError &&
+          error.category === "STRUCTURED_OUTPUT_INVALID"
+          ? "Structured Examiner output was invalid. No decision was created."
+          : "Live Examiner analysis request failed",
+      );
     } finally {
       setLiveExaminerPending(false);
     }
@@ -149,8 +156,13 @@ export function InterviewerSurface({
       const result = await requestDevelopmentAnalyzeAndAuthorize(canonicalDebug.sessionId);
       setAnalyzeAuthorizeResult(result);
       setLiveExaminerResult(result.analysis);
-    } catch {
-      setLiveExaminerError("Live Examiner analyze-and-authorize request failed");
+    } catch (error) {
+      setLiveExaminerError(
+        error instanceof DevelopmentExaminerRequestError &&
+          error.category === "STRUCTURED_OUTPUT_INVALID"
+          ? "Structured Examiner output was invalid. No decision was created."
+          : "Live Examiner analyze-and-authorize request failed",
+      );
     } finally {
       setAnalyzeAuthorizePending(false);
     }
@@ -416,7 +428,9 @@ export function InterviewerSurface({
                       {analyzeAuthorizePending ? "Running..." : "Analyze + authorize"}
                     </button>
                     {liveExaminerError ? (
-                      <span className="voice-dev-inline-error">{liveExaminerError}</span>
+                      <span className="voice-dev-inline-error" role="status">
+                        LIVE EXAMINER FAILED. {liveExaminerError}
+                      </span>
                     ) : null}
                     {liveExaminerResult ? (
                       <div className="voice-dev-reasoning-result" aria-live="polite">
@@ -468,6 +482,21 @@ export function InterviewerSurface({
                             >
                               Policy gate
                             </button>
+                            {canonicalDebug.lastPolicyGate.decisionId ===
+                            liveExaminerResult.decision.id ? (
+                              <>
+                                <p>STANDALONE POLICY GATE</p>
+                                <span>
+                                  {canonicalDebug.lastPolicyGate.requestState ?? "IDLE"}; control{" "}
+                                  {canonicalDebug.controlConnected ? "connected" : "disconnected"}; decision{" "}
+                                  {canonicalDebug.lastPolicyGate.decisionId}
+                                </span>
+                                <span>
+                                  {canonicalDebug.lastPolicyGate.disposition ?? "No result yet"};{" "}
+                                  {canonicalDebug.lastPolicyGate.reason ?? "Awaiting policy gate result."}
+                                </span>
+                              </>
+                            ) : null}
                           </>
                         ) : (
                           <span>{liveExaminerResult.message ?? "No decision persisted"}</span>

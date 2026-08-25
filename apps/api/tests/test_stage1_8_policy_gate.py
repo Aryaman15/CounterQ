@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from test_stage1_1a_persistence import Stage1PersistenceGraph, create_stage1_graph
 from test_stage1_1b_causal_persistence import add_snapshot, create_ai_context
@@ -294,6 +294,45 @@ async def test_authorized_prompt_stales_if_target_code_changes_before_delivery(
     assert prompt.status == "STALE"
     assert refreshed_decision is not None
     assert refreshed_decision.status == "AUTHORIZED"
+
+
+async def test_standalone_policy_gate_reports_deferred_then_stale_for_old_code_decision(
+    db_session: AsyncSession,
+) -> None:
+    graph, decision, first_snapshot = await proposed_decision(db_session, source_sequence=1)
+    await add_snapshot(
+        db_session,
+        graph,
+        server_sequence=2,
+        version_number=2,
+        parent_snapshot_id=first_snapshot.id,
+        source_code="class Solution { int left = 2; };",
+    )
+    service = PromptAuthorizationService(db_session)
+
+    deferred = await service.evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+        runtime_state=PromptGateRuntimeState(candidate_code_active=True),
+    )
+    stale = await service.evaluate_examiner_decision(
+        session_id=decision.interview_session_id,
+        decision_id=decision.id,
+    )
+    prompt_count = await db_session.scalar(
+        select(func.count())
+        .select_from(InterviewerPrompt)
+        .where(InterviewerPrompt.examiner_decision_id == decision.id)
+    )
+    budget = await db_session.get(SessionBudget, decision.interview_session_id)
+
+    assert deferred.disposition == "DEFERRED"
+    assert deferred.reason == "Candidate is actively editing."
+    assert stale.disposition == "STALE"
+    assert stale.policy_gate_outcome == "STALE"
+    assert prompt_count == 0
+    assert budget is not None
+    assert budget.probes_used == 0
 
 
 async def test_authorized_prompt_deferred_by_candidate_floor_or_active_editing(

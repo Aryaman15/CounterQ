@@ -1095,6 +1095,38 @@ describe("Realtime voice foundation", () => {
     expect(socket.send).toHaveBeenLastCalledWith(
       expect.stringContaining('"type":"examiner_decision_policy_gate_requested"'),
     );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "debug_updated",
+        debug: expect.objectContaining({
+          lastPolicyGate: expect.objectContaining({
+            decisionId: "decision-1",
+            requestState: "REQUESTED",
+            reason: "Policy gate request sent.",
+          }),
+        }),
+      }),
+    );
+    socket.receive({
+      type: "durable_event_ack",
+      client_event_id: "unrelated-newer-observation",
+      created: true,
+      interview_event_id: "event-newer",
+      code_snapshot_id: "snapshot-newer",
+      code_version: 6,
+      observation_kind: "CODE_MEANINGFULLY_CHANGED",
+      server_sequence: 6,
+      interview_state_version: 0,
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "debug_updated",
+      debug: expect.objectContaining({
+        lastPolicyGate: expect.objectContaining({
+          decisionId: "decision-1",
+          requestState: "REQUESTED",
+        }),
+      }),
+    });
     socket.receive({
       type: "policy_gate_result",
       client_event_id: "ctrl-2-stable-id",
@@ -1113,7 +1145,13 @@ describe("Realtime voice foundation", () => {
     const gateEvent = events.find((event) => event.type === "policy_gate_result");
     expect(gateEvent).toMatchObject({
       type: "policy_gate_result",
-      result: { disposition: "AUTHORIZED", promptId: "prompt-1" },
+      result: {
+        decisionId: "decision-1",
+        requestState: "RECEIVED",
+        disposition: "AUTHORIZED",
+        promptId: "prompt-1",
+        reason: "authorized",
+      },
     });
 
     client.requestPromptDeliveryPermit("prompt-1");
@@ -1431,6 +1469,55 @@ describe("Realtime voice foundation", () => {
 
     expect(client.pendingCount).toBe(0);
     expect(events).not.toContainEqual(expect.objectContaining({ type: "error" }));
+  });
+
+  it("retains a standalone policy-gate request while control is disconnected and flushes it unchanged", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      randomUUID: () => "stable-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBe(1));
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+
+    client.requestExaminerDecisionPolicyGate("decision-old");
+    expect(client.pendingCount).toBe(1);
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "debug_updated",
+        debug: expect.objectContaining({
+          lastPolicyGate: expect.objectContaining({
+            decisionId: "decision-old",
+            requestState: "REQUESTED",
+            reason: "CONTROL DISCONNECTED; policy request pending/not sent.",
+          }),
+        }),
+      }),
+    );
+
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 2,
+    });
+    await connectPromise;
+
+    const request = lastSentControlMessage(socket, "examiner_decision_policy_gate_requested");
+    expect(request).toMatchObject({
+      examiner_decision_id: "decision-old",
+      client_event_id: "ctrl-1-stable-id",
+      client_sequence: 1,
+    });
   });
 
   it("sends canonical code snapshots through the durable control queue and records safe metadata", async () => {
