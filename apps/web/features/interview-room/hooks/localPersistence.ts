@@ -26,11 +26,49 @@ export function writeStoredProblemWidth(storage: Storage | undefined, value: num
   return clamped;
 }
 
-export function readStoredEditorCode(storage: Storage | undefined, fallback: string): string {
-  const stored = storage?.getItem(DEMO_EDITOR_STORAGE_KEY);
+export type DevelopmentLanguage = "cpp" | "python" | "java";
+
+export type EditorStorageScope = {
+  language: DevelopmentLanguage;
+  interviewSessionId?: string | null;
+};
+
+export function editorStorageKey(scope?: EditorStorageScope): string {
+  if (!scope) {
+    return DEMO_EDITOR_STORAGE_KEY;
+  }
+  const suffix = scope.interviewSessionId ?? `draft:${scope.language}`;
+  return `${DEMO_EDITOR_STORAGE_KEY}:${suffix}`;
+}
+
+export function readStoredEditorCode(
+  storage: Storage | undefined,
+  fallback: string,
+  scope?: EditorStorageScope,
+): string {
+  const stored = storage?.getItem(editorStorageKey(scope));
   return stored && stored.length > 0 ? stored : fallback;
 }
 
-export function writeStoredEditorCode(storage: Storage | undefined, value: string): void {
-  storage?.setItem(DEMO_EDITOR_STORAGE_KEY, value);
+export function writeStoredEditorCode(
+  storage: Storage | undefined,
+  value: string,
+  scope?: EditorStorageScope,
+): void {
+  storage?.setItem(editorStorageKey(scope), value);
+}
+
+export function resolveDevelopmentEditorSource({
+  canonicalSourceCode,
+  localSourceCode,
+  starterCode,
+}: {
+  canonicalSourceCode: string | null | undefined;
+  localSourceCode: string | null | undefined;
+  starterCode: string;
+}): string {
+  if (canonicalSourceCode) {
+    return canonicalSourceCode;
+  }
+  return localSourceCode && localSourceCode.length > 0 ? localSourceCode : starterCode;
 }

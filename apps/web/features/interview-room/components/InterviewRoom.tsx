@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   DEMO_SPLITTER_STORAGE_KEY,
+  type EditorStorageScope,
   readStoredEditorCode,
   readStoredProblemWidth,
+  resolveDevelopmentEditorSource,
   writeStoredEditorCode,
   writeStoredProblemWidth,
 } from "../hooks/localPersistence";
@@ -45,9 +47,17 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
   const previousSelectedLanguageRef = useRef(selectedLanguage);
+  const previousSessionIdRef = useRef<string | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
   const realtimeVoice = useRealtimeVoice({ developmentLanguage: selectedLanguage });
   const configuredLanguage = realtimeVoice.restoredBootstrap?.language ?? selectedLanguage;
+  const editorStorageScope = useMemo<EditorStorageScope>(
+    () => ({
+      language: configuredLanguage,
+      interviewSessionId: realtimeVoice.restoredBootstrap?.interview_session_id,
+    }),
+    [configuredLanguage, realtimeVoice.restoredBootstrap?.interview_session_id],
+  );
   const languageLabel = languageLabelFor(configuredLanguage);
   const remainingLabel = useAuthoritativeDeadlineTimer(
     realtimeVoice.serverDeadlineAt,
@@ -138,8 +148,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
 
   useEffect(() => {
     setProblemWidth(readStoredProblemWidth(window.localStorage));
-    setEditorCode(readStoredEditorCode(window.localStorage, fixture.starterCode));
-  }, [fixture.starterCode]);
+  }, []);
 
   useEffect(() => {
     if (
@@ -148,6 +157,10 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       !realtimeVoice.isRestoring
     ) {
       setEditorCode(developmentStarterCode[selectedLanguage]);
+      setExecutionResult(null);
+      setExecutionError(null);
+      setHasAttemptedRun(false);
+      setExecutionExpanded(false);
     }
     previousSelectedLanguageRef.current = selectedLanguage;
   }, [realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap, selectedLanguage]);
@@ -159,17 +172,35 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   }, [realtimeVoice.restoredBootstrap]);
 
   useEffect(() => {
-    if (realtimeVoice.restoredBootstrap) {
-      setEditorCode(
-        realtimeVoice.restoredBootstrap.latest_code_snapshot?.source_code ?? fixture.starterCode,
-      );
-      setEditorHydrated(true);
-      return;
-    }
     if (realtimeVoice.isRestoring) {
       setEditorHydrated(false);
+      return;
     }
-  }, [fixture.starterCode, realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap]);
+    const canonicalSource = realtimeVoice.restoredBootstrap?.latest_code_snapshot?.source_code;
+    const starterCode = developmentStarterCode[configuredLanguage];
+    const localSource = canonicalSource
+      ? null
+      : readStoredEditorCode(window.localStorage, "", editorStorageScope);
+    setEditorCode(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: canonicalSource,
+        localSourceCode: localSource,
+        starterCode,
+      }),
+    );
+    setEditorHydrated(true);
+  }, [configuredLanguage, editorStorageScope, realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap]);
+
+  useEffect(() => {
+    const sessionId = realtimeVoice.restoredBootstrap?.interview_session_id ?? null;
+    if (sessionId && previousSessionIdRef.current && previousSessionIdRef.current !== sessionId) {
+      setExecutionResult(null);
+      setExecutionError(null);
+      setHasAttemptedRun(false);
+      setExecutionExpanded(false);
+    }
+    previousSessionIdRef.current = sessionId;
+  }, [realtimeVoice.restoredBootstrap?.interview_session_id]);
 
   const persistProblemWidth = useCallback((nextWidth: number) => {
     setProblemWidth(writeStoredProblemWidth(window.localStorage, nextWidth));
@@ -177,8 +208,8 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
 
   const handleEditorChange = useCallback((nextValue: string) => {
     setEditorCode(nextValue);
-    writeStoredEditorCode(window.localStorage, nextValue);
-  }, []);
+    writeStoredEditorCode(window.localStorage, nextValue, editorStorageScope);
+  }, [editorStorageScope]);
 
   const runCurrentCode = useCallback(async () => {
     if (terminal || realtimeVoice.completionPending || executionRunning) return;
@@ -304,7 +335,9 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       />
 
       <div ref={workspaceRef} className="workspace" style={workspaceStyle} aria-busy={realtimeVoice.isRestoring}>
-        <ProblemPanel problem={fixture.problem} />
+        <ProblemPanel
+          problem={{ ...fixture.problem, functionSignature: functionSignatureFor(configuredLanguage) }}
+        />
         <div
           className="workspace-resizer"
           role="separator"
@@ -418,6 +451,16 @@ function languageLabelFor(language: "cpp" | "python" | "java"): "C++17" | "Pytho
 
 function sourceFilenameFor(language: "cpp" | "python" | "java"): string {
   return language === "cpp" ? "Solution.cpp" : language === "python" ? "solution.py" : "Solution.java";
+}
+
+function functionSignatureFor(language: "cpp" | "python" | "java"): string {
+  if (language === "python") {
+    return "def lengthOfLongestSubstring(self, s: str) -> int";
+  }
+  if (language === "java") {
+    return "int lengthOfLongestSubstring(String s)";
+  }
+  return "int lengthOfLongestSubstring(string s)";
 }
 
 export function codePersistenceState(

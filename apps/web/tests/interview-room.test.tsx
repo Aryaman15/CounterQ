@@ -16,8 +16,10 @@ import {
   DEMO_EDITOR_STORAGE_KEY,
   DEMO_SPLITTER_STORAGE_KEY,
   clampProblemWidth,
+  editorStorageKey,
   readStoredEditorCode,
   readStoredProblemWidth,
+  resolveDevelopmentEditorSource,
   writeStoredEditorCode,
   writeStoredProblemWidth,
 } from "../features/interview-room/hooks/localPersistence";
@@ -183,6 +185,54 @@ describe("Interview Room demo", () => {
     );
   });
 
+  it("uses language-scoped starters and never carries a C++ draft into Python or Java", () => {
+    window.localStorage.setItem(DEMO_EDITOR_STORAGE_KEY, "stale C++ source");
+
+    expect(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: null,
+        localSourceCode: readStoredEditorCode(window.localStorage, "", { language: "python" }),
+        starterCode: "class Solution:\n    pass",
+      }),
+    ).toBe("class Solution:\n    pass");
+    expect(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: null,
+        localSourceCode: readStoredEditorCode(window.localStorage, "", { language: "java" }),
+        starterCode: "class Solution { }",
+      }),
+    ).toBe("class Solution { }");
+    expect(editorStorageKey({ language: "python", interviewSessionId: "python-session" })).not.toBe(
+      editorStorageKey({ language: "java", interviewSessionId: "java-session" }),
+    );
+  });
+
+  it("prefers exact canonical Python and Java source over language-scoped local drafts", () => {
+    window.localStorage.setItem(
+      editorStorageKey({ language: "python", interviewSessionId: "python-session" }),
+      "local python draft",
+    );
+    window.localStorage.setItem(
+      editorStorageKey({ language: "java", interviewSessionId: "java-session" }),
+      "local java draft",
+    );
+
+    expect(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: "class Solution:\n    def lengthOfLongestSubstring(self, s): return 3",
+        localSourceCode: "local python draft",
+        starterCode: "python starter",
+      }),
+    ).toContain("return 3");
+    expect(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: "class Solution { int lengthOfLongestSubstring(String s) { return 3; } }",
+        localSourceCode: "local java draft",
+        starterCode: "java starter",
+      }),
+    ).toContain("String s");
+  });
+
   it("shows the required header state without durable stage labels", () => {
     render(<InterviewRoom fixture={demoInterviewFixture} />);
 
@@ -212,6 +262,16 @@ describe("Interview Room demo", () => {
     expect(screen.getByRole("heading", { name: "Constraints" })).toBeInTheDocument();
     expect(screen.getByText("0 <= s.length <= 5 * 10^4")).toBeInTheDocument();
     expect(screen.getByText("int lengthOfLongestSubstring(string s)")).toBeInTheDocument();
+  });
+
+  it("updates the development problem signature with the selected language", () => {
+    render(<InterviewRoom fixture={demoInterviewFixture} />);
+    const selector = screen.getByRole("combobox", { name: "Development execution language" });
+
+    fireEvent.change(selector, { target: { value: "python" } });
+    expect(screen.getByText("def lengthOfLongestSubstring(self, s: str) -> int")).toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: "java" } });
+    expect(screen.getByText("int lengthOfLongestSubstring(String s)")).toBeInTheDocument();
   });
 
   it("renders only candidate-safe delivered interviewer text", () => {
