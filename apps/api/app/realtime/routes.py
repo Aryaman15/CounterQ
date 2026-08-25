@@ -3,8 +3,10 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, ValidationError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_gateway.provider import (
@@ -63,6 +65,7 @@ from app.realtime.provider import RealtimeProviderError, RealtimeVoiceProvider
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
 DEVELOPMENT_REALTIME_ENVS = DEVELOPMENT_SPIKE_ENVS
+logger = structlog.get_logger(__name__)
 
 
 class CreateRealtimeSessionRequest(BaseModel):
@@ -336,6 +339,22 @@ async def realtime_control_websocket(
                     client_event_id=getattr(message, "client_event_id", None),
                     category="control_rejected",
                     message=safe_control_error_message(exc),
+                ).model_dump(mode="json"),
+            )
+        except SQLAlchemyError as exc:
+            # The session transaction has already rolled back before this handler
+            # runs.  Each durable message receives a fresh session on the next turn.
+            logger.exception(
+                "realtime_durable_control_persistence_failed",
+                message_type=getattr(message, "type", type(message).__name__),
+                interview_session_id=str(interview_session_id),
+                exception_class=type(exc).__name__,
+            )
+            await websocket.send_json(
+                ControlErrorMessage(
+                    client_event_id=getattr(message, "client_event_id", None),
+                    category="control_unavailable",
+                    message="CounterQ control is temporarily unavailable. Please try again.",
                 ).model_dump(mode="json"),
             )
 

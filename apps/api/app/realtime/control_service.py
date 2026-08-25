@@ -10,6 +10,7 @@ from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.interviews.floor import ConversationFloor
 from app.interviews.interaction_repository import InterviewInteractionRepository
@@ -616,6 +617,9 @@ class RealtimeControlService:
     async def _prompt_for_session(self, session_id: UUID, prompt_id: UUID) -> InterviewerPrompt:
         prompt = await self._session.scalar(
             select(InterviewerPrompt)
+            # start_delivery validates Examiner-origin prompt provenance.  Load it
+            # explicitly so AsyncSession never attempts implicit relationship I/O.
+            .options(selectinload(InterviewerPrompt.examiner_decision))
             .where(InterviewerPrompt.interview_session_id == session_id)
             .where(InterviewerPrompt.id == prompt_id),
         )

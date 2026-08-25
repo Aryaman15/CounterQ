@@ -336,6 +336,12 @@ async def test_delivery_completion_consumes_probe_budget_once(
         decision_id=decision.id,
     )
     assert gate.prompt_id is not None
+
+    # Mirror the WebSocket's fresh durable-message session.  Without the
+    # selectinload in _prompt_for_session, start_delivery would lazily load the
+    # decision here and AsyncSession would raise MissingGreenlet.
+    db_session.expunge_all()
+
     service = RealtimeControlService(db_session)
     start = await service.start_delivery(
         session_id=decision.interview_session_id,
@@ -351,7 +357,7 @@ async def test_delivery_completion_consumes_probe_budget_once(
     assert delivery is not None
     assert delivery.intended_text == gate.candidate_safe_text
 
-    await service.complete_delivery(
+    completed = await service.complete_delivery(
         session_id=decision.interview_session_id,
         message=CounterQDeliveryCompletedMessage(
             **client_base(2),
@@ -363,6 +369,12 @@ async def test_delivery_completion_consumes_probe_budget_once(
             idempotency_key=f"counterq-delivered:{start.delivery_id}:response-policy-gate-1",
         ),
     )
+    assert completed.delivery_state == "DELIVERED"
+    assert completed.transcript_segment_id is not None
+    delivery = await db_session.get(InterviewerPromptDelivery, start.delivery_id)
+    assert delivery is not None
+    assert delivery.delivery_state == "DELIVERED"
+    assert delivery.actual_transcript_segment_id == completed.transcript_segment_id
     budget = await db_session.get(SessionBudget, decision.interview_session_id)
     assert budget is not None
     assert budget.probes_used == 1
