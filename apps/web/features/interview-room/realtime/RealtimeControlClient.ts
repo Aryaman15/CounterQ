@@ -849,6 +849,8 @@ export class RealtimeControlClient {
       this.patchDebug({
         lastServerSequence: sourceWatermark ?? this.debug.lastServerSequence,
         stateVersion: stateVersion ?? this.debug.stateVersion,
+        probeBudgetUsed: numberField(message.probe_budget_used) ?? this.debug.probeBudgetUsed,
+        probeBudgetMax: numberField(message.probe_budget_max) ?? this.debug.probeBudgetMax,
         lastObservation: observationKind
           ? {
               kind: observationKind,

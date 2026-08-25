@@ -1224,6 +1224,48 @@ describe("Realtime voice foundation", () => {
     });
   });
 
+  it("control client refreshes probe budget from delivery acknowledgements without erasing it", async () => {
+    const { client, socket } = await connectedControlClient();
+    const debugUpdates: RealtimeControlEvent[] = [];
+    client.on((event) => {
+      if (event.type === "debug_updated") {
+        debugUpdates.push(event);
+      }
+    });
+
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: "delivery-completed",
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-1",
+      delivery_state: "DELIVERED",
+      interview_state_version: 0,
+      created: true,
+      probe_budget_used: 1,
+      probe_budget_max: 5,
+    });
+
+    expect(debugUpdates.at(-1)).toMatchObject({
+      type: "debug_updated",
+      debug: { probeBudgetUsed: 1, probeBudgetMax: 5 },
+    });
+
+    socket.receive({
+      type: "delivery_ack",
+      client_event_id: "delivery-interrupted",
+      interviewer_prompt_id: "prompt-1",
+      prompt_delivery_id: "delivery-1",
+      delivery_state: "INTERRUPTED",
+      interview_state_version: 0,
+      created: false,
+    });
+
+    expect(debugUpdates.at(-1)).toMatchObject({
+      type: "debug_updated",
+      debug: { probeBudgetUsed: 1, probeBudgetMax: 5 },
+    });
+  });
+
   it("control client waits for final output transcript when playback completes before transcript final", async () => {
     const { client, socket } = await connectedControlClient();
     activatePermittedPrompt(client, socket);
@@ -1360,9 +1402,11 @@ describe("Realtime voice foundation", () => {
       type: "server_hello",
       interview_session_id: "session-1",
       current_stage: "IMPLEMENTATION",
-      state_version: 0,
-      last_server_sequence: 0,
-    });
+    state_version: 0,
+    last_server_sequence: 0,
+    probe_budget_used: 0,
+    probe_budget_max: 5,
+  });
     await connectPromise;
 
     for (const [index, status, reason] of [
