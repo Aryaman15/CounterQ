@@ -35,6 +35,7 @@ export function useAuthoritativeDeadlineTimer(
   serverDeadlineAtIso: string | null,
   fixtureServerNowIso: string,
   fixtureDeadlineAtIso: string,
+  restorationPending = false,
 ): string {
   const fallback = useDemoDeadlineTimer(fixtureServerNowIso, fixtureDeadlineAtIso);
   const [now, setNow] = useState(() => Date.now());
@@ -48,6 +49,9 @@ export function useAuthoritativeDeadlineTimer(
     return () => window.clearInterval(intervalId);
   }, [serverDeadlineAtIso]);
 
+  if (restorationPending) {
+    return "--:--";
+  }
   if (!serverDeadlineAtIso) {
     return fallback;
   }

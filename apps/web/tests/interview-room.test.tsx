@@ -3,7 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Home from "../app/page";
 import InterviewDemoPage from "../app/interview/demo/page";
-import { InterviewRoom } from "../features/interview-room/components/InterviewRoom";
+import {
+  codePersistenceState,
+  InterviewRoom,
+} from "../features/interview-room/components/InterviewRoom";
 import { InterviewerSurface } from "../features/interview-room/components/InterviewerSurface";
 import {
   demoInterviewFixture,
@@ -130,6 +133,33 @@ describe("Interview Room demo", () => {
       "href",
       "/interview/demo",
     );
+  });
+
+  it("derives the editor persistence badge from canonical acknowledgement", () => {
+    const base = {
+      canonicalDebug: observedCanonicalSession,
+      isRestoring: false,
+    };
+
+    expect(
+      codePersistenceState("class Solution {};", {
+        ...base,
+        acknowledgedCodeSource: "class Solution {};",
+      }),
+    ).toBe("SYNCED");
+    expect(
+      codePersistenceState("class Solution { int x; };", {
+        ...base,
+        acknowledgedCodeSource: "class Solution {};",
+      }),
+    ).toBe("LOCAL_PENDING");
+    expect(
+      codePersistenceState("class Solution {};", {
+        ...base,
+        isRestoring: true,
+        acknowledgedCodeSource: "class Solution {};",
+      }),
+    ).toBe("PERSISTENCE_UNCONFIRMED");
   });
 
   it("renders the Interview Room route and Monaco surface", async () => {

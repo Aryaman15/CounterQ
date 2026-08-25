@@ -14,6 +14,7 @@ import { usePrefersReducedMotion } from "../hooks/usePrefersReducedMotion";
 import type { DeliveredConversationRow, DemoInterviewRoomFixture } from "../models/candidate-visible";
 import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
+import type { RealtimeVoiceControls } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
 import { ExecutionPanel } from "./ExecutionPanel";
 import { InterviewHeader } from "./InterviewHeader";
@@ -42,6 +43,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     realtimeVoice.serverDeadlineAt,
     fixture.serverNowIso,
     fixture.deadlineAtIso,
+    realtimeVoice.isRestoring,
   );
   const currentDeliveredTurn = useMemo(() => {
       const restoredTurn = realtimeVoice.restoredBootstrap?.recent_conversation
@@ -62,10 +64,13 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           deliveryState,
         };
       }
-      return realtimeVoice.restoredBootstrap ? null : fixture.currentDeliveredTurn;
+      return realtimeVoice.isRestoring || realtimeVoice.restoredBootstrap
+        ? null
+        : fixture.currentDeliveredTurn;
     },
     [
       fixture.currentDeliveredTurn,
+      realtimeVoice.isRestoring,
       realtimeVoice.currentCounterQDeliveryText,
       realtimeVoice.restoredBootstrap,
     ],
@@ -232,7 +237,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
             </div>
             <div className="editor-meta">
               <span>{fixture.languageLabel}</span>
-              <span className="local-state">{fixture.persistenceState}</span>
+              <span className="local-state">{codePersistenceState(editorCode, realtimeVoice)}</span>
             </div>
           </div>
           <MonacoInterviewEditor
@@ -286,4 +291,23 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       <span className="storage-key-marker" data-storage-key={DEMO_SPLITTER_STORAGE_KEY} aria-hidden="true" />
     </main>
   );
+}
+
+export function codePersistenceState(
+  editorCode: string,
+  realtimeVoice: Pick<
+    RealtimeVoiceControls,
+    "acknowledgedCodeSource" | "canonicalDebug" | "isRestoring"
+  >,
+): "SYNCED" | "LOCAL_PENDING" | "PERSISTENCE_UNCONFIRMED" {
+  if (realtimeVoice.isRestoring) {
+    return "PERSISTENCE_UNCONFIRMED";
+  }
+  if (realtimeVoice.acknowledgedCodeSource === editorCode) {
+    return "SYNCED";
+  }
+  if (realtimeVoice.canonicalDebug.controlConnected) {
+    return "LOCAL_PENDING";
+  }
+  return "PERSISTENCE_UNCONFIRMED";
 }

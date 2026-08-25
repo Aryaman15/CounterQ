@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
@@ -31,6 +31,7 @@ export type RealtimeVoiceControls = {
   restoredBootstrap: DevelopmentBootstrapResponse | null;
   isRestoring: boolean;
   controlReconnecting: boolean;
+  acknowledgedCodeSource: string | null;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -81,14 +82,17 @@ export function useRealtimeVoice(
   const [restoredBootstrap, setRestoredBootstrap] = useState<DevelopmentBootstrapResponse | null>(
     null,
   );
-  const [isRestoring, setIsRestoring] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(true);
   const [controlReconnecting, setControlReconnecting] = useState(false);
+  const [acknowledgedCodeSource, setAcknowledgedCodeSource] = useState<string | null>(null);
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const controlClientRef = useRef<RealtimeControlClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
   const unsubscribeControlRef = useRef<(() => void) | null>(null);
   const transcriptDraftsRef = useRef(new Map<string, string>());
   const activeTranscriptKeyRef = useRef<string | null>(null);
+  const pendingCodeSourceRef = useRef<string | null>(null);
+  const autoRestoreAttemptedRef = useRef(false);
 
   const voiceState = useMemo<VoicePresenceState>(() => {
     if (isMuted && activityState === "Listening") {
@@ -138,6 +142,7 @@ export function useRealtimeVoice(
       if (event.type === "connected") {
         setServerDeadlineAt(event.bootstrap.deadline_at);
         setRestoredBootstrap(event.bootstrap);
+        setAcknowledgedCodeSource(event.bootstrap.latest_code_snapshot?.source_code ?? null);
         setIsRestoring(false);
         setControlReconnecting(false);
         return;
@@ -152,6 +157,13 @@ export function useRealtimeVoice(
       }
       if (event.type === "debug_updated") {
         setCanonicalDebug(event.debug);
+        if (
+          event.debug.lastCode.persistence === "ACKNOWLEDGED" &&
+          pendingCodeSourceRef.current !== null
+        ) {
+          setAcknowledgedCodeSource(pendingCodeSourceRef.current);
+          pendingCodeSourceRef.current = null;
+        }
         return;
       }
       if (event.type === "authorized_prompt") {
@@ -173,10 +185,12 @@ export function useRealtimeVoice(
   const enableMicrophone = useCallback(async () => {
     setErrorMessage(null);
     setActivityState("Connecting");
-    setIsRestoring(true);
     const controlClient = ensureControlClient();
     const client = ensureClient();
     try {
+      if (!restoredBootstrap) {
+        setIsRestoring(true);
+      }
       await controlClient.connectDevelopmentInterview();
       await client.connect();
     } catch (error) {
@@ -185,7 +199,7 @@ export function useRealtimeVoice(
       setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
-  }, [ensureClient, ensureControlClient]);
+  }, [ensureClient, ensureControlClient, restoredBootstrap]);
 
   const mute = useCallback(() => {
     clientRef.current?.setMuted(true);
@@ -211,11 +225,13 @@ export function useRealtimeVoice(
     setCurrentCounterQDeliveryText("");
     transcriptDraftsRef.current.clear();
     activeTranscriptKeyRef.current = null;
+    pendingCodeSourceRef.current = null;
     setCanonicalDebug(emptyCanonicalDebug());
     setServerDeadlineAt(null);
     setRestoredBootstrap(null);
     setIsRestoring(false);
     setControlReconnecting(false);
+    setAcknowledgedCodeSource(null);
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -236,6 +252,7 @@ export function useRealtimeVoice(
       trigger: "INITIAL_EDITOR_STATE" | "EDIT_BURST",
       idempotencyKey: string,
     ) => {
+      pendingCodeSourceRef.current = sourceCode;
       controlClientRef.current?.sendCandidateCodeSnapshot({
         sourceCode,
         language: "cpp",
@@ -254,6 +271,25 @@ export function useRealtimeVoice(
     controlClientRef.current?.sendCandidateCodeActivityIdle();
   }, []);
 
+  useLayoutEffect(() => {
+    if (autoRestoreAttemptedRef.current) {
+      return;
+    }
+    autoRestoreAttemptedRef.current = true;
+    const controlClient = ensureControlClient();
+    if (!controlClient.hasStoredDevelopmentSession()) {
+      setIsRestoring(false);
+      return;
+    }
+    setIsRestoring(true);
+    void controlClient.restoreExistingDevelopmentInterview().catch((error) => {
+      setIsRestoring(false);
+      setErrorMessage(
+        error instanceof Error ? error.message : "CounterQ could not restore this interview.",
+      );
+    });
+  }, [ensureControlClient]);
+
   useEffect(() => disconnect, [disconnect]);
 
   return {
@@ -269,6 +305,7 @@ export function useRealtimeVoice(
     restoredBootstrap,
     isRestoring,
     controlReconnecting,
+    acknowledgedCodeSource,
     enableMicrophone,
     mute,
     unmute,

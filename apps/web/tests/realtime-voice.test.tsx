@@ -211,6 +211,8 @@ class HookFakeControlClient {
   private connectImpl: () => Promise<typeof fakeDevelopmentBootstrap> = async () =>
     fakeDevelopmentBootstrap;
   connectDevelopmentInterview = vi.fn(() => this.connectImpl());
+  hasStoredDevelopmentSession = vi.fn(() => false);
+  restoreExistingDevelopmentInterview = vi.fn(async () => null);
   disconnect = vi.fn(() => {
     this.emit({ type: "disconnected" });
   });
@@ -463,6 +465,24 @@ describe("Realtime voice foundation", () => {
 
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Ready");
     expect(screen.queryByText("Listening")).not.toBeInTheDocument();
+  });
+
+  it("restores a stored interview on mount without enabling microphone", async () => {
+    const voiceClient = new HookFakeClient();
+    const controlClient = new HookFakeControlClient();
+    controlClient.hasStoredDevelopmentSession.mockReturnValue(true);
+    controlClient.restoreExistingDevelopmentInterview.mockImplementation(async () => {
+      controlClient.emit({ type: "connected", bootstrap: fakeDevelopmentBootstrap });
+      return null;
+    });
+
+    renderRealtimeHarness(voiceClient, controlClient);
+
+    await waitFor(() => {
+      expect(controlClient.restoreExistingDevelopmentInterview).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Ready");
+    expect(controlClient.connectDevelopmentInterview).not.toHaveBeenCalled();
   });
 
   it("shows Connecting while microphone enablement is in progress", async () => {
@@ -1164,6 +1184,55 @@ describe("Realtime voice foundation", () => {
 
     expect(secondSocket.send).toHaveBeenCalledWith(expect.stringContaining(String(pending.client_event_id)));
     expect(second.pendingCount).toBe(1);
+  });
+
+  it("restores a stored session through control without creating microphone transport", async () => {
+    const storage = new Map<string, string>([
+      ["counterq:realtime-control:development-session-id", "session-1"],
+      ["counterq:realtime-control:client-instance-id", "client-instance"],
+    ]);
+    let restoreRequestBody = "";
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      restoreRequestBody = String(init?.body ?? "");
+      return new Response(JSON.stringify({
+        ...fakeDevelopmentBootstrap,
+        restoration: "RESTORED",
+        latest_code_snapshot: null,
+        recent_conversation: [],
+        unresolved_prompt: null,
+        highest_client_sequence: 0,
+        last_server_sequence: 4,
+      }));
+    });
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: (key) => storage.get(key) ?? null,
+        setItem: (key, value) => storage.set(key, value),
+      },
+    });
+
+    const restore = client.restoreExistingDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBeGreaterThan(0));
+    const socket = FakeControlWebSocket.instances.at(-1)!;
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 0,
+      last_server_sequence: 4,
+      probe_budget_used: 1,
+      probe_budget_max: 5,
+    });
+
+    await expect(restore).resolves.toMatchObject({ restoration: "RESTORED" });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(restoreRequestBody)).toMatchObject({
+      interview_session_id: "session-1",
+    });
   });
 
   it("control client requests policy gate, then delivery permit before speaking", async () => {

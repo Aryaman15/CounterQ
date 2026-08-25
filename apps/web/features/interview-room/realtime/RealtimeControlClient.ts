@@ -217,9 +217,27 @@ export class RealtimeControlClient {
     return this.pending.size;
   }
 
+  hasStoredDevelopmentSession(): boolean {
+    return Boolean(this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY));
+  }
+
+  async restoreExistingDevelopmentInterview(): Promise<DevelopmentBootstrapResponse | null> {
+    if (this.bootstrap) {
+      await this.openWebSocket();
+      return this.bootstrap;
+    }
+    if (!this.hasStoredDevelopmentSession()) {
+      return null;
+    }
+    await this.bootstrapDevelopmentInterview({ allowCreate: false });
+    this.manualDisconnect = false;
+    await this.openWebSocket();
+    return this.bootstrap;
+  }
+
   async connectDevelopmentInterview(): Promise<DevelopmentBootstrapResponse> {
     if (!this.bootstrap) {
-      await this.bootstrapDevelopmentInterview();
+      await this.bootstrapDevelopmentInterview({ allowCreate: true });
     }
 
     this.manualDisconnect = false;
@@ -227,7 +245,7 @@ export class RealtimeControlClient {
     return this.bootstrap!;
   }
 
-  private async bootstrapDevelopmentInterview(): Promise<void> {
+  private async bootstrapDevelopmentInterview({ allowCreate }: { allowCreate: boolean }): Promise<void> {
     const storedSessionId = this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY) ?? null;
     const request = async (interviewSessionId: string | null) => {
       const response = await this.fetchFn(`${this.apiBaseUrl}/api/realtime/development-interview`, {
@@ -243,7 +261,7 @@ export class RealtimeControlClient {
       return response;
     };
     let response = await request(storedSessionId);
-    if (response.status === 404 && storedSessionId) {
+    if (response.status === 404 && storedSessionId && allowCreate) {
       this.storage?.removeItem?.(DEVELOPMENT_SESSION_STORAGE_KEY);
       response = await request(null);
     }
@@ -1120,7 +1138,7 @@ export class RealtimeControlClient {
       this.reconnectTimer = null;
       // Re-read the candidate-safe canonical projection before reopening control.
       // This reconciles missed server ordering without replaying hidden events.
-      void this.bootstrapDevelopmentInterview()
+      void this.bootstrapDevelopmentInterview({ allowCreate: false })
         .then(() => this.openWebSocket())
         .then(() => {
           this.reconnectAttempts = 0;

@@ -7,7 +7,7 @@ export type VoicePresenceState =
   | "Muted"
   | "Error";
 
-export type DemoPersistenceState = "LOCAL_PENDING";
+export type DemoPersistenceState = "SYNCED" | "LOCAL_PENDING" | "PERSISTENCE_UNCONFIRMED";
 
 export type DeliveredInterviewerTurn = {
   id: string;
