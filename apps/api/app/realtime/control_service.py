@@ -382,7 +382,7 @@ class RealtimeControlService:
         *,
         session_id: UUID,
     ) -> DevelopmentPromptResult:
-        await self.ensure_session_exists(session_id)
+        await InterviewRuntime(self._session, clock=self._clock).ensure_activity_allowed(session_id)
         prompt = await InterviewInteractionRepository(self._session).add_prompt(
             interview_session_id=session_id,
             origin="SYSTEM",
@@ -440,6 +440,7 @@ class RealtimeControlService:
         session_id: UUID,
         message: CounterQDeliveryStartedMessage,
     ) -> DeliveryPersistenceResult:
+        await InterviewRuntime(self._session, clock=self._clock).ensure_activity_allowed(session_id)
         prompt = await self._prompt_for_session(session_id, message.interviewer_prompt_id)
         existing = await self._delivery_for_provider_response(
             session_id=session_id,

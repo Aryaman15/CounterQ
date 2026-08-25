@@ -1449,12 +1449,11 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 2C — End Interview + Deadline Completion + Terminal Session Lifecycle
+Stage 2D — Durable Interview Core Adversarial Acceptance Gate
 
 Current Goal:
-Complete active interviews deterministically at user request or the
-authoritative server deadline, preserving durable terminal truth across
-reconnect and refresh.
+Prove the durable interview core preserves canonical state through retries,
+reconnects, refreshes, deadline expiry and terminal races.
 ```
 
 Update only this small section as implementation progresses.

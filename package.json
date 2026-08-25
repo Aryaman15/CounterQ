@@ -16,6 +16,7 @@
     "eval:stage2a": "uv run --directory apps/api pytest tests/evaluation/stage2a -q",
     "eval:stage2b": "uv run --directory apps/api pytest tests/evaluation/stage2b -q",
     "eval:stage2c": "uv run --directory apps/api pytest tests/evaluation/stage2c -q",
+    "eval:stage2d": "uv run --directory apps/api pytest tests/evaluation/stage2d -q",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",
     "lint:frontend": "pnpm --filter @counterq/web lint",
     "lint:backend": "uv run --directory apps/api ruff check .",

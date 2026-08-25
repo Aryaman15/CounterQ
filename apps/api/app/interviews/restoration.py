@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
@@ -68,8 +69,14 @@ class RestoredInterview:
 class SessionRestorationService:
     """Reads durable session truth without treating browser state as canonical."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self._session = session
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     async def restore(
         self,
@@ -79,8 +86,10 @@ class SessionRestorationService:
         reconcile_orphaned_deliveries: bool = False,
     ) -> RestoredInterview:
         interview = await self._interview(interview_session_id)
-        if interview.status == "ACTIVE" and datetime.now(UTC) >= interview.deadline_at:
-            await InterviewCompletionService(self._session).reconcile_expired(interview.id)
+        if interview.status == "ACTIVE" and self._clock() >= interview.deadline_at:
+            await InterviewCompletionService(
+                self._session, clock=self._clock
+            ).reconcile_expired(interview.id)
             interview = await self._interview(interview_session_id)
         if interview.status not in {"ACTIVE", "COMPLETED"}:
             raise DevelopmentInterviewNotResumable("Interview session is not resumable")

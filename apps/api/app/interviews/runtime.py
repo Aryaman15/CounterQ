@@ -133,6 +133,12 @@ class InterviewRuntime:
         )
         return AcceptedEvent(event=event, created=True)
 
+    async def ensure_activity_allowed(self, session_id: UUID) -> InterviewSession:
+        """Expose terminal/deadline admission without accepting a synthetic event."""
+        interview = await self._lock_session(session_id)
+        self._ensure_session_accepts_activity(interview)
+        return interview
+
     async def transition(self, command: TransitionCommand) -> InterviewStageTransition:
         interview = await self._lock_session(command.session_id)
         existing = await self._find_idempotent_event(interview.id, command.idempotency_key)
