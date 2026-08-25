@@ -389,6 +389,8 @@ export interface components {
         };
         /** RealtimeDevelopmentBootstrapResponse */
         RealtimeDevelopmentBootstrapResponse: {
+            /** Completed At */
+            completed_at?: string | null;
             /** Configured Duration Seconds */
             configured_duration_seconds: number;
             /** Control Websocket Path */
@@ -429,6 +431,8 @@ export interface components {
              * @constant
              */
             restore_protocol_version: "session.restore.v1";
+            /** Session Status */
+            session_status: string;
             /**
              * Started At
              * Format: date-time
@@ -438,6 +442,8 @@ export interface components {
             state_version: number;
             /** Template */
             template: string;
+            /** Terminal Reason */
+            terminal_reason?: ("USER_ENDED" | "TIME_EXPIRED") | null;
             /** Time Pressure */
             time_pressure: string;
             /** Time Remaining Seconds */

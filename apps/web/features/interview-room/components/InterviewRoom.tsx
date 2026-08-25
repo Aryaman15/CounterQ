@@ -45,6 +45,18 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     fixture.deadlineAtIso,
     realtimeVoice.isRestoring,
   );
+  const terminal = realtimeVoice.terminalSession;
+
+  useEffect(() => {
+    if (
+      !terminal &&
+      !realtimeVoice.isRestoring &&
+      realtimeVoice.serverDeadlineAt &&
+      Date.parse(realtimeVoice.serverDeadlineAt) <= Date.now()
+    ) {
+      realtimeVoice.completeForDeadline();
+    }
+  }, [realtimeVoice, terminal]);
   const currentDeliveredTurn = useMemo(() => {
       const restoredTurn = realtimeVoice.restoredBootstrap?.recent_conversation
         .filter((turn) => turn.speaker === "COUNTERQ")
@@ -206,9 +218,10 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     >
       <InterviewHeader
         mode={fixture.mode}
-        remainingLabel={remainingLabel}
+        remainingLabel={terminal ? "00:00" : remainingLabel}
         voiceState={realtimeVoice.voiceState}
         onEndInterview={() => setEndDialogOpen(true)}
+        terminal={Boolean(terminal)}
       />
 
       <div ref={workspaceRef} className="workspace" style={workspaceStyle} aria-busy={realtimeVoice.isRestoring}>
@@ -243,7 +256,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           <MonacoInterviewEditor
             value={editorCode}
             onChange={handleEditorChange}
-            readOnly={realtimeVoice.isRestoring}
+            readOnly={realtimeVoice.isRestoring || Boolean(terminal) || realtimeVoice.completionPending}
           />
           <ExecutionPanel
             expanded={executionExpanded}
@@ -253,6 +266,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
               setExecutionExpanded(true);
             }}
             onToggle={() => setExecutionExpanded((current) => !current)}
+            disabled={Boolean(terminal) || realtimeVoice.completionPending}
           />
         </section>
       </div>
@@ -274,6 +288,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
         onEvaluateExaminerDecision={realtimeVoice.evaluateExaminerDecision}
         onDeliverAuthorizedPrompt={realtimeVoice.deliverAuthorizedPrompt}
         onOpenConversation={() => setConversationOpen(true)}
+        terminal={Boolean(terminal) || realtimeVoice.completionPending}
       />
       <RecentConversationDrawer
         open={conversationOpen}
@@ -283,10 +298,18 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       {realtimeVoice.isRestoring ? (
         <p className="restore-status" role="status">Restoring interview...</p>
       ) : null}
+      {terminal ? (
+        <p className="restore-status" role="status">
+          {terminal.reason === "TIME_EXPIRED" ? "Time's up. This interview has ended." : "Interview ended."}
+        </p>
+      ) : null}
       <EndInterviewDialog
         open={endDialogOpen}
         onCancel={() => setEndDialogOpen(false)}
-        onConfirm={() => setEndDialogOpen(false)}
+        onConfirm={() => {
+          setEndDialogOpen(false);
+          realtimeVoice.endInterview();
+        }}
       />
       <span className="storage-key-marker" data-storage-key={DEMO_SPLITTER_STORAGE_KEY} aria-hidden="true" />
     </main>

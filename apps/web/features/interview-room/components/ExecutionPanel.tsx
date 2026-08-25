@@ -7,9 +7,10 @@ type ExecutionPanelProps = {
   onToggle: () => void;
   onRun: () => void;
   hasAttemptedRun: boolean;
+  disabled?: boolean;
 };
 
-export function ExecutionPanel({ expanded, onToggle, onRun, hasAttemptedRun }: ExecutionPanelProps) {
+export function ExecutionPanel({ expanded, onToggle, onRun, hasAttemptedRun, disabled = false }: ExecutionPanelProps) {
   return (
     <section className="execution-panel" aria-labelledby="execution-title">
       <div className="execution-bar">
@@ -18,7 +19,7 @@ export function ExecutionPanel({ expanded, onToggle, onRun, hasAttemptedRun }: E
           <p>{hasAttemptedRun ? "Provider not connected for this visual preview." : "Collapsed until needed."}</p>
         </div>
         <div className="execution-actions">
-          <button type="button" className="run-button" onClick={onRun}>
+          <button type="button" className="run-button" onClick={onRun} disabled={disabled}>
             <Play size={15} aria-hidden="true" />
             <span>Run</span>
           </button>
@@ -26,6 +27,7 @@ export function ExecutionPanel({ expanded, onToggle, onRun, hasAttemptedRun }: E
             type="button"
             className="icon-button"
             onClick={onToggle}
+            disabled={disabled}
             aria-expanded={expanded}
             aria-controls="execution-details"
             aria-label={expanded ? "Collapse execution area" : "Expand execution area"}

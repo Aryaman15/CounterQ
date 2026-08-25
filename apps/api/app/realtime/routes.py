@@ -22,6 +22,7 @@ from app.examiner.coordinator import (
     LiveExaminerCoordinator,
     observation_is_live_examiner_eligible,
 )
+from app.interviews.completion import DeadlineNotReached, InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.prompt_authorization import PromptAuthorizationError
@@ -35,9 +36,11 @@ from app.realtime.control_protocol import (
     CandidateCodeActivityIdleMessage,
     CandidateCodeActivityStartedMessage,
     CandidateCodeSnapshotMessage,
+    CandidateEndInterviewMessage,
     CandidateSpeechStartedMessage,
     CandidateSpeechStoppedMessage,
     CandidateTranscriptFinalizedMessage,
+    ClientControlMessage,
     ClientHelloMessage,
     ControlErrorMessage,
     ControlSignalAckMessage,
@@ -61,6 +64,8 @@ from app.realtime.control_protocol import (
     RestoredConversationTurnMessage,
     RestoredUnresolvedPromptMessage,
     ServerHelloMessage,
+    SessionDeadlineReachedMessage,
+    SessionTerminalAckMessage,
     client_control_message_adapter,
 )
 from app.realtime.control_service import (
@@ -210,6 +215,7 @@ async def create_realtime_development_interview(
         template=restored.template,
         configured_duration_seconds=interview.configuration.configured_duration_seconds,
         current_stage=interview.current_stage,
+        session_status=interview.status,
         state_version=interview.state_version,
         deadline_at=interview.deadline_at,
         time_remaining_seconds=restored.time_remaining_seconds,
@@ -218,6 +224,8 @@ async def create_realtime_development_interview(
         restoration=restoration,
         restore_protocol_version=RESTORE_PROTOCOL_VERSION,
         started_at=interview.started_at,
+        completed_at=interview.completed_at,
+        terminal_reason=restored.terminal_reason,
         latest_code_snapshot=(
             RestoredCodeSnapshotMessage(
                 id=restored.code_snapshot.id,
@@ -403,7 +411,12 @@ async def realtime_control_websocket(
                     response=response,
                     interview_session_id=interview_session_id,
                 )
-        except (RealtimeControlError, InterviewRuntimeError, PromptAuthorizationError) as exc:
+        except (
+            DeadlineNotReached,
+            RealtimeControlError,
+            InterviewRuntimeError,
+            PromptAuthorizationError,
+        ) as exc:
             await websocket.send_json(
                 ControlErrorMessage(
                     client_event_id=getattr(message, "client_event_id", None),
@@ -433,7 +446,7 @@ async def _handle_durable_control_message(
     *,
     service: RealtimeControlService,
     interview_session_id: UUID,
-    message: object,
+    message: ClientControlMessage,
     runtime_state: RealtimeControlRuntimeState,
 ) -> (
     DurableEventAckMessage
@@ -442,8 +455,47 @@ async def _handle_durable_control_message(
     | PromptDeliveryPermitMessage
     | PromptDeliveryPermitResultMessage
     | DeliveryAckMessage
+    | SessionTerminalAckMessage
     | ControlSignalAckMessage
 ):
+    if not isinstance(message, CandidateEndInterviewMessage | SessionDeadlineReachedMessage):
+        reconciled = await InterviewCompletionService(service._session).reconcile_expired(
+            interview_session_id
+        )
+        if reconciled is not None:
+            interview = reconciled.interview
+            return SessionTerminalAckMessage(
+                client_event_id=message.client_event_id,
+                session_status="COMPLETED",
+                current_stage="COMPLETED",
+                state_version=interview.state_version,
+                last_server_sequence=interview.last_server_sequence,
+                completed_at=interview.completed_at or interview.deadline_at,
+                terminal_reason="TIME_EXPIRED",
+                created=True,
+            )
+    if isinstance(message, CandidateEndInterviewMessage | SessionDeadlineReachedMessage):
+        completion = await InterviewCompletionService(service._session).complete(
+            session_id=interview_session_id,
+            reason=(
+                "USER_ENDED"
+                if isinstance(message, CandidateEndInterviewMessage)
+                else "TIME_EXPIRED"
+            ),
+            expected_state_version=message.expected_state_version,
+            idempotency_key=message.idempotency_key,
+        )
+        interview = completion.interview
+        return SessionTerminalAckMessage(
+            client_event_id=message.client_event_id,
+            session_status="COMPLETED",
+            current_stage="COMPLETED",
+            state_version=interview.state_version,
+            last_server_sequence=interview.last_server_sequence,
+            completed_at=interview.completed_at or interview.deadline_at,
+            terminal_reason=completion.terminal_reason,
+            created=completion.created,
+        )
     if isinstance(message, CandidateTranscriptFinalizedMessage):
         transcript_result = await service.persist_candidate_transcript(
             session_id=interview_session_id,
@@ -648,6 +700,8 @@ class _NoopReasoningProvider:
 
 
 def safe_control_error_message(exc: Exception) -> str:
+    if isinstance(exc, DeadlineNotReached):
+        return "The interview deadline has not been reached."
     if isinstance(exc, IdempotencyConflict):
         return "Realtime control message conflicts with previously accepted truth"
     if isinstance(exc, PromptAuthorizationError):

@@ -10,6 +10,7 @@ type InterviewHeaderProps = {
   remainingLabel: string;
   voiceState: VoicePresenceState;
   onEndInterview: () => void;
+  terminal?: boolean;
 };
 
 export function InterviewHeader({
@@ -17,6 +18,7 @@ export function InterviewHeader({
   remainingLabel,
   voiceState,
   onEndInterview,
+  terminal = false,
 }: InterviewHeaderProps) {
   return (
     <header className="interview-header">
@@ -32,10 +34,14 @@ export function InterviewHeader({
         </span>
         <VoicePresence state={voiceState} compact />
       </div>
-      <button type="button" className="end-button" onClick={onEndInterview}>
-        <Power size={16} aria-hidden="true" />
-        <span>End Interview</span>
-      </button>
+      {!terminal ? (
+        <button type="button" className="end-button" onClick={onEndInterview}>
+          <Power size={16} aria-hidden="true" />
+          <span>End Interview</span>
+        </button>
+      ) : (
+        <span className="mode-badge">ENDED</span>
+      )}
     </header>
   );
 }

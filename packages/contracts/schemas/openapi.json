@@ -974,6 +974,18 @@
       },
       "RealtimeDevelopmentBootstrapResponse": {
         "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
           "configured_duration_seconds": {
             "title": "Configured Duration Seconds",
             "type": "integer"
@@ -1041,6 +1053,10 @@
             "title": "Restore Protocol Version",
             "type": "string"
           },
+          "session_status": {
+            "title": "Session Status",
+            "type": "string"
+          },
           "started_at": {
             "format": "date-time",
             "title": "Started At",
@@ -1053,6 +1069,21 @@
           "template": {
             "title": "Template",
             "type": "string"
+          },
+          "terminal_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "USER_ENDED",
+                  "TIME_EXPIRED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Reason"
           },
           "time_pressure": {
             "title": "Time Pressure",
@@ -1078,6 +1109,7 @@
           "template",
           "configured_duration_seconds",
           "current_stage",
+          "session_status",
           "state_version",
           "deadline_at",
           "time_remaining_seconds",

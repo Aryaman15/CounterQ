@@ -8,6 +8,7 @@ import {
   RealtimeControlClient,
   type CanonicalControlDebug,
   type DevelopmentBootstrapResponse,
+  type TerminalSession,
 } from "./RealtimeControlClient";
 import { RealtimeVoiceClient, type RealtimeClientEvent } from "./RealtimeVoiceClient";
 
@@ -32,6 +33,10 @@ export type RealtimeVoiceControls = {
   isRestoring: boolean;
   controlReconnecting: boolean;
   acknowledgedCodeSource: string | null;
+  terminalSession: TerminalSession | null;
+  completionPending: boolean;
+  endInterview: () => void;
+  completeForDeadline: () => void;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -85,6 +90,8 @@ export function useRealtimeVoice(
   const [isRestoring, setIsRestoring] = useState(true);
   const [controlReconnecting, setControlReconnecting] = useState(false);
   const [acknowledgedCodeSource, setAcknowledgedCodeSource] = useState<string | null>(null);
+  const [terminalSession, setTerminalSession] = useState<TerminalSession | null>(null);
+  const [completionPending, setCompletionPending] = useState(false);
   const clientRef = useRef<RealtimeVoiceClient | null>(null);
   const controlClientRef = useRef<RealtimeControlClient | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -145,6 +152,14 @@ export function useRealtimeVoice(
         setAcknowledgedCodeSource(event.bootstrap.latest_code_snapshot?.source_code ?? null);
         setIsRestoring(false);
         setControlReconnecting(false);
+        if (event.bootstrap.session_status === "COMPLETED" && event.bootstrap.completed_at) {
+          setTerminalSession({
+            reason: event.bootstrap.terminal_reason ?? "USER_ENDED",
+            completedAt: event.bootstrap.completed_at,
+            stateVersion: event.bootstrap.state_version,
+            lastServerSequence: event.bootstrap.last_server_sequence,
+          });
+        }
         return;
       }
       if (event.type === "reconnecting") {
@@ -167,6 +182,9 @@ export function useRealtimeVoice(
         return;
       }
       if (event.type === "authorized_prompt") {
+        if (terminalSession) {
+          return;
+        }
         clientRef.current?.speakAuthorizedPrompt(event.prompt.text, {
           counterq_prompt_id: event.prompt.promptId,
           counterq_prompt_origin: event.prompt.origin ?? "SYSTEM",
@@ -174,15 +192,28 @@ export function useRealtimeVoice(
         });
         return;
       }
+      if (event.type === "terminal") {
+        setTerminalSession(event.terminal);
+        setCompletionPending(false);
+        clientRef.current?.disconnect();
+        setActivityState("Ready");
+        setIsMuted(false);
+        setCurrentCounterQDeliveryText("");
+        return;
+      }
       if (event.type === "error") {
+        setCompletionPending(false);
         setErrorMessage(event.message);
       }
     });
     controlClientRef.current = controlClient;
     return controlClient;
-  }, [controlClientFactory]);
+  }, [controlClientFactory, terminalSession]);
 
   const enableMicrophone = useCallback(async () => {
+    if (terminalSession || completionPending) {
+      return;
+    }
     setErrorMessage(null);
     setActivityState("Connecting");
     const controlClient = ensureControlClient();
@@ -199,7 +230,23 @@ export function useRealtimeVoice(
       setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
-  }, [ensureClient, ensureControlClient, restoredBootstrap]);
+  }, [completionPending, ensureClient, ensureControlClient, restoredBootstrap, terminalSession]);
+
+  const endInterview = useCallback(() => {
+    if (terminalSession || completionPending) {
+      return;
+    }
+    setCompletionPending(true);
+    controlClientRef.current?.requestEndInterview();
+  }, [completionPending, terminalSession]);
+
+  const completeForDeadline = useCallback(() => {
+    if (terminalSession || completionPending) {
+      return;
+    }
+    setCompletionPending(true);
+    controlClientRef.current?.requestDeadlineCompletion();
+  }, [completionPending, terminalSession]);
 
   const mute = useCallback(() => {
     clientRef.current?.setMuted(true);
@@ -232,6 +279,8 @@ export function useRealtimeVoice(
     setIsRestoring(false);
     setControlReconnecting(false);
     setAcknowledgedCodeSource(null);
+    setTerminalSession(null);
+    setCompletionPending(false);
   }, []);
 
   const speakDevelopmentPhrase = useCallback(() => {
@@ -306,6 +355,10 @@ export function useRealtimeVoice(
     isRestoring,
     controlReconnecting,
     acknowledgedCodeSource,
+    terminalSession,
+    completionPending,
+    endInterview,
+    completeForDeadline,
     enableMicrophone,
     mute,
     unmute,

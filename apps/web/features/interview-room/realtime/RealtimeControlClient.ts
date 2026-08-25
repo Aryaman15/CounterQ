@@ -118,6 +118,13 @@ export type CanonicalControlDebug = {
   lastDeliveryPermit: DeliveryPermitDebug;
 };
 
+export type TerminalSession = {
+  reason: "USER_ENDED" | "TIME_EXPIRED";
+  completedAt: string;
+  stateVersion: number;
+  lastServerSequence: number;
+};
+
 export type RealtimeControlEvent =
   | { type: "connected"; bootstrap: DevelopmentBootstrapResponse }
   | { type: "reconnecting" }
@@ -127,6 +134,7 @@ export type RealtimeControlEvent =
   | { type: "policy_gate_result"; result: PolicyGateDebug }
   | { type: "delivery_permit_result"; result: DeliveryPermitDebug }
   | { type: "delivery_started"; promptId: string; deliveryId: string; providerResponseId: string }
+  | { type: "terminal"; terminal: TerminalSession }
   | { type: "error"; message: string };
 
 type RealtimeControlListener = (event: RealtimeControlEvent) => void;
@@ -335,6 +343,26 @@ export class RealtimeControlClient {
 
   requestDevelopmentPrompt(): void {
     this.sendDurable({ type: "development_authorized_prompt_requested" });
+  }
+
+  requestEndInterview(): void {
+    this.sendTerminalRequest("candidate_end_interview", "USER_ENDED");
+  }
+
+  requestDeadlineCompletion(): void {
+    this.sendTerminalRequest("session_deadline_reached", "TIME_EXPIRED");
+  }
+
+  private sendTerminalRequest(
+    type: "candidate_end_interview" | "session_deadline_reached",
+    reason: "USER_ENDED" | "TIME_EXPIRED",
+  ): void {
+    const sessionId = this.bootstrap?.interview_session_id ?? "unknown";
+    this.sendDurable({
+      type,
+      expected_state_version: this.debug.stateVersion,
+      idempotency_key: `session-terminal:${sessionId}:${reason}`,
+    });
   }
 
   requestExaminerDecisionPolicyGate(examinerDecisionId: string): void {
@@ -954,6 +982,33 @@ export class RealtimeControlClient {
             this.debug.lastDelivery.providerResponseId ??
             "provider-response-unavailable",
         });
+      }
+      return;
+    }
+    if (type === "session_terminal_ack") {
+      const clientEventId = stringField(message.client_event_id);
+      if (clientEventId) {
+        this.ackPending(clientEventId);
+      }
+      const reason = stringField(message.terminal_reason);
+      const completedAt = stringField(message.completed_at);
+      if (
+        (reason === "USER_ENDED" || reason === "TIME_EXPIRED") &&
+        completedAt
+      ) {
+        const terminal: TerminalSession = {
+          reason,
+          completedAt,
+          stateVersion: numberField(message.state_version) ?? this.debug.stateVersion ?? 0,
+          lastServerSequence:
+            numberField(message.last_server_sequence) ?? this.debug.lastServerSequence ?? 0,
+        };
+        this.activeDelivery = null;
+        this.patchDebug({
+          stateVersion: terminal.stateVersion,
+          lastServerSequence: terminal.lastServerSequence,
+        });
+        this.emit({ type: "terminal", terminal });
       }
       return;
     }

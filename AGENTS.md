@@ -1449,12 +1449,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 2B — Refresh + Reconnect + Session Restoration
+Stage 2C — End Interview + Deadline Completion + Terminal Session Lifecycle
 
 Current Goal:
-Restore one active interview from PostgreSQL across browser refresh and short
-control reconnects without resetting durable session, code, timing, budget or
-candidate-visible delivery truth.
+Complete active interviews deterministically at user request or the
+authoritative server deadline, preserving durable terminal truth across
+reconnect and refresh.
 ```
 
 Update only this small section as implementation progresses.

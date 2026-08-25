@@ -11,6 +11,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload, selectinload
 
+from app.interviews.completion import InterviewCompletionService, TerminalReason
 from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, InterviewSession
 from app.interviews.runtime import InterviewRuntime
 from app.interviews.template_policy import template_for_duration
@@ -61,6 +62,7 @@ class RestoredInterview:
     conversation: tuple[RestoredConversationTurn, ...]
     unresolved_prompt: RestoredUnresolvedPrompt | None
     highest_client_sequence: int
+    terminal_reason: TerminalReason | None
 
 
 class SessionRestorationService:
@@ -77,10 +79,13 @@ class SessionRestorationService:
         reconcile_orphaned_deliveries: bool = False,
     ) -> RestoredInterview:
         interview = await self._interview(interview_session_id)
-        if interview.status != "ACTIVE":
-            raise DevelopmentInterviewNotResumable("Interview session is not active")
+        if interview.status == "ACTIVE" and datetime.now(UTC) >= interview.deadline_at:
+            await InterviewCompletionService(self._session).reconcile_expired(interview.id)
+            interview = await self._interview(interview_session_id)
+        if interview.status not in {"ACTIVE", "COMPLETED"}:
+            raise DevelopmentInterviewNotResumable("Interview session is not resumable")
 
-        if reconcile_orphaned_deliveries:
+        if reconcile_orphaned_deliveries and interview.status == "ACTIVE":
             await self._reconcile_orphaned_deliveries(interview.id)
 
         timing = await InterviewRuntime(self._session).time_policy(interview.id)
@@ -101,6 +106,27 @@ class SessionRestorationService:
             conversation=conversation,
             unresolved_prompt=unresolved_prompt,
             highest_client_sequence=highest_client_sequence,
+            terminal_reason=(
+                await self._terminal_reason(interview.id)
+                if interview.status == "COMPLETED"
+                else None
+            ),
+        )
+
+    async def _terminal_reason(self, interview_session_id: UUID) -> TerminalReason:
+        from app.interviews.models import InterviewStageTransition
+
+        transition = await self._session.scalar(
+            select(InterviewStageTransition)
+            .where(InterviewStageTransition.interview_session_id == interview_session_id)
+            .where(InterviewStageTransition.to_stage == "WRAP_UP")
+            .order_by(InterviewStageTransition.state_version.desc())
+            .limit(1),
+        )
+        return (
+            "TIME_EXPIRED"
+            if transition and transition.trigger == "HARD_TIME_CONTROL"
+            else "USER_ENDED"
         )
 
     async def _interview(self, interview_session_id: UUID) -> InterviewSession:

@@ -46,6 +46,7 @@ class RealtimeDevelopmentBootstrapResponse(BaseModel):
     template: str
     configured_duration_seconds: int
     current_stage: str
+    session_status: str
     state_version: int
     deadline_at: datetime
     time_remaining_seconds: int
@@ -54,6 +55,8 @@ class RealtimeDevelopmentBootstrapResponse(BaseModel):
     restoration: Literal["CREATED", "RESTORED"]
     restore_protocol_version: Literal["session.restore.v1"] = "session.restore.v1"
     started_at: datetime
+    completed_at: datetime | None = None
+    terminal_reason: Literal["USER_ENDED", "TIME_EXPIRED"] | None = None
     latest_code_snapshot: RestoredCodeSnapshotMessage | None = None
     recent_conversation: list[RestoredConversationTurnMessage]
     unresolved_prompt: RestoredUnresolvedPromptMessage | None = None
@@ -179,6 +182,18 @@ class CounterQDeliveryInterruptedMessage(ClientMessageBase):
     idempotency_key: str | None = Field(default=None, max_length=128)
 
 
+class CandidateEndInterviewMessage(ClientMessageBase):
+    type: Literal["candidate_end_interview"]
+    expected_state_version: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class SessionDeadlineReachedMessage(ClientMessageBase):
+    type: Literal["session_deadline_reached"]
+    expected_state_version: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
 ClientControlMessage = Annotated[
     ClientHelloMessage
     | CandidateSpeechStartedMessage
@@ -194,7 +209,9 @@ ClientControlMessage = Annotated[
     | PromptDeliveryPermitRequestMessage
     | CounterQDeliveryStartedMessage
     | CounterQDeliveryCompletedMessage
-    | CounterQDeliveryInterruptedMessage,
+    | CounterQDeliveryInterruptedMessage
+    | CandidateEndInterviewMessage
+    | SessionDeadlineReachedMessage,
     Field(discriminator="type"),
 ]
 
@@ -308,3 +325,15 @@ class ControlErrorMessage(BaseModel):
     client_event_id: str | None = None
     category: str
     message: str
+
+
+class SessionTerminalAckMessage(BaseModel):
+    type: Literal["session_terminal_ack"] = "session_terminal_ack"
+    client_event_id: str
+    session_status: Literal["COMPLETED"]
+    current_stage: Literal["COMPLETED"]
+    state_version: int
+    last_server_sequence: int
+    completed_at: datetime
+    terminal_reason: Literal["USER_ENDED", "TIME_EXPIRED"]
+    created: bool

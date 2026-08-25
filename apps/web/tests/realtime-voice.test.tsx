@@ -220,6 +220,8 @@ class HookFakeControlClient {
   sendCandidateSpeechStopped = vi.fn();
   sendCandidateTranscriptFinal = vi.fn();
   requestDevelopmentPrompt = vi.fn();
+  requestEndInterview = vi.fn();
+  requestDeadlineCompletion = vi.fn();
   requestExaminerDecisionPolicyGate = vi.fn();
   requestPromptDeliveryPermit = vi.fn();
   sendCandidateCodeActivityStarted = vi.fn();
@@ -274,6 +276,7 @@ const fakeDevelopmentBootstrap = {
   template: "STANDARD_CODING_INTERVIEW",
   configured_duration_seconds: 1800,
   current_stage: "IMPLEMENTATION",
+  session_status: "ACTIVE",
   state_version: 0,
   deadline_at: "2026-08-24T12:30:00Z",
   time_remaining_seconds: 1800,
@@ -1095,6 +1098,58 @@ describe("Realtime voice foundation", () => {
         }),
       }),
     );
+  });
+
+  it("sends one terminal request and applies the authoritative terminal acknowledgement", async () => {
+    const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      fetchFn: fetchFn as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      randomUUID: () => "terminal-id",
+    });
+    const events: RealtimeControlEvent[] = [];
+    client.on((event) => events.push(event));
+    const connectPromise = client.connectDevelopmentInterview();
+    await waitFor(() => expect(FakeControlWebSocket.instances.length).toBe(1));
+    const socket = FakeControlWebSocket.instances[0];
+    socket.open();
+    socket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "IMPLEMENTATION",
+      state_version: 4,
+      last_server_sequence: 9,
+      probe_budget_used: 0,
+      probe_budget_max: 5,
+    });
+    await connectPromise;
+
+    client.requestEndInterview();
+    const request = lastSentControlMessage(socket, "candidate_end_interview");
+    expect(request.expected_state_version).toBe(4);
+    socket.receive({
+      type: "session_terminal_ack",
+      client_event_id: request.client_event_id,
+      session_status: "COMPLETED",
+      current_stage: "COMPLETED",
+      state_version: 6,
+      last_server_sequence: 11,
+      completed_at: "2026-08-25T12:30:00Z",
+      terminal_reason: "USER_ENDED",
+      created: true,
+    });
+
+    expect(client.pendingCount).toBe(0);
+    expect(events).toContainEqual({
+      type: "terminal",
+      terminal: {
+        reason: "USER_ENDED",
+        completedAt: "2026-08-25T12:30:00Z",
+        stateVersion: 6,
+        lastServerSequence: 11,
+      },
+    });
   });
 
   it("restores a stored development session and preserves pending durable identity", async () => {

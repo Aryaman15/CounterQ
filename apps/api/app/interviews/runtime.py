@@ -150,7 +150,11 @@ class InterviewRuntime:
             return transition
 
         self._ensure_session_accepts_activity(
-            interview, allow_completion=command.to_stage == "COMPLETED"
+            interview,
+            allow_completion=(
+                command.to_stage == "COMPLETED"
+                or bool(command.context and command.context.hard_time_control)
+            ),
         )
         self._ensure_expected_version(interview, command.expected_state_version)
         context = await self._authoritative_transition_context(

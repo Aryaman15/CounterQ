@@ -38,6 +38,7 @@ type InterviewerSurfaceProps = {
   onEvaluateExaminerDecision: (examinerDecisionId: string) => void;
   onDeliverAuthorizedPrompt: (promptId: string) => void;
   onOpenConversation: () => void;
+  terminal?: boolean;
 };
 
 export function InterviewerSurface({
@@ -57,6 +58,7 @@ export function InterviewerSurface({
   onEvaluateExaminerDecision,
   onDeliverAuthorizedPrompt,
   onOpenConversation,
+  terminal = false,
 }: InterviewerSurfaceProps) {
   const connected = voiceState === "Listening" || voiceState === "Speaking" || voiceState === "Muted";
   const showTranscriptInspector =
@@ -174,7 +176,7 @@ export function InterviewerSurface({
         <VoicePresence state={voiceState} />
         <div className="voice-controls" aria-label="Realtime voice controls">
           {(voiceState === "Ready" || voiceState === "Error") && (
-            <button type="button" className="voice-control-button" onClick={onEnableMicrophone}>
+            <button type="button" className="voice-control-button" onClick={onEnableMicrophone} disabled={terminal}>
               <Mic size={14} aria-hidden="true" />
               <span>Enable microphone</span>
             </button>
@@ -187,12 +189,12 @@ export function InterviewerSurface({
           {connected && (
             <>
               {isMuted ? (
-                <button type="button" className="voice-control-button" onClick={onUnmute}>
+                <button type="button" className="voice-control-button" onClick={onUnmute} disabled={terminal}>
                   <Mic size={14} aria-hidden="true" />
                   <span>Unmute</span>
                 </button>
               ) : (
-                <button type="button" className="voice-control-button" onClick={onMute}>
+                <button type="button" className="voice-control-button" onClick={onMute} disabled={terminal}>
                   <MicOff size={14} aria-hidden="true" />
                   <span>Mute</span>
                 </button>
