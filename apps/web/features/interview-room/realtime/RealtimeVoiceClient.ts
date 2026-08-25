@@ -43,6 +43,9 @@ export class RealtimeVoiceClient {
   private activeResponseId: string | null = null;
   private activeAssistantItemId: string | null = null;
   private outputStartedAtMs: number | null = null;
+  private remoteAudioPlaybackReady = false;
+  private responseAudioArrivalResponseId: string | null = null;
+  private playbackStartEmittedForResponseId: string | null = null;
 
   constructor(options: RealtimeVoiceClientOptions) {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, "");
@@ -79,7 +82,7 @@ export class RealtimeVoiceClient {
         removeEventListener?: HTMLAudioElement["removeEventListener"];
       };
       if (typeof remoteAudioWithEvents.addEventListener === "function") {
-        const handlePlaying = () => this.emitBrowserPlaybackStarted();
+        const handlePlaying = () => this.noteRemoteAudioPlayable();
         remoteAudioWithEvents.addEventListener("playing", handlePlaying);
         this.cleanupCallbacks.push(() => {
           remoteAudioWithEvents.removeEventListener?.("playing", handlePlaying);
@@ -101,7 +104,7 @@ export class RealtimeVoiceClient {
           this.remoteAudio.srcObject = stream;
           void this.remoteAudio
             .play()
-            .then(() => this.emitBrowserPlaybackStarted())
+            .then(() => this.noteRemoteAudioPlayable())
             .catch(() => {
               this.handleFatalTransportFailure(
                 "Browser blocked realtime audio playback. Re-enable voice after allowing audio.",
@@ -241,6 +244,9 @@ export class RealtimeVoiceClient {
     this.activeResponseId = null;
     this.activeAssistantItemId = null;
     this.outputStartedAtMs = null;
+    this.remoteAudioPlaybackReady = false;
+    this.responseAudioArrivalResponseId = null;
+    this.playbackStartEmittedForResponseId = null;
     if (emitDisconnected) {
       this.emit({ type: "disconnected" });
     }
@@ -262,8 +268,9 @@ export class RealtimeVoiceClient {
     try {
       const raw = JSON.parse(String(event.data)) as unknown;
       for (const normalized of normalizeRealtimeEvent(raw)) {
-        this.updateProviderPlaybackState(normalized);
-        this.emit(normalized);
+        if (this.updateProviderPlaybackState(normalized)) {
+          this.emit(normalized);
+        }
       }
     } catch {
       this.emit({ type: "error", message: "Received malformed realtime event data." });
@@ -294,39 +301,75 @@ export class RealtimeVoiceClient {
     this.emit({ type: "error", message });
   }
 
-  private updateProviderPlaybackState(event: NormalizedRealtimeEvent): void {
+  private updateProviderPlaybackState(event: NormalizedRealtimeEvent): boolean {
     if (event.type === "counterq_response_created") {
       this.activeResponseId = event.responseId;
       this.activeAssistantItemId = event.itemId ?? this.activeAssistantItemId;
-      return;
+      this.responseAudioArrivalResponseId = null;
+      this.playbackStartEmittedForResponseId = null;
+      return true;
     }
     if (event.type === "counterq_output_started") {
+      if (event.responseId && this.activeResponseId && event.responseId !== this.activeResponseId) {
+        return true;
+      }
       this.activeResponseId = event.responseId ?? this.activeResponseId;
       this.activeAssistantItemId = event.itemId ?? this.activeAssistantItemId;
       if (event.playbackStarted) {
+        if (
+          this.activeResponseId &&
+          this.playbackStartEmittedForResponseId === this.activeResponseId
+        ) {
+          return false;
+        }
         this.outputStartedAtMs = this.nowMs();
+        this.playbackStartEmittedForResponseId = this.activeResponseId;
+      } else if (this.activeResponseId) {
+        this.responseAudioArrivalResponseId = this.activeResponseId;
+        this.tryEmitBrowserPlaybackStarted("browser_audio.response_audio_delta");
       }
-      return;
+      return true;
     }
     if (event.type === "counterq_output_ended" || event.type === "counterq_output_interrupted") {
       this.activeResponseId = null;
       this.activeAssistantItemId = null;
       this.outputStartedAtMs = null;
+      this.responseAudioArrivalResponseId = null;
+      this.playbackStartEmittedForResponseId = null;
     }
+    return true;
   }
 
-  private emitBrowserPlaybackStarted(): void {
-    if (!this.activeResponseId) {
+  private noteRemoteAudioPlayable(): void {
+    this.remoteAudioPlaybackReady = true;
+    this.tryEmitBrowserPlaybackStarted("browser_audio.playing");
+  }
+
+  private tryEmitBrowserPlaybackStarted(providerEventId: string): void {
+    if (
+      !this.activeResponseId ||
+      this.responseAudioArrivalResponseId !== this.activeResponseId ||
+      this.playbackStartEmittedForResponseId === this.activeResponseId ||
+      !this.remoteAudioCanPlay()
+    ) {
       return;
     }
+    this.playbackStartEmittedForResponseId = this.activeResponseId;
     this.outputStartedAtMs = this.outputStartedAtMs ?? this.nowMs();
     this.emit({
       type: "counterq_output_started",
       responseId: this.activeResponseId,
       itemId: this.activeAssistantItemId,
-      providerEventId: "browser_audio.playing",
+      providerEventId,
       playbackStarted: true,
     });
+  }
+
+  private remoteAudioCanPlay(): boolean {
+    if (!this.remoteAudioPlaybackReady || !this.remoteAudio?.srcObject) {
+      return false;
+    }
+    return typeof this.remoteAudio.paused === "boolean" ? !this.remoteAudio.paused : true;
   }
 
   private elapsedOutputAudioMs(): number {

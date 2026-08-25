@@ -292,6 +292,9 @@ function applyRealtimeEvent(event: RealtimeClientEvent, setters: RealtimeEventSe
   if (event.type === "counterq_output_started") {
     setActivityState("Speaking");
     setCurrentCounterQDeliveryText("");
+    if (!event.playbackStarted) {
+      controlClientRef.current?.noteOutputAudioDelta(event.responseId ?? null);
+    }
     if (event.playbackStarted) {
       controlClientRef.current?.sendDeliveryStarted(
         event.responseId ?? null,

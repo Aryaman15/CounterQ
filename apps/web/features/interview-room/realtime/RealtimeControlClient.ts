@@ -321,6 +321,17 @@ export class RealtimeControlClient {
     this.syncDeliveryDebug();
   }
 
+  noteOutputAudioDelta(providerResponseId: string | null): void {
+    if (!this.activeDelivery) {
+      return;
+    }
+    if (!this.reconcileProviderResponse(providerResponseId)) {
+      return;
+    }
+    this.recordDeliveryLifecycle("response.output_audio.delta");
+    this.syncDeliveryDebug();
+  }
+
   noteOutputTranscriptFinal(providerResponseId: string | null, text: string): void {
     if (!this.activeDelivery) {
       return;

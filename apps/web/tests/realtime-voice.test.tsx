@@ -140,6 +140,40 @@ class FakePeerConnection {
   }
 }
 
+class FakeAudioElement {
+  autoplay = false;
+  srcObject: MediaStream | null = null;
+  paused = true;
+  readonly pause = vi.fn(() => {
+    this.paused = true;
+  });
+  readonly play: ReturnType<typeof vi.fn>;
+  private readonly listeners = new Map<string, Set<EventListener>>();
+
+  constructor(playImpl: ReturnType<typeof vi.fn> = vi.fn(async () => undefined)) {
+    this.play = vi.fn(async () => {
+      await playImpl();
+      this.paused = false;
+    });
+  }
+
+  addEventListener(type: string, listener: EventListener): void {
+    const current = this.listeners.get(type) ?? new Set<EventListener>();
+    current.add(listener);
+    this.listeners.set(type, current);
+  }
+
+  removeEventListener(type: string, listener: EventListener): void {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  emit(type: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new Event(type));
+    }
+  }
+}
+
 class HookFakeClient {
   disconnect = vi.fn();
   setMuted = vi.fn((muted: boolean) => {
@@ -189,6 +223,7 @@ class HookFakeControlClient {
   sendCandidateCodeActivityStarted = vi.fn();
   sendCandidateCodeActivityIdle = vi.fn();
   noteProviderResponseCreated = vi.fn();
+  noteOutputAudioDelta = vi.fn();
   noteOutputTranscriptDelta = vi.fn();
   noteOutputTranscriptFinal = vi.fn();
   sendDeliveryStarted = vi.fn();
@@ -309,12 +344,7 @@ function createBrowserClient({
 } = {}) {
   const stream = mediaStreamFor(track);
   const peerConnection = new FakePeerConnection(dataChannel);
-  const audioElement = {
-    autoplay: false,
-    srcObject: null as MediaStream | null,
-    play: audioPlay,
-    pause: vi.fn(),
-  } as unknown as HTMLAudioElement;
+  const audioElement = new FakeAudioElement(audioPlay);
   const fetchFn = vi
     .fn()
     .mockResolvedValueOnce(new Response(JSON.stringify(fakeSessionResponse), { status: 200 }))
@@ -326,7 +356,7 @@ function createBrowserClient({
       getUserMedia: vi.fn(async () => stream),
     },
     peerConnectionFactory: () => peerConnection as unknown as RTCPeerConnection,
-    audioElementFactory: () => audioElement,
+    audioElementFactory: () => audioElement as unknown as HTMLAudioElement,
     connectionTimeoutMs,
   });
 
@@ -697,6 +727,7 @@ describe("Realtime voice foundation", () => {
       client.emit({ type: "counterq_output_started", responseId: "resp-1" });
     });
     expect(controlClient.sendDeliveryStarted).not.toHaveBeenCalled();
+    expect(controlClient.noteOutputAudioDelta).toHaveBeenCalledWith("resp-1");
 
     act(() => {
       client.emit({
@@ -1256,6 +1287,18 @@ describe("Realtime voice foundation", () => {
     expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(0);
   });
 
+  it("control client ignores playback events when no authorized delivery is active", async () => {
+    const { client, socket } = await connectedControlClient();
+
+    client.noteOutputAudioDelta("resp-unowned");
+    client.sendDeliveryStarted("resp-unowned", "assistant-unowned");
+    client.noteOutputTranscriptFinal("resp-unowned", "Unowned output.");
+    client.sendDeliveryCompleted("resp-unowned");
+
+    expect(sentControlMessages(socket, "counterq_delivery_started")).toHaveLength(0);
+    expect(sentControlMessages(socket, "counterq_delivery_completed")).toHaveLength(0);
+  });
+
   it("control client surfaces delivery permit expired stale and deferred without speaking", async () => {
     const fetchFn = vi.fn(async () => new Response(JSON.stringify(fakeDevelopmentBootstrap)));
     const client = new RealtimeControlClient({
@@ -1752,6 +1795,123 @@ describe("Realtime voice foundation", () => {
     expect(events.map((event) => event.type)).toContain("connected");
   });
 
+  it("does not prove delivery start from response.created while remote audio is already playing", async () => {
+    const { client, dataChannel, peerConnection, stream, track } = createBrowserClient();
+    const events: RealtimeClientEvent[] = [];
+    client.on((event) => events.push(event));
+
+    await client.connect();
+    peerConnection.ontrack?.({ streams: [stream], track } as unknown as RTCTrackEvent);
+    await flushAsyncWork();
+    dataChannel.emitMessage({
+      type: "response.created",
+      response: { id: "resp-created-only", output: [{ id: "assistant-created-only" }] },
+    });
+
+    expect(
+      events.filter(
+        (event) => event.type === "counterq_output_started" && event.playbackStarted,
+      ),
+    ).toHaveLength(0);
+    client.disconnect();
+  });
+
+  it("proves playback start once when response audio arrives and remote audio can play", async () => {
+    const { client, dataChannel, peerConnection, stream, track } = createBrowserClient();
+    const events: RealtimeClientEvent[] = [];
+    client.on((event) => events.push(event));
+
+    await client.connect();
+    peerConnection.ontrack?.({ streams: [stream], track } as unknown as RTCTrackEvent);
+    await flushAsyncWork();
+    dataChannel.emitMessage({
+      type: "response.created",
+      response: { id: "resp-audio", output: [{ id: "assistant-audio" }] },
+    });
+    dataChannel.emitMessage({
+      type: "response.output_audio.delta",
+      response_id: "resp-audio",
+      item_id: "assistant-audio",
+      delta: "opaque-audio",
+    });
+    dataChannel.emitMessage({
+      type: "response.output_audio.delta",
+      response_id: "resp-audio",
+      item_id: "assistant-audio",
+      delta: "opaque-audio-2",
+    });
+    dataChannel.emitMessage({
+      type: "output_audio_buffer.started",
+      response_id: "resp-audio",
+      item_id: "assistant-audio",
+    });
+
+    const playbackStarts = events.filter(
+      (event) => event.type === "counterq_output_started" && event.playbackStarted,
+    );
+    expect(playbackStarts).toHaveLength(1);
+    expect(playbackStarts[0]).toMatchObject({
+      type: "counterq_output_started",
+      responseId: "resp-audio",
+      itemId: "assistant-audio",
+      providerEventId: "browser_audio.response_audio_delta",
+      playbackStarted: true,
+    });
+    client.disconnect();
+  });
+
+  it("does not prove playback start when response audio arrives before remote audio can play", async () => {
+    const { client, dataChannel } = createBrowserClient();
+    const events: RealtimeClientEvent[] = [];
+    client.on((event) => events.push(event));
+
+    await client.connect();
+    dataChannel.emitMessage({
+      type: "response.created",
+      response: { id: "resp-muted", output: [{ id: "assistant-muted" }] },
+    });
+    dataChannel.emitMessage({
+      type: "response.output_audio.delta",
+      response_id: "resp-muted",
+      item_id: "assistant-muted",
+      delta: "opaque-audio",
+    });
+
+    expect(
+      events.filter(
+        (event) => event.type === "counterq_output_started" && event.playbackStarted,
+      ),
+    ).toHaveLength(0);
+    client.disconnect();
+  });
+
+  it("does not prove playback start for unrelated response audio", async () => {
+    const { client, dataChannel, peerConnection, stream, track } = createBrowserClient();
+    const events: RealtimeClientEvent[] = [];
+    client.on((event) => events.push(event));
+
+    await client.connect();
+    peerConnection.ontrack?.({ streams: [stream], track } as unknown as RTCTrackEvent);
+    await flushAsyncWork();
+    dataChannel.emitMessage({
+      type: "response.created",
+      response: { id: "resp-current", output: [{ id: "assistant-current" }] },
+    });
+    dataChannel.emitMessage({
+      type: "response.output_audio.delta",
+      response_id: "resp-other",
+      item_id: "assistant-other",
+      delta: "opaque-audio",
+    });
+
+    expect(
+      events.filter(
+        (event) => event.type === "counterq_output_started" && event.playbackStarted,
+      ),
+    ).toHaveLength(0);
+    client.disconnect();
+  });
+
   it("sends OpenAI cancel, clear, and truncate events for active output interruption", async () => {
     const nowSpy = vi
       .spyOn(performance, "now")
@@ -1890,7 +2050,7 @@ describe("Realtime voice foundation", () => {
         (connectionCount === 1
           ? first.peerConnection
           : second.peerConnection) as unknown as RTCPeerConnection,
-      audioElementFactory: () => first.audioElement,
+      audioElementFactory: () => first.audioElement as unknown as HTMLAudioElement,
     });
 
     await client.connect();
