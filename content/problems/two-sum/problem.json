@@ -1,0 +1,17 @@
+{
+  "schema_version": "problem.v1",
+  "slug": "two-sum",
+  "version": "v1",
+  "catalog_order": 1,
+  "title": "Two Sum",
+  "review_status": "REVIEWED",
+  "statement": "Given an integer array nums and an integer target, return the indices of two distinct elements whose values add to target. You may return the two indices in either order.",
+  "constraints": ["2 <= nums.length <= 100000", "-1000000000 <= nums[i], target <= 1000000000", "Exactly one valid pair exists for every input used by this problem."],
+  "examples": [
+    {"input": "nums = [2, 7, 11, 15], target = 9", "output": "[0, 1]", "explanation": "nums[0] + nums[1] equals 9."},
+    {"input": "nums = [3, 3], target = 6", "output": "[0, 1]", "explanation": "The two equal values are separate array elements."}
+  ],
+  "execution": {"method_name": "twoSum", "arguments": [{"name": "nums", "type": "int[]"}, {"name": "target", "type": "int"}], "return_type": "int[]", "comparator": "UNORDERED_LIST", "visible_cases": [{"arguments": {"nums": [2, 7, 11, 15], "target": 9}, "expected_output": [0, 1]}, {"arguments": {"nums": [3, 2, 4], "target": 6}, "expected_output": [1, 2]}, {"arguments": {"nums": [3, 3], "target": 6}, "expected_output": [0, 1]}], "custom_test_supported": true},
+  "languages": {"cpp": {"display_signature": "vector<int> twoSum(vector<int> nums, int target)", "starter_code": "class Solution {\npublic:\n    vector<int> twoSum(vector<int> nums, int target) {\n        return {};\n    }\n};"}, "python": {"display_signature": "def twoSum(self, nums: list[int], target: int) -> list[int]", "starter_code": "class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        return []"}, "java": {"display_signature": "int[] twoSum(int[] nums, int target)", "starter_code": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        return new int[]{};\n    }\n}"}},
+  "problem_concepts": [{"canonical_key": "hash_map", "role": "PRIMARY", "relevance": "HIGH", "expected_importance": "HIGH"}, {"canonical_key": "arrays", "role": "SECONDARY", "relevance": "MEDIUM", "expected_importance": "MEDIUM"}, {"canonical_key": "sorting", "role": "OPTIONAL", "relevance": "LOW", "expected_importance": "LOW"}, {"canonical_key": "two_pointers", "role": "OPTIONAL", "relevance": "LOW", "expected_importance": "LOW"}, {"canonical_key": "time_complexity", "role": "SECONDARY", "relevance": "MEDIUM", "expected_importance": "MEDIUM"}]
+}

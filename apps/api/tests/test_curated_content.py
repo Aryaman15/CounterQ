@@ -31,9 +31,39 @@ from app.problems.service import CuratedProblemError, CuratedProblemService
 
 def test_repository_authored_content_validates() -> None:
     ontology, entries = validate_authored_content()
-    assert len(entries) == 2
+    assert len(entries) == 8
     assert all(entry.problem.review_status == "REVIEWED" for entry in entries)
     assert len(ontology.concepts) >= 25
+
+
+def test_batch_one_curated_catalog_has_reviewed_pack_depth() -> None:
+    _, entries = validate_authored_content()
+    by_slug = {entry.problem.slug: entry for entry in entries}
+    expected_orders = {
+        "two-sum": 1,
+        "contains-duplicate": 2,
+        "valid-anagram": 3,
+        "product-of-array-except-self": 4,
+        "valid-palindrome": 8,
+        "valid-parentheses": 10,
+    }
+
+    actual_orders = {slug: by_slug[slug].problem.catalog_order for slug in expected_orders}
+    assert actual_orders == expected_orders
+    for slug in expected_orders:
+        entry = by_slug[slug]
+        pack = entry.interview_pack
+        assert pack.review_status == "REVIEWED"
+        assert len(pack.reference_solutions) >= 3
+        primary = pack.expected_approaches[0].approach_id
+        languages = {
+            item.language for item in pack.reference_solutions if item.approach_id == primary
+        }
+        assert languages == {"cpp", "python", "java"}
+        assert len(pack.common_followups) >= 3
+        assert len(pack.counterexamples) >= 2
+
+    assert by_slug["two-sum"].problem.execution.comparator == "UNORDERED_LIST"
 
 
 def test_canonical_hash_ignores_order_and_line_endings() -> None:
@@ -81,7 +111,8 @@ def test_ontology_rejects_invalid_graph(mutate: object) -> None:
     ],
 )
 def test_problem_rejects_invalid_semantic_cases(mutate: object) -> None:
-    payload = load_curated_content()[1].problem.model_dump(mode="json")
+    entry = next(entry for entry in load_curated_content() if entry.problem.slug == "binary-search")
+    payload = entry.problem.model_dump(mode="json")
     mutate(payload)  # type: ignore[operator]
     with pytest.raises(ValidationError):
         ProblemContent.model_validate(payload)

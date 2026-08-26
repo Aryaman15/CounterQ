@@ -58,6 +58,10 @@ async def seeded_version(db_session: AsyncSession, slug: str) -> ProblemVersion:
     return version
 
 
+def entry_by_slug(entries: list[CuratedContent], slug: str) -> CuratedContent:
+    return next(entry for entry in entries if entry.problem.slug == slug)
+
+
 async def api_client(db_session: AsyncSession) -> AsyncClient:
     app = create_app()
 
@@ -74,7 +78,7 @@ async def test_reviewed_catalog_only_returns_current_selectable_versions(
 ) -> None:
     entries = await seed_reviewed_content(db_session)
     service = CuratedProblemService(db_session)
-    first = entries[0]
+    first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
 
     next_entry = first.model_copy(deep=True)
     next_entry.problem.version = "v10"
@@ -83,7 +87,7 @@ async def test_reviewed_catalog_only_returns_current_selectable_versions(
     next_entry.interview_pack.reference_reasoning += " Version two."
     await service.seed_problem(next_entry)
 
-    inactive = entries[1].problem.slug
+    inactive = "binary-search"
     inactive_version = await seeded_version(db_session, inactive)
     inactive_problem = await db_session.get(Problem, inactive_version.problem_id)
     assert inactive_problem is not None
@@ -104,7 +108,7 @@ async def test_reviewed_catalog_only_returns_current_selectable_versions(
     )
     no_pack.io_schema_json = {"catalog_order": 99, "review_status": "REVIEWED"}
 
-    draft_entry = entries[0].model_copy(deep=True)
+    draft_entry = first.model_copy(deep=True)
     draft_entry.problem.slug = f"draft-{uuid7()}"
     draft_entry.problem.review_status = "DRAFT"
     draft_entry.interview_pack.review_status = "DRAFT"
@@ -112,7 +116,15 @@ async def test_reviewed_catalog_only_returns_current_selectable_versions(
     await db_session.flush()
 
     catalog = await service.list_candidate_catalog()
-    assert [(item.problem.slug, item.version) for item in catalog] == [(first.problem.slug, "v10")]
+    catalog_versions = [(item.problem.slug, item.version) for item in catalog]
+    expected = [
+        (entry.problem.slug, "v1")
+        for entry in entries
+        if entry.problem.slug not in {first.problem.slug, inactive}
+    ]
+    expected.append((first.problem.slug, "v10"))
+    catalog_order = {entry.problem.slug: entry.problem.catalog_order for entry in entries}
+    assert catalog_versions == sorted(expected, key=lambda item: catalog_order[item[0]])
     assert await service.candidate_problem(catalog[0].id) is catalog[0]
     with pytest.raises(CuratedProblemError):
         await service.candidate_problem(no_pack.id)
@@ -124,8 +136,9 @@ async def test_reviewed_pack_resolution_uses_authored_version_not_created_timest
 ) -> None:
     entries = await seed_reviewed_content(db_session)
     service = CuratedProblemService(db_session)
-    version = await seeded_version(db_session, entries[0].problem.slug)
-    next_pack = entries[0].model_copy(deep=True)
+    first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
+    version = await seeded_version(db_session, first.problem.slug)
+    next_pack = first.model_copy(deep=True)
     next_pack.interview_pack.version = "v2"
     next_pack.interview_pack.reference_reasoning += " A newer authored pack."
     await service.seed_problem(next_pack)
@@ -139,13 +152,14 @@ async def test_candidate_routes_are_database_backed_and_never_leak_pack_content(
     db_session: AsyncSession,
 ) -> None:
     entries = await seed_reviewed_content(db_session)
-    version = await seeded_version(db_session, entries[0].problem.slug)
+    first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
+    version = await seeded_version(db_session, first.problem.slug)
 
     client = await api_client(db_session)
     async with client:
         catalog = await client.get("/api/problems/curated")
         assert catalog.status_code == 200
-        assert catalog.json()[0]["problem_version_id"] == str(version.id)
+        assert str(version.id) in {item["problem_version_id"] for item in catalog.json()}
         assert set(catalog.json()[0]) == {
             "problem_version_id",
             "slug",
@@ -183,10 +197,11 @@ async def test_typed_pack_retrieval_preserves_exact_session_pack_and_supports_su
 ) -> None:
     entries = await seed_reviewed_content(db_session)
     curated = CuratedProblemService(db_session)
-    version = await seeded_version(db_session, entries[0].problem.slug)
+    first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
+    version = await seeded_version(db_session, first.problem.slug)
     original_pack = await curated.reviewed_pack_for_problem(version.id)
 
-    newer = entries[0].model_copy(deep=True)
+    newer = first.model_copy(deep=True)
     newer.interview_pack.version = "v2"
     newer.interview_pack.reference_reasoning += " Newer pack."
     await curated.seed_problem(newer)
@@ -248,14 +263,15 @@ async def test_typed_pack_retrieval_preserves_exact_session_pack_and_supports_su
 
     mappings = await curated.problem_concepts_for_version(version.id)
     assert {(item.canonical_key, item.role) for item in mappings} == {
-        (item.canonical_key, item.role) for item in entries[0].problem.problem_concepts
+        (item.canonical_key, item.role) for item in first.problem.problem_concepts
     }
 
 
 @pytest.mark.asyncio
 async def test_malformed_persisted_pack_fails_explicitly(db_session: AsyncSession) -> None:
     entries = await seed_reviewed_content(db_session)
-    version = await seeded_version(db_session, entries[0].problem.slug)
+    first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
+    version = await seeded_version(db_session, first.problem.slug)
     pack = await CuratedProblemService(db_session).reviewed_pack_for_problem(version.id)
     pack.pack_json = deepcopy(pack.pack_json)
     pack.pack_json.pop("reference_solutions")

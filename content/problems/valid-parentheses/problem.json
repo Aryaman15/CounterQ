@@ -1,0 +1,9 @@
+{
+  "schema_version": "problem.v1", "slug": "valid-parentheses", "version": "v1", "catalog_order": 10, "title": "Valid Parentheses", "review_status": "REVIEWED",
+  "statement": "Given a string containing only the characters (, ), [, ], {, and }, return true when every opening bracket is closed by the same bracket type in the correct nesting order.",
+  "constraints": ["0 <= s.length <= 100000", "s contains only the six bracket characters described above."],
+  "examples": [{"input": "s = ()[]{}", "output": "true", "explanation": "Each opener is matched in reverse opening order."}, {"input": "s = ([)]", "output": "false", "explanation": "The closing parenthesis does not match the most recent opener."}],
+  "execution": {"method_name": "isValid", "arguments": [{"name": "s", "type": "string"}], "return_type": "bool", "comparator": "EXACT", "visible_cases": [{"arguments": {"s": "()[]{}"}, "expected_output": true}, {"arguments": {"s": "([)]"}, "expected_output": false}, {"arguments": {"s": "("}, "expected_output": false}], "custom_test_supported": true},
+  "languages": {"cpp": {"display_signature": "bool isValid(string s)", "starter_code": "class Solution {\npublic:\n    bool isValid(string s) {\n        return false;\n    }\n};"}, "python": {"display_signature": "def isValid(self, s: str) -> bool", "starter_code": "class Solution:\n    def isValid(self, s: str) -> bool:\n        return False"}, "java": {"display_signature": "boolean isValid(String s)", "starter_code": "class Solution {\n    public boolean isValid(String s) {\n        return false;\n    }\n}"}},
+  "problem_concepts": [{"canonical_key": "stack", "role": "PRIMARY", "relevance": "HIGH", "expected_importance": "HIGH"}, {"canonical_key": "time_complexity", "role": "SECONDARY", "relevance": "MEDIUM", "expected_importance": "MEDIUM"}, {"canonical_key": "space_complexity", "role": "SECONDARY", "relevance": "MEDIUM", "expected_importance": "MEDIUM"}]
+}
