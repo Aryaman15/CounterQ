@@ -1,5 +1,6 @@
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.problems.content import canonical_hash
 from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
 
 
@@ -49,10 +50,15 @@ class ProblemRepository:
         pack_json: dict[str, object],
         review_status: str,
         preparation_policy_key: str | None = None,
+        authored_version: str | None = None,
     ) -> InterviewPackVersion:
+        content_hash = canonical_hash(pack_json)
+        effective_authored_version = authored_version or f"legacy:{content_hash[7:39]}"
         pack_version = InterviewPackVersion(
             problem_version_id=problem_version.id,
             schema_version=schema_version,
+            authored_version=effective_authored_version,
+            content_hash=content_hash,
             pack_json=pack_json,
             review_status=review_status,
             preparation_policy_key=preparation_policy_key,

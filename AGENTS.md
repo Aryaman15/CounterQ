@@ -1292,6 +1292,12 @@ pnpm run migrate
 
 Create migration:
 pnpm run migrate:create -- "message"
+
+Validate curated problem content:
+pnpm run validate:problems
+
+Seed curated problem content:
+pnpm run seed:problems
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.

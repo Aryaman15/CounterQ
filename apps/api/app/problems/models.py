@@ -96,6 +96,13 @@ class ProblemVersion(Base):
 
 class InterviewPackVersion(Base):
     __tablename__ = "interview_pack_versions"
+    __table_args__ = (
+        UniqueConstraint(
+            "problem_version_id",
+            "authored_version",
+            name="uq_interview_pack_versions_problem_authored_version",
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
     problem_version_id: Mapped[UUID] = mapped_column(
@@ -104,6 +111,8 @@ class InterviewPackVersion(Base):
         nullable=False,
     )
     schema_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    authored_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     preparation_policy_key: Mapped[str | None] = mapped_column(String(128))
     ai_policy_version_id: Mapped[UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
@@ -156,19 +165,27 @@ class ConceptAlias(Base):
 class ConceptRelationship(Base):
     __tablename__ = "concept_relationships"
     __table_args__ = (
-        UniqueConstraint("from_concept_id", "to_concept_id", "relationship_type", name="uq_concept_relationship"),
+        UniqueConstraint(
+            "from_concept_id", "to_concept_id", "relationship_type", name="uq_concept_relationship"
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
-    from_concept_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False)
-    to_concept_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False)
+    from_concept_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False
+    )
+    to_concept_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False
+    )
     relationship_type: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
 class ProblemConcept(Base):
     __tablename__ = "problem_concepts"
     __table_args__ = (
-        UniqueConstraint("problem_version_id", "concept_id", name="uq_problem_concepts_version_concept"),
+        UniqueConstraint(
+            "problem_version_id", "concept_id", name="uq_problem_concepts_version_concept"
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)

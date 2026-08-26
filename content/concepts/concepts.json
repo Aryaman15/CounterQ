@@ -1,12 +1,54 @@
-[
-  {"canonical_key":"hash_table_lookup","display_name":"Hash Table Lookup","category":"HASHING","description":"Lookup and update behavior in hash tables."},
-  {"canonical_key":"sliding_window_invariant","display_name":"Sliding Window Invariant","category":"TWO_POINTERS","description":"A maintained contiguous window satisfies its stated invariant."},
-  {"canonical_key":"two_pointer_reasoning","display_name":"Two Pointer Reasoning","category":"TWO_POINTERS","description":"Pointer movement is justified by a monotonic condition."},
-  {"canonical_key":"stack_invariant","display_name":"Stack Invariant","category":"STACK","description":"A stack captures unresolved structure in order."},
-  {"canonical_key":"binary_search_boundary","display_name":"Binary Search Boundary","category":"SEARCH","description":"Search bounds preserve the location of a target or insertion point."},
-  {"canonical_key":"heap_selection","display_name":"Heap Selection","category":"HEAP","description":"A heap maintains the relevant extrema efficiently."},
-  {"canonical_key":"dynamic_programming_recurrence","display_name":"Dynamic Programming Recurrence","category":"DYNAMIC_PROGRAMMING","description":"Subproblem state and recurrence capture an optimal solution."},
-  {"canonical_key":"graph_traversal","display_name":"Graph Traversal","category":"GRAPH","description":"Traversal visits reachable graph states without losing required constraints."},
-  {"canonical_key":"interval_merge","display_name":"Interval Merge","category":"INTERVAL","description":"Sorted interval boundaries determine overlap and merge behavior."},
-  {"canonical_key":"string_frequency","display_name":"String Frequency","category":"STRING","description":"Character frequencies support string comparison and window reasoning."}
-]
+{
+  "schema_version": "concept-ontology.v1",
+  "concepts": [
+    {"canonical_key":"arrays","display_name":"Arrays","category":"DATA_STRUCTURE","description":"Indexed contiguous collections and their access patterns.","status":"ACTIVE"},
+    {"canonical_key":"hash_map","display_name":"Hash Map","category":"HASHING","description":"Key-value storage backed by hashing.","status":"ACTIVE"},
+    {"canonical_key":"hash_set","display_name":"Hash Set","category":"HASHING","description":"Distinct-value membership backed by hashing.","status":"ACTIVE"},
+    {"canonical_key":"hash_table_complexity","display_name":"Hash Table Complexity","category":"HASHING","description":"Expected and worst-case complexity of hash-table operations.","status":"ACTIVE"},
+    {"canonical_key":"hash_table_lookup","display_name":"Hash Table Lookup","category":"HASHING","description":"Lookup and update behavior through a hash table interface.","status":"ACTIVE","parent_concept_key":"hash_map"},
+    {"canonical_key":"frequency_counting","display_name":"Frequency Counting","category":"HASHING","description":"Counting occurrences to compare or aggregate values.","status":"ACTIVE"},
+    {"canonical_key":"prefix_suffix","display_name":"Prefix and Suffix Aggregation","category":"ARRAYS","description":"Combining information accumulated from both array directions.","status":"ACTIVE","parent_concept_key":"arrays"},
+    {"canonical_key":"two_pointers","display_name":"Two Pointers","category":"ALGORITHM","description":"Coordinated pointer movement over an ordered search space.","status":"ACTIVE"},
+    {"canonical_key":"two_pointer_reasoning","display_name":"Two Pointer Reasoning","category":"INVARIANT","description":"Justifying pointer movement while preserving the active search space.","status":"ACTIVE","parent_concept_key":"two_pointers"},
+    {"canonical_key":"sliding_window","display_name":"Sliding Window","category":"ALGORITHM","description":"Maintaining a contiguous range while boundaries advance.","status":"ACTIVE","parent_concept_key":"two_pointers"},
+    {"canonical_key":"sliding_window_invariant","display_name":"Sliding Window Invariant","category":"INVARIANT","description":"The condition preserved while a sliding window changes.","status":"ACTIVE","parent_concept_key":"sliding_window"},
+    {"canonical_key":"stack","display_name":"Stack","category":"DATA_STRUCTURE","description":"Last-in-first-out storage for unresolved work.","status":"ACTIVE"},
+    {"canonical_key":"monotonic_stack","display_name":"Monotonic Stack","category":"ALGORITHM","description":"A stack ordered monotonically to resolve nearest candidates.","status":"ACTIVE","parent_concept_key":"stack"},
+    {"canonical_key":"binary_search","display_name":"Binary Search","category":"ALGORITHM","description":"Halving an ordered search space using a comparison.","status":"ACTIVE"},
+    {"canonical_key":"binary_search_invariant","display_name":"Binary Search Invariant","category":"INVARIANT","description":"The active interval continues to contain the target if present.","status":"ACTIVE","parent_concept_key":"binary_search"},
+    {"canonical_key":"binary_search_boundary","display_name":"Binary Search Boundary","category":"INVARIANT","description":"Concrete inclusive or half-open bounds implementing a binary-search invariant.","status":"ACTIVE","parent_concept_key":"binary_search_invariant"},
+    {"canonical_key":"sorting","display_name":"Sorting","category":"ALGORITHM","description":"Ordering values to expose structure or enable efficient search.","status":"ACTIVE"},
+    {"canonical_key":"heap","display_name":"Heap","category":"DATA_STRUCTURE","description":"Priority-based access to an extremal element.","status":"ACTIVE"},
+    {"canonical_key":"intervals","display_name":"Intervals","category":"DATA_STRUCTURE","description":"Ranges represented by ordered endpoints.","status":"ACTIVE"},
+    {"canonical_key":"dynamic_programming","display_name":"Dynamic Programming","category":"ALGORITHM","description":"Solving overlapping subproblems with stored results.","status":"ACTIVE"},
+    {"canonical_key":"dynamic_programming_state","display_name":"Dynamic Programming State","category":"INVARIANT","description":"A precise state definition and transition recurrence.","status":"ACTIVE","parent_concept_key":"dynamic_programming"},
+    {"canonical_key":"graph_traversal","display_name":"Graph Traversal","category":"GRAPH","description":"Visiting reachable vertices and edges systematically.","status":"ACTIVE"},
+    {"canonical_key":"dfs","display_name":"Depth-First Search","category":"GRAPH","description":"Exploring one graph path deeply before backtracking.","status":"ACTIVE","parent_concept_key":"graph_traversal"},
+    {"canonical_key":"bfs","display_name":"Breadth-First Search","category":"GRAPH","description":"Exploring graph vertices by increasing edge distance.","status":"ACTIVE","parent_concept_key":"graph_traversal"},
+    {"canonical_key":"topological_sort","display_name":"Topological Sort","category":"GRAPH","description":"Ordering a directed acyclic graph by dependency direction.","status":"ACTIVE","parent_concept_key":"graph_traversal"},
+    {"canonical_key":"cycle_detection","display_name":"Cycle Detection","category":"GRAPH","description":"Determining whether traversal revisits an active dependency path.","status":"ACTIVE","parent_concept_key":"graph_traversal"},
+    {"canonical_key":"time_complexity","display_name":"Time Complexity","category":"ANALYSIS","description":"Growth of executed work with input size.","status":"ACTIVE"},
+    {"canonical_key":"space_complexity","display_name":"Space Complexity","category":"ANALYSIS","description":"Growth of auxiliary storage with input size.","status":"ACTIVE"}
+  ],
+  "aliases": [
+    {"concept_key":"hash_map","alias":"hashmap","alias_type":"TERM"},
+    {"concept_key":"hash_map","alias":"unordered_map","alias_type":"LIBRARY"},
+    {"concept_key":"hash_set","alias":"unordered_set","alias_type":"LIBRARY"},
+    {"concept_key":"binary_search_invariant","alias":"binary search boundary","alias_type":"TERM"},
+    {"concept_key":"dynamic_programming","alias":"DP","alias_type":"ABBREVIATION"},
+    {"concept_key":"dfs","alias":"depth first search","alias_type":"TERM"},
+    {"concept_key":"bfs","alias":"breadth first search","alias_type":"TERM"},
+    {"concept_key":"hash_table_complexity","alias":"hash table lookup complexity","alias_type":"TERM"}
+  ],
+  "relationships": [
+    {"from_concept_key":"sliding_window","to_concept_key":"two_pointers","relationship_type":"IS_A"},
+    {"from_concept_key":"sliding_window","to_concept_key":"hash_map","relationship_type":"USES"},
+    {"from_concept_key":"hash_map","to_concept_key":"hash_table_complexity","relationship_type":"RELATED_TO"},
+    {"from_concept_key":"hash_table_lookup","to_concept_key":"hash_table_complexity","relationship_type":"RELATED_TO"},
+    {"from_concept_key":"binary_search","to_concept_key":"binary_search_invariant","relationship_type":"USES"},
+    {"from_concept_key":"topological_sort","to_concept_key":"cycle_detection","relationship_type":"RELATED_TO"},
+    {"from_concept_key":"dfs","to_concept_key":"graph_traversal","relationship_type":"IS_A"},
+    {"from_concept_key":"bfs","to_concept_key":"graph_traversal","relationship_type":"IS_A"},
+    {"from_concept_key":"dynamic_programming_state","to_concept_key":"dynamic_programming","relationship_type":"IS_A"}
+  ]
+}

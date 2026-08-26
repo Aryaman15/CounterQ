@@ -1,32 +1,40 @@
-"""Explicit development command for importing reviewed curated content."""
+"""Validate and transactionally import curated ontology and problem units."""
 
 from __future__ import annotations
 
 import asyncio
-import json
-from pathlib import Path
 
+from app.db.registry import register_orm_models
 from app.db.session import get_sessionmaker
-from app.problems.content import content_root, load_curated_content
-from app.problems.service import CuratedProblemService
+from app.problems.content import validate_authored_content
+from app.problems.service import CuratedProblemService, SeedCounts
 
 
-def concepts_path() -> Path:
-    return content_root().parent / "concepts" / "concepts.json"
-
-
-async def seed_curated_content() -> int:
-    concepts = json.loads(concepts_path().read_text())
-    entries = load_curated_content()
-    async with get_sessionmaker()() as session:
+async def seed_curated_content() -> SeedCounts:
+    register_orm_models()
+    ontology, entries = validate_authored_content()
+    sessionmaker = get_sessionmaker()
+    totals = SeedCounts()
+    async with sessionmaker() as session:
         async with session.begin():
-            service = CuratedProblemService(session)
-            await service.seed_concepts(concepts)
-            return await service.seed(entries)
+            totals.add(await CuratedProblemService(session).seed_ontology(ontology))
+    for entry in entries:
+        async with sessionmaker() as session:
+            async with session.begin():
+                totals.add(await CuratedProblemService(session).seed_problem(entry))
+    return totals
 
 
 def main() -> None:
-    print(f"Seeded {asyncio.run(seed_curated_content())} curated problems.")
+    counts = asyncio.run(seed_curated_content())
+    print(
+        "Curated seed created "
+        f"concepts={counts.concepts}, aliases={counts.aliases}, "
+        f"relationships={counts.relationships}, problems={counts.problems}, "
+        f"problem_versions={counts.problem_versions}, "
+        f"interview_pack_versions={counts.interview_pack_versions}, "
+        f"problem_concepts={counts.problem_concepts}."
+    )
 
 
 if __name__ == "__main__":

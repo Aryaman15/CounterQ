@@ -15,7 +15,15 @@ from app.interviews.models import (
     SessionBudget,
 )
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
-from app.problems.models import Concept, ConceptAlias, ConceptRelationship, InterviewPackVersion, Problem, ProblemConcept, ProblemVersion
+from app.problems.models import (
+    Concept,
+    ConceptAlias,
+    ConceptRelationship,
+    InterviewPackVersion,
+    Problem,
+    ProblemConcept,
+    ProblemVersion,
+)
 
 __all__ = [
     "AIPolicyVersion",
