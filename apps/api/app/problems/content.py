@@ -14,6 +14,9 @@ SUPPORTED_PROBE_STRATEGIES = frozenset({
     "WHY", "PROVE", "ASSUMPTION_CHALLENGE", "COUNTEREXAMPLE", "COMPLEXITY", "EDGE_CASE",
     "TRADE_OFF", "ALTERNATIVE", "IMPLEMENTATION_CHOICE", "CONSTRAINT_MUTATION", "FAILURE_MODE", "TRANSFER",
 })
+SUPPORTED_STAGES = frozenset({"SETUP", "INTRODUCTION", "PROBLEM_UNDERSTANDING", "APPROACH_DISCOVERY", "APPROACH_DEFENSE", "IMPLEMENTATION", "TESTING_DEBUGGING", "COMPLEXITY_EDGE_CASES", "CONSTRAINT_MUTATION", "FINAL_DEFENSE", "WRAP_UP", "COMPLETED"})
+SUPPORTED_LEVELS = frozenset({"INTERN", "NEW_GRAD", "EARLY_CAREER"})
+SUPPORTED_RELATIONSHIPS = frozenset({"IS_A", "RELATED_TO", "PREREQUISITE_OF", "USES", "VARIANT_OF"})
 
 
 class StrictContent(BaseModel):
@@ -44,6 +47,19 @@ class ExecutionDefinition(StrictContent):
     custom_test_supported: bool = True
 
 
+def validate_semantic_value(value: object, semantic_type: str) -> bool:
+    if semantic_type == "int": return isinstance(value, int) and not isinstance(value, bool)
+    if semantic_type == "bool": return isinstance(value, bool)
+    if semantic_type == "string": return isinstance(value, str)
+    if semantic_type in {"int[]", "string[]"}:
+        item_type = semantic_type[:-2]
+        return isinstance(value, list) and all(validate_semantic_value(item, item_type) for item in value)
+    if semantic_type in {"int[][]", "string[][]"}:
+        item_type = semantic_type[:-4] + "[]"
+        return isinstance(value, list) and all(validate_semantic_value(item, item_type) for item in value)
+    return False
+
+
 class ProblemConceptDefinition(StrictContent):
     canonical_key: str = Field(pattern=r"^[a-z0-9_]+$")
     role: Literal["PRIMARY", "SECONDARY", "OPTIONAL"]
@@ -67,9 +83,15 @@ class ProblemContent(StrictContent):
 
     @model_validator(mode="after")
     def validate_cases(self) -> ProblemContent:
-        names = {argument.name for argument in self.execution.arguments}
-        if set(self.execution.visible_cases[0].arguments) != names:
-            raise ValueError("visible case arguments must exactly match execution arguments")
+        types = {argument.name: argument.type for argument in self.execution.arguments}
+        for index, case in enumerate(self.execution.visible_cases, start=1):
+            if set(case.arguments) != set(types):
+                raise ValueError(f"visible case {index} arguments must exactly match execution arguments")
+            for name, value in case.arguments.items():
+                if not validate_semantic_value(value, types[name]):
+                    raise ValueError(f"visible case {index} has invalid {name} value")
+            if not validate_semantic_value(case.expected_output, self.execution.return_type):
+                raise ValueError(f"visible case {index} expected output has invalid type")
         if set(self.languages) != SUPPORTED_LANGUAGES:
             raise ValueError("reviewed curated problem must define cpp, python, and java")
         return self
@@ -118,6 +140,35 @@ class CommonFollowup(StrictContent):
         return self
 
 
+class IdentifiedTechnicalItem(StrictContent):
+    id: str = Field(min_length=1)
+    concept_keys: list[str] = Field(min_length=1)
+    diagnostic_goal: str = Field(min_length=1)
+    counterexample_id: str | None = None
+    approach_id: str | None = None
+
+
+class Invariant(IdentifiedTechnicalItem): pass
+class ComplexityExpectation(IdentifiedTechnicalItem): pass
+class CommonMisconception(IdentifiedTechnicalItem): pass
+class FailureMode(IdentifiedTechnicalItem): pass
+class EdgeCase(IdentifiedTechnicalItem): pass
+class ConstraintMutation(IdentifiedTechnicalItem): pass
+class ProbeOpportunity(IdentifiedTechnicalItem):
+    relevant_strategies: list[str] = Field(min_length=1)
+
+
+class Counterexample(StrictContent):
+    id: str = Field(min_length=1)
+    input: object
+    purpose: str = Field(min_length=1)
+
+
+class LevelConsideration(StrictContent):
+    level: str
+    guidance: str = Field(min_length=1)
+
+
 class InterviewPackContent(StrictContent):
     schema_version: Literal["interview-pack.v1"] = "interview-pack.v1"
     version: str = Field(min_length=1)
@@ -126,16 +177,16 @@ class InterviewPackContent(StrictContent):
     alternative_approaches: list[Approach] = []
     reference_solutions: list[ReferenceSolution] = Field(min_length=3)
     concepts: list[str] = Field(min_length=1)
-    invariants: list[str] = []
-    complexity_expectations: list[str] = []
-    common_misconceptions: list[dict[str, Any]] = []
-    failure_modes: list[dict[str, Any]] = []
-    edge_cases: list[dict[str, Any]] = []
-    counterexamples: list[dict[str, Any]] = []
-    constraint_mutations: list[dict[str, Any]] = []
-    probe_opportunities: list[dict[str, Any]] = []
+    invariants: list[Invariant] = []
+    complexity_expectations: list[ComplexityExpectation] = []
+    common_misconceptions: list[CommonMisconception] = []
+    failure_modes: list[FailureMode] = []
+    edge_cases: list[EdgeCase] = []
+    counterexamples: list[Counterexample] = []
+    constraint_mutations: list[ConstraintMutation] = []
+    probe_opportunities: list[ProbeOpportunity] = []
     common_followups: list[CommonFollowup] = []
-    level_considerations: list[dict[str, Any]] = []
+    level_considerations: list[LevelConsideration] = []
     reference_reasoning: str = Field(min_length=1)
 
     @model_validator(mode="after")
@@ -155,6 +206,15 @@ class InterviewPackContent(StrictContent):
         followup_ids = [followup.id for followup in self.common_followups]
         if len(followup_ids) != len(set(followup_ids)):
             raise ValueError("common followup IDs must be unique")
+        concepts = set(self.concepts)
+        counterexamples = {item.id for item in self.counterexamples}
+        for item in [*self.invariants, *self.complexity_expectations, *self.common_misconceptions, *self.failure_modes, *self.edge_cases, *self.constraint_mutations, *self.probe_opportunities, *self.common_followups]:
+            if not set(item.concept_keys if hasattr(item, "concept_keys") else item.target_concepts).issubset(concepts): raise ValueError("pack item has dangling concept")
+            if getattr(item, "approach_id", None) and getattr(item, "approach_id") not in all_ids: raise ValueError("pack item has dangling approach")
+            if getattr(item, "target_approach_id", None) and getattr(item, "target_approach_id") not in all_ids: raise ValueError("followup has dangling approach")
+            if getattr(item, "counterexample_id", None) and getattr(item, "counterexample_id") not in counterexamples: raise ValueError("pack item has dangling counterexample")
+        if any(item.level not in SUPPORTED_LEVELS for item in self.level_considerations): raise ValueError("invalid level")
+        if any(stage not in SUPPORTED_STAGES for item in self.common_followups for stage in item.applicable_stages): raise ValueError("invalid interview stage")
         return self
 
 
