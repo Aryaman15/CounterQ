@@ -31,7 +31,7 @@ from app.problems.service import CuratedProblemError, CuratedProblemService
 
 def test_repository_authored_content_validates() -> None:
     ontology, entries = validate_authored_content()
-    assert len(entries) == 14
+    assert len(entries) == 20
     assert all(entry.problem.review_status == "REVIEWED" for entry in entries)
     assert len(ontology.concepts) >= 25
 
@@ -96,6 +96,33 @@ def test_batch_two_curated_catalog_has_reviewed_pack_depth() -> None:
         assert len(pack.counterexamples) >= 2
 
     assert by_slug["top-k-frequent-elements"].problem.execution.comparator == "UNORDERED_LIST"
+
+
+def test_final_batch_has_reviewed_content_and_execution_shapes() -> None:
+    _, entries = validate_authored_content()
+    by_slug = {entry.problem.slug: entry for entry in entries}
+    expected = {
+        "merge-intervals": (15, "int[][]", "int[][]"),
+        "maximum-subarray": (16, "int[]", "int"),
+        "house-robber": (17, "int[]", "int"),
+        "coin-change": (18, "int[]", "int"),
+        "number-of-islands": (19, "string[]", "int"),
+        "course-schedule": (20, "int", "bool"),
+    }
+    for slug, (order, first_argument, return_type) in expected.items():
+        entry = by_slug[slug]
+        pack = entry.interview_pack
+        assert entry.problem.catalog_order == order
+        assert entry.problem.review_status == pack.review_status == "REVIEWED"
+        assert entry.problem.execution.arguments[0].type == first_argument
+        assert entry.problem.execution.return_type == return_type
+        assert len(pack.common_followups) >= 3
+        assert len(pack.counterexamples) >= 2
+        primary = pack.expected_approaches[0].approach_id
+        languages = {
+            item.language for item in pack.reference_solutions if item.approach_id == primary
+        }
+        assert languages == {"cpp", "python", "java"}
 
 
 def test_canonical_hash_ignores_order_and_line_endings() -> None:
