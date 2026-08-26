@@ -48,14 +48,20 @@ async def seed_reviewed_content(db_session: AsyncSession) -> list[CuratedContent
     return entries
 
 
-async def seeded_version(db_session: AsyncSession, slug: str) -> ProblemVersion:
-    version = await db_session.scalar(
-        select(ProblemVersion)
-        .join(Problem)
-        .where(Problem.slug == slug, ProblemVersion.version == "v1")
-    )
-    assert version is not None
-    return version
+async def seeded_version(
+    db_session: AsyncSession,
+    slug: str,
+    authored_version: str | None = None,
+) -> ProblemVersion:
+    statement = select(ProblemVersion).join(Problem).where(Problem.slug == slug)
+    if authored_version is not None:
+        statement = statement.where(ProblemVersion.version == authored_version)
+    versions = list((await db_session.scalars(statement)).all())
+    assert versions
+    if authored_version is not None:
+        assert len(versions) == 1
+        return versions[0]
+    return max(versions, key=lambda item: int(item.version.removeprefix("v")))
 
 
 def entry_by_slug(entries: list[CuratedContent], slug: str) -> CuratedContent:
@@ -118,7 +124,7 @@ async def test_reviewed_catalog_only_returns_current_selectable_versions(
     catalog = await service.list_candidate_catalog()
     catalog_versions = [(item.problem.slug, item.version) for item in catalog]
     expected = [
-        (entry.problem.slug, "v1")
+        (entry.problem.slug, entry.problem.version)
         for entry in entries
         if entry.problem.slug not in {first.problem.slug, inactive}
     ]
