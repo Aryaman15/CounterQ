@@ -35,7 +35,6 @@ from app.interviews.dev_factory import DevelopmentInterview, create_development_
 from app.interviews.models import (
     InterviewerPrompt,
     InterviewerPromptDelivery,
-    InterviewSession,
     SessionBudget,
 )
 from app.interviews.prompt_authorization import PromptAuthorizationService
@@ -145,15 +144,19 @@ def settings(tmp_path: Path, *, autostart: bool = False) -> Settings:
 
 
 @asynccontextmanager
-async def dev_context() -> AsyncIterator[
-    tuple[async_sessionmaker[AsyncSession], DevelopmentInterview]
-]:
+async def dev_context(
+    *, now: datetime | None = None
+) -> AsyncIterator[tuple[async_sessionmaker[AsyncSession], DevelopmentInterview]]:
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with maker() as session:
             async with session.begin():
-                dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+                dev = await create_development_interview(
+                    session,
+                    initial_stage="IMPLEMENTATION",
+                    now=now,
+                )
         yield maker, dev
     finally:
         await engine.dispose()
@@ -308,17 +311,22 @@ async def add_transcript(
     *,
     transcript: str = "I'm using an unordered map because lookup is always guaranteed O(1).",
     sequence: int = 1,
+    now: datetime | None = None,
 ) -> Any:
+    occurred_at = now or datetime.now(UTC)
     async with maker() as session:
         async with session.begin():
-            result = await RealtimeControlService(session).persist_candidate_transcript(
+            result = await RealtimeControlService(
+                session,
+                clock=lambda: occurred_at,
+            ).persist_candidate_transcript(
                 session_id=session_id,
                 message=CandidateTranscriptFinalizedMessage(
                     **client_base(sequence),
                     type="candidate_transcript_finalized",
                     provider_item_id=f"candidate-item-{sequence}",
                     transcript=transcript,
-                    ended_at=datetime.now(UTC),
+                    ended_at=occurred_at,
                 ),
             )
             return result
@@ -347,18 +355,6 @@ async def add_code(
                 ),
             )
             return result
-
-
-async def set_session_deadline(
-    maker: async_sessionmaker[AsyncSession],
-    session_id: Any,
-    deadline_at: datetime,
-) -> None:
-    async with maker() as session:
-        async with session.begin():
-            interview = await session.get(InterviewSession, session_id)
-            assert interview is not None
-            interview.deadline_at = deadline_at
 
 
 def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() -> None:
@@ -872,9 +868,8 @@ async def test_development_analyze_and_authorize_gates_immediately_after_reasoni
             current_time["value"] = t0 + timedelta(seconds=4)
             return result
 
-    async with dev_context() as (maker, dev):
-        await set_session_deadline(maker, dev.interview_session.id, t0 + timedelta(minutes=30))
-        await add_transcript(maker, dev.interview_session.id)
+    async with dev_context(now=t0) as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id, now=t0)
         provider = AdvancingProvider()
         local_settings = settings(tmp_path)
         coordinator = LiveExaminerCoordinator(
@@ -904,10 +899,7 @@ async def test_development_analyze_and_authorize_gates_immediately_after_reasoni
             delivery_count = await session.scalar(
                 select(func.count())
                 .select_from(InterviewerPromptDelivery)
-                .where(
-                    InterviewerPromptDelivery.interview_session_id
-                    == dev.interview_session.id
-                )
+                .where(InterviewerPromptDelivery.interview_session_id == dev.interview_session.id)
             )
             budget = await session.get(SessionBudget, dev.interview_session.id)
 
@@ -951,9 +943,8 @@ async def test_manual_policy_gate_after_human_delay_still_expires(
             current_time["value"] = t0 + timedelta(seconds=4)
             return result
 
-    async with dev_context() as (maker, dev):
-        await set_session_deadline(maker, dev.interview_session.id, t0 + timedelta(minutes=30))
-        await add_transcript(maker, dev.interview_session.id)
+    async with dev_context(now=t0) as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id, now=t0)
         provider = AdvancingProvider()
         local_settings = settings(tmp_path)
         coordinator = LiveExaminerCoordinator(

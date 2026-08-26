@@ -35,8 +35,9 @@ async def create_development_interview(
     state_version: int = 0,
     template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
     language: str = "cpp",
+    now: datetime | None = None,
 ) -> DevelopmentInterview:
-    now = datetime.now(UTC)
+    created_at = now or datetime.now(UTC)
     policy = template_policy(template)
     if policy.configured_duration_seconds is None:
         raise ValueError("FULL_SIMULATION requires an explicit duration policy before use")
@@ -99,8 +100,8 @@ async def create_development_interview(
         current_stage=initial_stage,
         state_version=state_version,
         status="ACTIVE",
-        started_at=now,
-        deadline_at=now + timedelta(seconds=policy.configured_duration_seconds),
+        started_at=created_at,
+        deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
     )
     budget = await interviews.add_budget(
         session_id=interview_session.id,

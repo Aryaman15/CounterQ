@@ -37,20 +37,22 @@ async def proposed_decision(
     stage: str = "IMPLEMENTATION",
     decision_deadline_at: datetime | None = None,
     session_deadline_at: datetime | None = None,
+    now: datetime | None = None,
 ) -> tuple[Stage1PersistenceGraph, ExaminerDecision, CodeSnapshot]:
-    graph = await create_stage1_graph(db_session)
+    graph = await create_stage1_graph(db_session, now=now)
     graph.interview_session.current_stage = stage
     graph.interview_session.state_version = 0
     graph.interview_session.last_server_sequence = source_sequence
     if session_deadline_at is not None:
         graph.interview_session.deadline_at = session_deadline_at
-    ai = await create_ai_context(db_session, graph, purpose="LIVE_EXAMINER")
+    ai = await create_ai_context(db_session, graph, purpose="LIVE_EXAMINER", now=now)
     event, snapshot = await add_snapshot(
         db_session,
         graph,
         server_sequence=source_sequence,
         version_number=1,
         source_code="class Solution { int left = 0; };",
+        now=now,
     )
     decision = await ExaminerRepository(db_session).add_examiner_decision(
         interview_session_id=graph.interview_session.id,
@@ -64,7 +66,7 @@ async def proposed_decision(
         urgency=3,
         source_event_watermark=event.server_sequence,
         source_state_version=graph.interview_session.state_version,
-        deadline_at=decision_deadline_at or datetime.now(UTC) + timedelta(seconds=60),
+        deadline_at=decision_deadline_at or (now or datetime.now(UTC)) + timedelta(seconds=60),
         expiry_policy="stage1_live_examiner_short_lived",
         status="PROPOSED",
         ai_invocation_id=ai.invocation.id,
@@ -245,6 +247,7 @@ async def test_authorized_prompt_delivery_window_survives_original_decision_dead
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=8),
         session_deadline_at=t0 + timedelta(minutes=30),
+        now=t0,
     )
     current_time = t0 + timedelta(seconds=6)
     service = PromptAuthorizationService(
@@ -278,6 +281,7 @@ async def test_decision_expired_before_policy_gate_creates_no_prompt(
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=8),
         session_deadline_at=t0 + timedelta(minutes=30),
+        now=t0,
     )
 
     result = await PromptAuthorizationService(
@@ -303,6 +307,7 @@ async def test_authorized_prompt_delivery_window_expiry_expires_prompt(
         db_session,
         decision_deadline_at=t0 + timedelta(seconds=30),
         session_deadline_at=t0 + timedelta(minutes=30),
+        now=t0,
     )
     current_time = t0 + timedelta(seconds=6)
     service = PromptAuthorizationService(

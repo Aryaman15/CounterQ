@@ -32,8 +32,12 @@ class Stage1PersistenceGraph:
     budget: SessionBudget
 
 
-async def create_stage1_graph(db_session: AsyncSession) -> Stage1PersistenceGraph:
-    now = datetime.now(UTC)
+async def create_stage1_graph(
+    db_session: AsyncSession,
+    *,
+    now: datetime | None = None,
+) -> Stage1PersistenceGraph:
+    created_at = now or datetime.now(UTC)
     user = await UserRepository(db_session).add(
         external_auth_provider="dev",
         external_auth_subject=f"candidate-{uuid7()}",
@@ -76,8 +80,8 @@ async def create_stage1_graph(db_session: AsyncSession) -> Stage1PersistenceGrap
         current_stage="SETUP",
         state_version=0,
         status="ACTIVE",
-        started_at=now,
-        deadline_at=now + timedelta(minutes=30),
+        started_at=created_at,
+        deadline_at=created_at + timedelta(minutes=30),
     )
     budget = await interviews.add_budget(
         session_id=interview_session.id,
@@ -108,15 +112,16 @@ async def add_event(
     server_sequence: int,
     event_type: str = "TRANSCRIPT_FINALIZED",
     source: str = "CANDIDATE_VOICE",
+    now: datetime | None = None,
 ) -> InterviewEvent:
-    now = datetime.now(UTC)
+    occurred_at = now or datetime.now(UTC)
     return await InterviewRepository(db_session).add_event(
         session_id=graph.interview_session.id,
         user_id=graph.user.id,
         event_type=event_type,
         source=source,
-        occurred_at=now,
-        received_at=now,
+        occurred_at=occurred_at,
+        received_at=occurred_at,
         server_sequence=server_sequence,
         interview_state_version=graph.interview_session.state_version,
         schema_version="interview.event.v1",

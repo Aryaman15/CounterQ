@@ -35,9 +35,11 @@ async def test_active_refresh_retry_and_process_reconstruction_preserve_canonica
     db_session: AsyncSession,
 ) -> None:
     now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
-    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
-    development.interview_session.started_at = now
-    development.interview_session.deadline_at = now + timedelta(minutes=30)
+    development = await create_development_interview(
+        db_session,
+        initial_stage="IMPLEMENTATION",
+        now=now,
+    )
     await db_session.flush()
     service = RealtimeControlService(db_session, clock=clock_at(now + timedelta(minutes=3)))
     transcript_message = CandidateTranscriptFinalizedMessage(
@@ -118,9 +120,11 @@ async def test_active_refresh_retry_and_process_reconstruction_preserve_canonica
 
 async def test_terminal_boundaries_are_idempotent_and_immutable(db_session: AsyncSession) -> None:
     now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
-    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
-    development.interview_session.started_at = now
-    development.interview_session.deadline_at = now + timedelta(minutes=30)
+    development = await create_development_interview(
+        db_session,
+        initial_stage="IMPLEMENTATION",
+        now=now,
+    )
     await db_session.flush()
     completion = InterviewCompletionService(db_session, clock=clock_at(now + timedelta(minutes=4)))
     first = await completion.complete(
@@ -190,9 +194,11 @@ async def test_deadline_reconciliation_wins_terminal_race_without_duplicate_hist
     db_session: AsyncSession,
 ) -> None:
     now = datetime(2026, 8, 25, 12, 0, tzinfo=UTC)
-    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
-    development.interview_session.started_at = now - timedelta(minutes=30)
-    development.interview_session.deadline_at = now
+    development = await create_development_interview(
+        db_session,
+        initial_stage="IMPLEMENTATION",
+        now=now - timedelta(minutes=30),
+    )
     await db_session.flush()
     result = await InterviewCompletionService(db_session, clock=clock_at(now)).complete(
         session_id=development.interview_session.id,

@@ -37,6 +37,7 @@ async def create_ai_context(
     graph: Stage1PersistenceGraph,
     *,
     purpose: str = "CLAIM_EXTRACTION",
+    now: datetime | None = None,
 ) -> AIContext:
     policy = AIPolicyVersion(
         policy_key=f"{purpose.lower()}-{uuid7()}",
@@ -45,14 +46,14 @@ async def create_ai_context(
     )
     db_session.add(policy)
     await db_session.flush()
-    now = datetime.now(UTC)
+    started_at = now or datetime.now(UTC)
     invocation = await AIInvocationRepository(db_session).add(
         user_id=graph.user.id,
         interview_session_id=graph.interview_session.id,
         ai_policy_version_id=policy.id,
         purpose=purpose,
-        started_at=now,
-        completed_at=now + timedelta(milliseconds=200),
+        started_at=started_at,
+        completed_at=started_at + timedelta(milliseconds=200),
         estimated_cost=Decimal("0.001000"),
     )
     return AIContext(policy=policy, invocation=invocation)
@@ -102,6 +103,7 @@ async def add_snapshot(
     version_number: int,
     source_code: str = "int main() { return 0; }",
     parent_snapshot_id: UUID | None = None,
+    now: datetime | None = None,
 ) -> tuple[InterviewEvent, CodeSnapshot]:
     event = await add_event(
         db_session,
@@ -109,6 +111,7 @@ async def add_snapshot(
         server_sequence=server_sequence,
         event_type="CODE_SNAPSHOT_CREATED",
         source="NATIVE_EDITOR",
+        now=now,
     )
     snapshot = await ObservationRepository(db_session).add_code_snapshot(
         session_id=graph.interview_session.id,
