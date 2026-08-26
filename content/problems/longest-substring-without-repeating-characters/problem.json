@@ -1,0 +1,9 @@
+{
+  "schema_version":"problem.v1","slug":"longest-substring-without-repeating-characters","version":"v1","catalog_order":6,"title":"Longest Substring Without Repeating Characters","review_status":"REVIEWED",
+  "statement":"Given a string s, return the length of the longest contiguous substring containing no repeated characters.",
+  "constraints":["0 <= s.length <= 50000","s may contain ordinary printable characters."],
+  "examples":[{"input":"s = abcabcbb","output":"3","explanation":"abc is a longest valid substring."},{"input":"s = bbbbb","output":"1","explanation":"Every longer substring repeats b."},{"input":"s = pwwkew","output":"3","explanation":"wke is contiguous and has unique characters."}],
+  "execution":{"method_name":"lengthOfLongestSubstring","arguments":[{"name":"s","type":"string"}],"return_type":"int","comparator":"EXACT","visible_cases":[{"arguments":{"s":"abcabcbb"},"expected_output":3},{"arguments":{"s":"bbbbb"},"expected_output":1},{"arguments":{"s":"pwwkew"},"expected_output":3}],"custom_test_supported":true},
+  "languages":{"cpp":{"display_signature":"int lengthOfLongestSubstring(string s)","starter_code":"class Solution {\npublic:\n    int lengthOfLongestSubstring(string s) {\n        return 0;\n    }\n};"},"python":{"display_signature":"def lengthOfLongestSubstring(self, s: str) -> int","starter_code":"class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        return 0"},"java":{"display_signature":"int lengthOfLongestSubstring(String s)","starter_code":"class Solution {\n    public int lengthOfLongestSubstring(String s) {\n        return 0;\n    }\n}"}},
+  "problem_concepts":[{"canonical_key":"sliding_window_invariant","role":"PRIMARY","relevance":"HIGH","expected_importance":"HIGH"},{"canonical_key":"hash_table_lookup","role":"SECONDARY","relevance":"MEDIUM","expected_importance":"MEDIUM"}]
+}

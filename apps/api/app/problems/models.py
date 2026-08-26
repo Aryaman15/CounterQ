@@ -122,3 +122,62 @@ class InterviewPackVersion(Base):
     interview_sessions: Mapped[list[InterviewSession]] = relationship(
         back_populates="interview_pack_version",
     )
+
+
+class Concept(Base):
+    __tablename__ = "concepts"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    canonical_key: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    category: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_concept_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT")
+    )
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+
+class ConceptAlias(Base):
+    __tablename__ = "concept_aliases"
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    concept_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False
+    )
+    alias: Mapped[str] = mapped_column(String(256), nullable=False)
+    normalized_alias: Mapped[str] = mapped_column(String(256), unique=True, nullable=False)
+    alias_type: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class ConceptRelationship(Base):
+    __tablename__ = "concept_relationships"
+    __table_args__ = (
+        UniqueConstraint("from_concept_id", "to_concept_id", "relationship_type", name="uq_concept_relationship"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    from_concept_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False)
+    to_concept_id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False)
+    relationship_type: Mapped[str] = mapped_column(String(32), nullable=False)
+
+
+class ProblemConcept(Base):
+    __tablename__ = "problem_concepts"
+    __table_args__ = (
+        UniqueConstraint("problem_version_id", "concept_id", name="uq_problem_concepts_version_concept"),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    problem_version_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("problem_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    concept_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="RESTRICT"), nullable=False
+    )
+    relevance: Mapped[str] = mapped_column(String(32), nullable=False)
+    expected_importance: Mapped[str | None] = mapped_column(String(32))
+    role: Mapped[str] = mapped_column(String(32), nullable=False)

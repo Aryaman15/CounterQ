@@ -15,7 +15,7 @@ from app.interviews.models import (
     SessionBudget,
 )
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
-from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
+from app.problems.models import Concept, ConceptAlias, ConceptRelationship, InterviewPackVersion, Problem, ProblemConcept, ProblemVersion
 
 __all__ = [
     "AIPolicyVersion",
@@ -25,6 +25,9 @@ __all__ = [
     "CandidateResponseSource",
     "CodeDiff",
     "CodeSnapshot",
+    "Concept",
+    "ConceptAlias",
+    "ConceptRelationship",
     "ExaminerDecision",
     "ExecutionRun",
     "InterviewConfiguration",
@@ -35,6 +38,7 @@ __all__ = [
     "InterviewerPrompt",
     "InterviewerPromptDelivery",
     "Problem",
+    "ProblemConcept",
     "ProblemVersion",
     "SessionBudget",
     "TranscriptSegment",

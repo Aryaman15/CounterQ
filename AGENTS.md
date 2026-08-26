@@ -1449,11 +1449,13 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 3B — Python + Java Execution Parity + Sandbox Hardening
+Stage 3C — Curated Problem + Interview Pack System
 
 Current Goal:
-Run exact canonical C++/Python/Java CodeSnapshots through one isolated,
-language-neutral executor and persist bounded execution truth safely.
+Load reviewed, immutable curated ProblemVersions and InterviewPackVersions from
+version-controlled content, bind exact versions to sessions, expose only
+candidate-safe problem data, and provide rich server-only technical priors for
+future Examiner reasoning.
 ```
 
 Update only this small section as implementation progresses.

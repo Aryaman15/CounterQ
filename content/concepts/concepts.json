@@ -1,0 +1,12 @@
+[
+  {"canonical_key":"hash_table_lookup","display_name":"Hash Table Lookup","category":"HASHING","description":"Lookup and update behavior in hash tables."},
+  {"canonical_key":"sliding_window_invariant","display_name":"Sliding Window Invariant","category":"TWO_POINTERS","description":"A maintained contiguous window satisfies its stated invariant."},
+  {"canonical_key":"two_pointer_reasoning","display_name":"Two Pointer Reasoning","category":"TWO_POINTERS","description":"Pointer movement is justified by a monotonic condition."},
+  {"canonical_key":"stack_invariant","display_name":"Stack Invariant","category":"STACK","description":"A stack captures unresolved structure in order."},
+  {"canonical_key":"binary_search_boundary","display_name":"Binary Search Boundary","category":"SEARCH","description":"Search bounds preserve the location of a target or insertion point."},
+  {"canonical_key":"heap_selection","display_name":"Heap Selection","category":"HEAP","description":"A heap maintains the relevant extrema efficiently."},
+  {"canonical_key":"dynamic_programming_recurrence","display_name":"Dynamic Programming Recurrence","category":"DYNAMIC_PROGRAMMING","description":"Subproblem state and recurrence capture an optimal solution."},
+  {"canonical_key":"graph_traversal","display_name":"Graph Traversal","category":"GRAPH","description":"Traversal visits reachable graph states without losing required constraints."},
+  {"canonical_key":"interval_merge","display_name":"Interval Merge","category":"INTERVAL","description":"Sorted interval boundaries determine overlap and merge behavior."},
+  {"canonical_key":"string_frequency","display_name":"String Frequency","category":"STRING","description":"Character frequencies support string comparison and window reasoning."}
+]
