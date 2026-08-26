@@ -8,6 +8,7 @@
     {"canonical_key":"hash_table_lookup","display_name":"Hash Table Lookup","category":"HASHING","description":"Lookup and update behavior through a hash table interface.","status":"ACTIVE","parent_concept_key":"hash_map"},
     {"canonical_key":"frequency_counting","display_name":"Frequency Counting","category":"HASHING","description":"Counting occurrences to compare or aggregate values.","status":"ACTIVE"},
     {"canonical_key":"prefix_suffix","display_name":"Prefix and Suffix Aggregation","category":"ARRAYS","description":"Combining information accumulated from both array directions.","status":"ACTIVE","parent_concept_key":"arrays"},
+    {"canonical_key":"partitioning","display_name":"Partitioning","category":"ALGORITHM","description":"Rearranging a sequence around a pivot while preserving a value-side invariant.","status":"ACTIVE","parent_concept_key":"arrays"},
     {"canonical_key":"two_pointers","display_name":"Two Pointers","category":"ALGORITHM","description":"Coordinated pointer movement over an ordered search space.","status":"ACTIVE"},
     {"canonical_key":"two_pointer_reasoning","display_name":"Two Pointer Reasoning","category":"INVARIANT","description":"Justifying pointer movement while preserving the active search space.","status":"ACTIVE","parent_concept_key":"two_pointers"},
     {"canonical_key":"sliding_window","display_name":"Sliding Window","category":"ALGORITHM","description":"Maintaining a contiguous range while boundaries advance.","status":"ACTIVE","parent_concept_key":"two_pointers"},

@@ -31,7 +31,7 @@ from app.problems.service import CuratedProblemError, CuratedProblemService
 
 def test_repository_authored_content_validates() -> None:
     ontology, entries = validate_authored_content()
-    assert len(entries) == 8
+    assert len(entries) == 14
     assert all(entry.problem.review_status == "REVIEWED" for entry in entries)
     assert len(ontology.concepts) >= 25
 
@@ -64,6 +64,38 @@ def test_batch_one_curated_catalog_has_reviewed_pack_depth() -> None:
         assert len(pack.counterexamples) >= 2
 
     assert by_slug["two-sum"].problem.execution.comparator == "UNORDERED_LIST"
+
+
+def test_batch_two_curated_catalog_has_reviewed_pack_depth() -> None:
+    _, entries = validate_authored_content()
+    by_slug = {entry.problem.slug: entry for entry in entries}
+    expected_orders = {
+        "top-k-frequent-elements": 5,
+        "minimum-size-subarray-sum": 7,
+        "container-with-most-water": 9,
+        "daily-temperatures": 11,
+        "search-in-rotated-sorted-array": 13,
+        "kth-largest-element": 14,
+    }
+    actual_orders = {slug: by_slug[slug].problem.catalog_order for slug in expected_orders}
+    assert actual_orders == expected_orders
+    for slug in expected_orders:
+        entry = by_slug[slug]
+        pack = entry.interview_pack
+        primary = pack.expected_approaches[0].approach_id
+        assert entry.problem.review_status == "REVIEWED"
+        assert all(
+            entry.problem.languages[language].starter_code
+            for language in ("cpp", "python", "java")
+        )
+        languages = {
+            item.language for item in pack.reference_solutions if item.approach_id == primary
+        }
+        assert languages == {"cpp", "python", "java"}
+        assert len(pack.common_followups) >= 3
+        assert len(pack.counterexamples) >= 2
+
+    assert by_slug["top-k-frequent-elements"].problem.execution.comparator == "UNORDERED_LIST"
 
 
 def test_canonical_hash_ignores_order_and_line_endings() -> None:
