@@ -1304,6 +1304,9 @@ pnpm run eval:stage3c:catalog
 
 Evaluate the Stage 3C problems 1–10 Interview Pack QA gate:
 pnpm run eval:stage3c:packs-a
+
+Evaluate the Stage 3C problems 11–20 Interview Pack QA gate:
+pnpm run eval:stage3c:packs-b
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
