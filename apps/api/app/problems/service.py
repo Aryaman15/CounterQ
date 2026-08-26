@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, fields
-from typing import cast
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Integer, cast, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -39,6 +39,15 @@ class SeedCounts:
     def add(self, other: SeedCounts) -> None:
         for item in fields(self):
             setattr(self, item.name, getattr(self, item.name) + getattr(other, item.name))
+
+
+@dataclass(frozen=True)
+class ProblemConceptMapping:
+    canonical_key: str
+    display_name: str
+    role: str
+    relevance: str
+    expected_importance: str | None
 
 
 class CuratedProblemService:
@@ -256,86 +265,91 @@ class CuratedProblemService:
         return counts
 
     async def list_candidate_catalog(self) -> list[ProblemVersion]:
+        reviewed_pack_exists = exists(
+            select(InterviewPackVersion.id).where(
+                InterviewPackVersion.problem_version_id == ProblemVersion.id,
+                InterviewPackVersion.review_status == "REVIEWED",
+            )
+        )
+        version_rank = (
+            func.row_number()
+            .over(
+                partition_by=ProblemVersion.problem_id,
+                order_by=cast(func.substr(ProblemVersion.version, 2), Integer).desc(),
+            )
+            .label("version_rank")
+        )
+        selectable_versions = (
+            select(ProblemVersion.id.label("problem_version_id"), version_rank)
+            .join(Problem)
+            .where(
+                Problem.source_type == "CURATED",
+                Problem.status == "ACTIVE",
+                ProblemVersion.io_schema_json["review_status"].as_string() == "REVIEWED",
+                reviewed_pack_exists,
+            )
+            .subquery()
+        )
         rows = await self._session.scalars(
             select(ProblemVersion)
             .options(joinedload(ProblemVersion.problem))
-            .join(Problem)
-            .where(Problem.source_type == "CURATED", Problem.status == "ACTIVE")
-            .order_by(ProblemVersion.io_schema_json["catalog_order"].as_integer())
+            .join(
+                selectable_versions,
+                ProblemVersion.id == selectable_versions.c.problem_version_id,
+            )
+            .where(selectable_versions.c.version_rank == 1)
+            .order_by(
+                ProblemVersion.io_schema_json["catalog_order"].as_integer(),
+                ProblemVersion.problem_id,
+            )
         )
         return list(rows)
 
     async def candidate_problem(self, problem_version_id: UUID) -> ProblemVersion:
-        version = await self._session.scalar(
-            select(ProblemVersion)
-            .options(joinedload(ProblemVersion.problem))
-            .join(Problem)
-            .where(
-                ProblemVersion.id == problem_version_id,
-                Problem.source_type == "CURATED",
-                Problem.status == "ACTIVE",
-            )
-        )
-        if version is None:
-            raise CuratedProblemError("Curated problem version is not available")
-        return version
+        for version in await self.list_candidate_catalog():
+            if version.id == problem_version_id:
+                return version
+        raise CuratedProblemError("Curated problem version is not available")
 
     async def reviewed_pack_for_problem(self, problem_version_id: UUID) -> InterviewPackVersion:
-        pack = await self._session.scalar(
-            select(InterviewPackVersion)
-            .where(
-                InterviewPackVersion.problem_version_id == problem_version_id,
-                InterviewPackVersion.review_status == "REVIEWED",
-            )
-            .order_by(InterviewPackVersion.created_at.desc())
+        packs = list(
+            (
+                await self._session.scalars(
+                    select(InterviewPackVersion).where(
+                        InterviewPackVersion.problem_version_id == problem_version_id,
+                        InterviewPackVersion.review_status == "REVIEWED",
+                    )
+                )
+            ).all()
         )
-        if pack is None:
+        if not packs:
             raise CuratedProblemError("No reviewed Interview Pack is available")
-        return pack
+        return max(packs, key=lambda pack: _authored_version_key(pack.authored_version))
 
-    async def server_pack_for_session(self, session_id: UUID) -> InterviewPackVersion:
-        from app.interviews.models import InterviewSession
-
-        interview = await self._session.get(InterviewSession, session_id)
-        if interview is None:
-            raise CuratedProblemError("Interview session does not exist")
-        pack = await self._session.get(InterviewPackVersion, interview.interview_pack_version_id)
-        if pack is None:
-            raise CuratedProblemError("Interview Pack is unavailable")
-        return pack
-
-    async def pack_subset(
+    async def problem_concepts_for_version(
         self,
-        session_id: UUID,
-        *,
-        concept_key: str | None = None,
-        approach_id: str | None = None,
-        followup_id: str | None = None,
-    ) -> dict[str, object]:
-        pack = await self.server_pack_for_session(session_id)
-        payload = pack.pack_json
-        if concept_key is None and approach_id is None and followup_id is None:
-            return payload
-        expected_approaches = cast(list[dict[str, object]], payload.get("expected_approaches", []))
-        common_followups = cast(list[dict[str, object]], payload.get("common_followups", []))
-        return {
-            "expected_approaches": [
-                item
-                for item in expected_approaches
-                if (approach_id is None or item.get("approach_id") == approach_id)
-                and _contains(item.get("concept_keys"), concept_key)
-            ],
-            "common_followups": [
-                item
-                for item in common_followups
-                if (followup_id is None or item.get("id") == followup_id)
-                and _contains(item.get("target_concepts"), concept_key)
-            ],
-            "invariants": payload.get("invariants", []),
-        }
+        problem_version_id: UUID,
+    ) -> list[ProblemConceptMapping]:
+        rows = await self._session.execute(
+            select(ProblemConcept, Concept)
+            .join(Concept, ProblemConcept.concept_id == Concept.id)
+            .where(ProblemConcept.problem_version_id == problem_version_id)
+            .order_by(Concept.canonical_key)
+        )
+        return [
+            ProblemConceptMapping(
+                canonical_key=concept.canonical_key,
+                display_name=concept.display_name,
+                role=mapping.role,
+                relevance=mapping.relevance,
+                expected_importance=mapping.expected_importance,
+            )
+            for mapping, concept in rows.tuples()
+        ]
 
 
-def _contains(values: object, target: str | None) -> bool:
-    if target is None:
-        return True
-    return target in cast(list[str], values)
+def _authored_version_key(version: str) -> int:
+    matched = re.fullmatch(r"v([1-9][0-9]*)", version)
+    if matched is None:
+        raise CuratedProblemError("Reviewed Interview Pack has an invalid authored version")
+    return int(matched.group(1))

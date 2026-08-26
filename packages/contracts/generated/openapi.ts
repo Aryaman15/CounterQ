@@ -89,6 +89,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/problems/curated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Curated Problems */
+        get: operations["list_curated_problems_api_problems_curated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/problems/curated/{problem_version_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Curated Problem Detail */
+        get: operations["curated_problem_detail_api_problems_curated__problem_version_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/development-interview": {
         parameters: {
             query?: never;
@@ -144,6 +178,49 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** CandidateProblemDetail */
+        CandidateProblemDetail: {
+            /** Argument Schema */
+            argument_schema: {
+                [key: string]: unknown;
+            }[];
+            /** Catalog Order */
+            catalog_order: number;
+            /** Comparator */
+            comparator: string;
+            /** Constraints */
+            constraints: string[];
+            /** Custom Test Supported */
+            custom_test_supported: boolean;
+            /** Display Signature */
+            display_signature: string;
+            /** Examples */
+            examples: {
+                [key: string]: string;
+            }[];
+            /**
+             * Problem Version Id
+             * Format: uuid
+             */
+            problem_version_id: string;
+            /** Return Type */
+            return_type: string;
+            /**
+             * Selected Language
+             * @enum {string}
+             */
+            selected_language: "cpp" | "python" | "java";
+            /** Slug */
+            slug: string;
+            /** Starter Code */
+            starter_code: string;
+            /** Statement */
+            statement: string;
+            /** Supported Languages */
+            supported_languages: ("cpp" | "python" | "java")[];
+            /** Title */
+            title: string;
+        };
         /** CreateRealtimeSessionRequest */
         CreateRealtimeSessionRequest: {
             /**
@@ -178,6 +255,22 @@ export interface components {
             voice: string;
             /** Webrtc Url */
             webrtc_url: string;
+        };
+        /** CuratedCatalogItem */
+        CuratedCatalogItem: {
+            /** Catalog Order */
+            catalog_order: number;
+            /**
+             * Problem Version Id
+             * Format: uuid
+             */
+            problem_version_id: string;
+            /** Slug */
+            slug: string;
+            /** Supported Languages */
+            supported_languages: ("cpp" | "python" | "java")[];
+            /** Title */
+            title: string;
         };
         /** DevelopmentAnalyzeAndAuthorizeResponse */
         DevelopmentAnalyzeAndAuthorizeResponse: {
@@ -815,6 +908,59 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    list_curated_problems_api_problems_curated_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CuratedCatalogItem"][];
+                };
+            };
+        };
+    };
+    curated_problem_detail_api_problems_curated__problem_version_id__get: {
+        parameters: {
+            query: {
+                language: "cpp" | "python" | "java";
+            };
+            header?: never;
+            path: {
+                problem_version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

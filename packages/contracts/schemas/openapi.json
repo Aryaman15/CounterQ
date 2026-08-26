@@ -1,6 +1,116 @@
 {
   "components": {
     "schemas": {
+      "CandidateProblemDetail": {
+        "properties": {
+          "argument_schema": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Argument Schema",
+            "type": "array"
+          },
+          "catalog_order": {
+            "title": "Catalog Order",
+            "type": "integer"
+          },
+          "comparator": {
+            "title": "Comparator",
+            "type": "string"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "custom_test_supported": {
+            "title": "Custom Test Supported",
+            "type": "boolean"
+          },
+          "display_signature": {
+            "title": "Display Signature",
+            "type": "string"
+          },
+          "examples": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "problem_version_id": {
+            "format": "uuid",
+            "title": "Problem Version Id",
+            "type": "string"
+          },
+          "return_type": {
+            "title": "Return Type",
+            "type": "string"
+          },
+          "selected_language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Selected Language",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "starter_code": {
+            "title": "Starter Code",
+            "type": "string"
+          },
+          "statement": {
+            "title": "Statement",
+            "type": "string"
+          },
+          "supported_languages": {
+            "items": {
+              "enum": [
+                "cpp",
+                "python",
+                "java"
+              ],
+              "type": "string"
+            },
+            "title": "Supported Languages",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_version_id",
+          "slug",
+          "title",
+          "supported_languages",
+          "catalog_order",
+          "statement",
+          "constraints",
+          "examples",
+          "selected_language",
+          "display_signature",
+          "starter_code",
+          "argument_schema",
+          "return_type",
+          "comparator",
+          "custom_test_supported"
+        ],
+        "title": "CandidateProblemDetail",
+        "type": "object"
+      },
       "CreateRealtimeSessionRequest": {
         "properties": {
           "purpose": {
@@ -73,6 +183,48 @@
           "turn_detection"
         ],
         "title": "CreateRealtimeSessionResponse",
+        "type": "object"
+      },
+      "CuratedCatalogItem": {
+        "properties": {
+          "catalog_order": {
+            "title": "Catalog Order",
+            "type": "integer"
+          },
+          "problem_version_id": {
+            "format": "uuid",
+            "title": "Problem Version Id",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "supported_languages": {
+            "items": {
+              "enum": [
+                "cpp",
+                "python",
+                "java"
+              ],
+              "type": "string"
+            },
+            "title": "Supported Languages",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_version_id",
+          "slug",
+          "title",
+          "supported_languages",
+          "catalog_order"
+        ],
+        "title": "CuratedCatalogItem",
         "type": "object"
       },
       "DevelopmentAnalyzeAndAuthorizeResponse": {
@@ -1727,6 +1879,88 @@
         "summary": "Execution Health",
         "tags": [
           "execution"
+        ]
+      }
+    },
+    "/api/problems/curated": {
+      "get": {
+        "operationId": "list_curated_problems_api_problems_curated_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CuratedCatalogItem"
+                  },
+                  "title": "Response List Curated Problems Api Problems Curated Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Curated Problems",
+        "tags": [
+          "curated-problems"
+        ]
+      }
+    },
+    "/api/problems/curated/{problem_version_id}": {
+      "get": {
+        "operationId": "curated_problem_detail_api_problems_curated__problem_version_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "problem_version_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Problem Version Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "language",
+            "required": true,
+            "schema": {
+              "enum": [
+                "cpp",
+                "python",
+                "java"
+              ],
+              "title": "Language",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateProblemDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Curated Problem Detail",
+        "tags": [
+          "curated-problems"
         ]
       }
     },
