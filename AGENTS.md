@@ -1301,6 +1301,9 @@ pnpm run seed:problems
 
 Evaluate the Stage 3C candidate catalog gate:
 pnpm run eval:stage3c:catalog
+
+Evaluate the Stage 3C problems 1–10 Interview Pack QA gate:
+pnpm run eval:stage3c:packs-a
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.

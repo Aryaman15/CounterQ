@@ -68,6 +68,10 @@ def entry_by_slug(entries: list[CuratedContent], slug: str) -> CuratedContent:
     return next(entry for entry in entries if entry.problem.slug == slug)
 
 
+def next_authored_version(version: str) -> str:
+    return f"v{int(version.removeprefix('v')) + 1}"
+
+
 async def api_client(db_session: AsyncSession) -> AsyncClient:
     app = create_app()
 
@@ -145,12 +149,12 @@ async def test_reviewed_pack_resolution_uses_authored_version_not_created_timest
     first = entry_by_slug(entries, "longest-substring-without-repeating-characters")
     version = await seeded_version(db_session, first.problem.slug)
     next_pack = first.model_copy(deep=True)
-    next_pack.interview_pack.version = "v2"
+    next_pack.interview_pack.version = next_authored_version(first.interview_pack.version)
     next_pack.interview_pack.reference_reasoning += " A newer authored pack."
     await service.seed_problem(next_pack)
 
     pack = await service.reviewed_pack_for_problem(version.id)
-    assert pack.authored_version == "v2"
+    assert pack.authored_version == next_pack.interview_pack.version
 
 
 @pytest.mark.asyncio
@@ -208,7 +212,7 @@ async def test_typed_pack_retrieval_preserves_exact_session_pack_and_supports_su
     original_pack = await curated.reviewed_pack_for_problem(version.id)
 
     newer = first.model_copy(deep=True)
-    newer.interview_pack.version = "v2"
+    newer.interview_pack.version = next_authored_version(first.interview_pack.version)
     newer.interview_pack.reference_reasoning += " Newer pack."
     await curated.seed_problem(newer)
 
@@ -251,8 +255,8 @@ async def test_typed_pack_retrieval_preserves_exact_session_pack_and_supports_su
     packs = InterviewPackService(db_session)
     current = await packs.for_problem_version(version.id)
     historical = await packs.for_session(interview.id)
-    assert current.version == "v2"
-    assert historical.version == "v1"
+    assert current.version == newer.interview_pack.version
+    assert historical.version == first.interview_pack.version
 
     invariant_concept = "sliding_window_invariant"
     complexity_concept = "hash_table_lookup"
