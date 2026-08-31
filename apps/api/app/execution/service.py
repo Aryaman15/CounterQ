@@ -12,6 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.execution.harness import execution_request_for_problem
 from app.execution.models import ExecutionRun
+from app.execution.policy import (
+    DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_OUTPUT_LIMIT_BYTES,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+)
 from app.execution.provider import ExecutionOutcome, ExecutionRequest, ExecutorProvider
 from app.execution.repository import ExecutionRepository
 from app.interviews.models import InterviewSession
@@ -38,10 +44,10 @@ class ExecutionService:
         provider: ExecutorProvider,
         *,
         clock: Callable[[], datetime] | None = None,
-        compile_timeout_seconds: int = 8,
-        run_timeout_seconds: int = 2,
-        memory_limit_mb: int = 192,
-        output_limit_bytes: int = 65536,
+        compile_timeout_seconds: int = DEFAULT_COMPILE_TIMEOUT_SECONDS,
+        run_timeout_seconds: int = DEFAULT_RUN_TIMEOUT_SECONDS,
+        memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
+        output_limit_bytes: int = DEFAULT_OUTPUT_LIMIT_BYTES,
     ) -> None:
         self._session = session
         self._provider = provider

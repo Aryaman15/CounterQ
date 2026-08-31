@@ -7,6 +7,13 @@ import os
 import pytest
 
 from app.execution.harness import execution_request_for_problem
+from app.execution.policy import (
+    DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_OUTPUT_LIMIT_BYTES,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+)
+from app.execution.provider import ExecutionRequest
 from app.execution.sandbox_provider import LocalSandboxExecutorProvider
 from app.problems.content import CuratedContent, ReferenceSolution, load_curated_content
 
@@ -16,6 +23,20 @@ pytestmark = pytest.mark.skipif(
 )
 
 SANDBOX_URL = "http://127.0.0.1:8010"
+
+
+def _candidate_execution_request(
+    *, io_schema: dict[str, object], language: str, source_code: str
+) -> ExecutionRequest:
+    return execution_request_for_problem(
+        io_schema=io_schema,
+        language=language,
+        source_code=source_code,
+        compile_timeout_seconds=DEFAULT_COMPILE_TIMEOUT_SECONDS,
+        run_timeout_seconds=DEFAULT_RUN_TIMEOUT_SECONDS,
+        memory_limit_mb=DEFAULT_MEMORY_LIMIT_MB,
+        output_limit_bytes=DEFAULT_OUTPUT_LIMIT_BYTES,
+    )
 
 
 def _primary_reference(entry: CuratedContent, language: str) -> ReferenceSolution:
@@ -48,14 +69,10 @@ async def test_primary_reference_solution_passes_every_visible_case(
     language: str,
     reference: ReferenceSolution,
 ) -> None:
-    request = execution_request_for_problem(
+    request = _candidate_execution_request(
         io_schema={"execution": entry.problem.execution.model_dump(mode="json")},
         language=language,
         source_code=reference.source_code,
-        compile_timeout_seconds=8,
-        run_timeout_seconds=3,
-        memory_limit_mb=384,
-        output_limit_bytes=65536,
     )
     outcome = await LocalSandboxExecutorProvider(SANDBOX_URL).execute(request)
     context = (
@@ -81,12 +98,21 @@ async def test_primary_reference_solution_passes_every_visible_case(
     assert not failures, f"{context} case_failures={failures}"
 
 
+PLACEHOLDER_AND_ESCAPING_STRINGS = [
+    "__METHOD__",
+    "__RETURN_TYPE__",
+    "__CASES_JSON__",
+    'quoted "value"',
+    "slash\\value",
+    "a\nb",
+]
+
 SEMANTIC_VALUES: list[tuple[str, object]] = [
     ("int", -7),
     ("bool", True),
     ("string", "escaped \"value\" with \\ and newline\n"),
     ("int[]", []),
-    ("string[]", ["", "escaped \"value\"", "slash\\value"]),
+    ("string[]", ["", *PLACEHOLDER_AND_ESCAPING_STRINGS]),
     ("int[][]", [[1, -2], [], [3, 4]]),
     ("string[][]", [["", "quoted \"value\""], [], ["tail"]]),
 ]
@@ -134,7 +160,7 @@ async def test_bounded_semantic_type_round_trips_through_real_sandbox(
     semantic_type: str,
     value: object,
 ) -> None:
-    request = execution_request_for_problem(
+    request = _candidate_execution_request(
         io_schema={
             "execution": {
                 "method_name": "echoValue",
@@ -148,10 +174,6 @@ async def test_bounded_semantic_type_round_trips_through_real_sandbox(
         },
         language=language,
         source_code=_echo_source(language, semantic_type),
-        compile_timeout_seconds=8,
-        run_timeout_seconds=3,
-        memory_limit_mb=384,
-        output_limit_bytes=65536,
     )
     outcome = await LocalSandboxExecutorProvider(SANDBOX_URL).execute(request)
     context = f"semantic_type={semantic_type} language={language} status={outcome.status}"
@@ -160,3 +182,48 @@ async def test_bounded_semantic_type_round_trips_through_real_sandbox(
     assert outcome.cases[0].status == "PASSED", (
         f"{context} failure={outcome.cases[0].failure_classification}"
     )
+
+
+def _stateful_source(language: str) -> str:
+    if language == "cpp":
+        return (
+            "class Solution { int calls = 0; public: int observe(int value) "
+            "{ (void)value; return ++calls; } };"
+        )
+    if language == "python":
+        return (
+            "class Solution:\n"
+            "    def __init__(self):\n"
+            "        self.calls = 0\n"
+            "    def observe(self, value):\n"
+            "        self.calls += 1\n"
+            "        return self.calls"
+        )
+    return (
+        "class Solution { private int calls = 0; "
+        "public int observe(int value) { return ++calls; } }"
+    )
+
+
+@pytest.mark.parametrize("language", ("cpp", "python", "java"))
+async def test_each_visible_case_receives_a_fresh_solution_instance(language: str) -> None:
+    request = _candidate_execution_request(
+        io_schema={
+            "execution": {
+                "method_name": "observe",
+                "arguments": [{"name": "value", "type": "int"}],
+                "return_type": "int",
+                "comparator": "EXACT",
+                "visible_cases": [
+                    {"arguments": {"value": 10}, "expected_output": 1},
+                    {"arguments": {"value": 20}, "expected_output": 1},
+                ],
+            }
+        },
+        language=language,
+        source_code=_stateful_source(language),
+    )
+    outcome = await LocalSandboxExecutorProvider(SANDBOX_URL).execute(request)
+    context = f"fresh_solution language={language} status={outcome.status}"
+    assert outcome.status == "SUCCEEDED", context
+    assert [case.status for case in outcome.cases] == ["PASSED", "PASSED"], context

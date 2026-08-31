@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+from inspect import signature
 
 import pytest
 
 from app.execution.codecs import ExecutionCodecError, compare_output, encode_value
 from app.execution.harness import UnsupportedExecutionSchema, harness_for_problem
+from app.execution.policy import (
+    DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_OUTPUT_LIMIT_BYTES,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+)
+from app.execution.service import ExecutionService
 
 
 @pytest.mark.parametrize(
@@ -138,3 +146,38 @@ def test_harness_is_driven_by_method_and_argument_schema_not_problem_identity() 
         harness, cases = harness_for_problem(schema, language)
         assert "configuredMethod" in harness
         assert cases[0].comparator == "UNORDERED_LIST"
+
+
+def test_python_testcase_json_is_inserted_after_trusted_placeholder_metadata() -> None:
+    values = [
+        "__METHOD__",
+        "__RETURN_TYPE__",
+        "__CASES_JSON__",
+        'quoted "value"',
+        "slash\\value",
+        "a\nb",
+    ]
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": "string[]"}],
+            "return_type": "string[]",
+            "comparator": "EXACT",
+            "visible_cases": [
+                {"arguments": {"value": values}, "expected_output": values}
+            ],
+        }
+    }
+    harness, _ = harness_for_problem(schema, "python")
+    encoded_cases = json.dumps([[values]], ensure_ascii=False, separators=(",", ":"))
+
+    assert repr(encoded_cases) in harness
+    assert all(value in harness for value in values[:3])
+
+
+def test_execution_service_defaults_use_the_canonical_candidate_policy() -> None:
+    parameters = signature(ExecutionService.__init__).parameters
+    assert parameters["compile_timeout_seconds"].default == DEFAULT_COMPILE_TIMEOUT_SECONDS
+    assert parameters["run_timeout_seconds"].default == DEFAULT_RUN_TIMEOUT_SECONDS
+    assert parameters["memory_limit_mb"].default == DEFAULT_MEMORY_LIMIT_MB
+    assert parameters["output_limit_bytes"].default == DEFAULT_OUTPUT_LIMIT_BYTES

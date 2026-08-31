@@ -90,8 +90,11 @@ def _cpp_harness(execution: ExecutionDefinition) -> str:
             for argument in execution.arguments
         )
         invocations.append(
-            f'    cout << "COUNTERQ_CASE\\t{index}\\t" << '
-            f'counterq_json(solution.{execution.method_name}({arguments})) << "\\n";'
+            "    {\n"
+            "        Solution solution;\n"
+            f'        cout << "COUNTERQ_CASE\\t{index}\\t" << '
+            f'counterq_json(solution.{execution.method_name}({arguments})) << "\\n";\n'
+            "    }"
         )
     return r"""
 static string counterq_json_escape(const string& value) {
@@ -134,7 +137,6 @@ static string counterq_json(const vector<T>& values) {
 }
 
 int main() {
-    Solution solution;
 __INVOCATIONS__
 }
 """.replace("__INVOCATIONS__", "\n".join(invocations))
@@ -146,8 +148,7 @@ def _python_harness(execution: ExecutionDefinition) -> str:
         for case in execution.visible_cases
     ]
     encoded_cases = json.dumps(cases, ensure_ascii=False, separators=(",", ":"))
-    return (
-        """
+    template = """
 import json as _counterq_json_module
 
 def _counterq_valid(value, semantic_type):
@@ -162,9 +163,9 @@ def _counterq_valid(value, semantic_type):
         return isinstance(value, list) and all(_counterq_valid(item, inner) for item in value)
     return False
 
-_counterq_solution = Solution()
 _counterq_cases = _counterq_json_module.loads(__CASES_JSON__)
 for _counterq_index, _counterq_arguments in enumerate(_counterq_cases, start=1):
+    _counterq_solution = Solution()
     _counterq_actual = _counterq_solution.__METHOD__(*_counterq_arguments)
     if not _counterq_valid(_counterq_actual, __RETURN_TYPE__):
         raise TypeError("candidate result does not match the configured return type")
@@ -173,10 +174,10 @@ for _counterq_index, _counterq_arguments in enumerate(_counterq_cases, start=1):
     )
     print(f"COUNTERQ_CASE\\t{_counterq_index}\\t{_counterq_encoded}")
 """
-        .replace("__CASES_JSON__", repr(encoded_cases))
-        .replace("__METHOD__", execution.method_name)
-        .replace("__RETURN_TYPE__", json.dumps(execution.return_type))
+    trusted_metadata = template.replace("__METHOD__", execution.method_name).replace(
+        "__RETURN_TYPE__", json.dumps(execution.return_type)
     )
+    return trusted_metadata.replace("__CASES_JSON__", repr(encoded_cases))
 
 
 def _java_harness(execution: ExecutionDefinition) -> str:
@@ -187,8 +188,11 @@ def _java_harness(execution: ExecutionDefinition) -> str:
             for argument in execution.arguments
         )
         invocations.append(
-            f'        System.out.println("COUNTERQ_CASE\\t{index}\\t" + '
-            f'counterqJson(solution.{execution.method_name}({arguments})));'
+            "        {\n"
+            "            Solution solution = new Solution();\n"
+            f'            System.out.println("COUNTERQ_CASE\\t{index}\\t" + '
+            f'counterqJson(solution.{execution.method_name}({arguments})));\n'
+            "        }"
         )
     return r"""
 public class Main {
@@ -248,7 +252,6 @@ public class Main {
     }
 
     public static void main(String[] args) {
-        Solution solution = new Solution();
 __INVOCATIONS__
     }
 }

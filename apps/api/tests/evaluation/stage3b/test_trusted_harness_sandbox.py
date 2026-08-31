@@ -10,6 +10,12 @@ import httpx
 import pytest
 
 from app.execution.harness import harness_for_problem
+from app.execution.policy import (
+    DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_OUTPUT_LIMIT_BYTES,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+)
 
 pytestmark = pytest.mark.skipif(
     os.getenv("COUNTERQ_SANDBOX_EVALUATION") != "1",
@@ -38,9 +44,9 @@ def _execute(
     harness: str = "",
     *,
     cases: list[dict[str, object]] | None = None,
-    timeout: int = 1,
-    memory: int = 192,
-    output: int = 4096,
+    timeout: int = DEFAULT_RUN_TIMEOUT_SECONDS,
+    memory: int = DEFAULT_MEMORY_LIMIT_MB,
+    output: int = DEFAULT_OUTPUT_LIMIT_BYTES,
 ) -> dict[str, object]:
     response = httpx.post(
         f"{SANDBOX_URL}/execute",
@@ -49,7 +55,7 @@ def _execute(
             "source_code": source,
             "harness": harness,
             "cases": cases or [],
-            "compile_timeout_seconds": 8,
+            "compile_timeout_seconds": DEFAULT_COMPILE_TIMEOUT_SECONDS,
             "run_timeout_seconds": timeout,
             "memory_limit_mb": memory,
             "output_limit_bytes": output,
@@ -83,9 +89,6 @@ def test_real_trusted_harness_runs_all_visible_cases(language: str, source: str)
             }
             for case in cases
         ],
-        timeout=3,
-        memory=384,
-        output=65536,
     )
     assert result["status"] == "SUCCEEDED"
     assert [case["status"] for case in result["cases"]] == ["PASSED", "PASSED", "PASSED"]

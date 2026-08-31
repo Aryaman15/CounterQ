@@ -1,0 +1,6 @@
+"""Canonical deterministic limits for normal candidate code execution."""
+
+DEFAULT_COMPILE_TIMEOUT_SECONDS = 8
+DEFAULT_RUN_TIMEOUT_SECONDS = 2
+DEFAULT_MEMORY_LIMIT_MB = 192
+DEFAULT_OUTPUT_LIMIT_BYTES = 65_536

@@ -4,6 +4,13 @@ from pathlib import Path
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.execution.policy import (
+    DEFAULT_COMPILE_TIMEOUT_SECONDS,
+    DEFAULT_MEMORY_LIMIT_MB,
+    DEFAULT_OUTPUT_LIMIT_BYTES,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
+)
+
 
 def find_repository_root(start: Path | None = None) -> Path:
     current = (start or Path(__file__)).resolve()
@@ -114,10 +121,16 @@ class Settings(BaseSettings):
         default="http://127.0.0.1:8010",
         validation_alias="COUNTERQ_EXECUTION_SANDBOX_URL",
     )
-    execution_compile_timeout_seconds: int = Field(default=8, ge=1, le=20)
-    execution_run_timeout_seconds: int = Field(default=2, ge=1, le=10)
-    execution_memory_limit_mb: int = Field(default=192, ge=64, le=512)
-    execution_output_limit_bytes: int = Field(default=65536, ge=1024, le=131072)
+    execution_compile_timeout_seconds: int = Field(
+        default=DEFAULT_COMPILE_TIMEOUT_SECONDS, ge=1, le=20
+    )
+    execution_run_timeout_seconds: int = Field(
+        default=DEFAULT_RUN_TIMEOUT_SECONDS, ge=1, le=10
+    )
+    execution_memory_limit_mb: int = Field(default=DEFAULT_MEMORY_LIMIT_MB, ge=64, le=512)
+    execution_output_limit_bytes: int = Field(
+        default=DEFAULT_OUTPUT_LIMIT_BYTES, ge=1024, le=131072
+    )
 
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:
