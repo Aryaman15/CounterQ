@@ -1308,6 +1308,9 @@ pnpm run eval:stage3c:packs-a
 Evaluate the Stage 3C problems 11–20 Interview Pack QA gate:
 pnpm run eval:stage3c:packs-b
 
+Evaluate the Stage 3C curated-session binding gate:
+pnpm run eval:stage3c:session
+
 Evaluate the Stage 3C full-catalog sandbox gate:
 pnpm run eval:stage3c:sandbox
 

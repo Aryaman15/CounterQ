@@ -164,14 +164,16 @@ describe("Interview Room demo", () => {
     ).toBe("PERSISTENCE_UNCONFIRMED");
   });
 
-  it("renders the Interview Room route and Monaco surface", async () => {
+  it("shows focused setup on the Interview Room route when no session is stored", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => [] }));
     render(<InterviewDemoPage />);
 
-    expect(screen.getByTestId("monaco-editor-surface")).toBeInTheDocument();
-    expect(await screen.findByLabelText("C++ code editor")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Choose the problem you want to defend." })).toBeInTheDocument();
+    expect(await screen.findByText("No reviewed curated problems are available.")).toBeInTheDocument();
+    expect(screen.queryByTestId("monaco-editor-surface")).not.toBeInTheDocument();
   });
 
-  it("selects a development language before creating an interview session", () => {
+  it("selects a development language before creating an interview session", async () => {
     render(<InterviewRoom fixture={demoInterviewFixture} />);
 
     const selector = screen.getByRole("combobox", { name: "Development execution language" });
@@ -180,7 +182,7 @@ describe("Interview Room demo", () => {
     expect(selector).toHaveValue("python");
     expect(screen.getByRole("heading", { name: "solution.py" })).toBeInTheDocument();
     expect(screen.getAllByText("Python 3").length).toBeGreaterThan(0);
-    expect(screen.getByLabelText("C++ code editor")).toHaveValue(
+    expect(await screen.findByTestId("mock-monaco-editor")).toHaveValue(
       "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        pass",
     );
   });

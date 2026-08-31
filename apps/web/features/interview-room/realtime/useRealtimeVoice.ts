@@ -39,6 +39,10 @@ export type RealtimeVoiceControls = {
   endInterview: () => void;
   completeForDeadline: () => void;
   ensureControlSession: () => Promise<DevelopmentBootstrapResponse>;
+  startInterview: (
+    problemVersionId: string,
+    language: "cpp" | "python" | "java",
+  ) => Promise<DevelopmentBootstrapResponse>;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
   unmute: () => void;
@@ -247,6 +251,22 @@ export function useRealtimeVoice(
     return bootstrap;
   }, [completionPending, ensureControlClient, terminalSession]);
 
+  const startInterview = useCallback(async (
+    problemVersionId: string,
+    language: "cpp" | "python" | "java",
+  ) => {
+    setErrorMessage(null);
+    setIsRestoring(true);
+    try {
+      return await ensureControlClient().startDevelopmentInterview(problemVersionId, language);
+    } catch (error) {
+      setIsRestoring(false);
+      const message = error instanceof Error ? error.message : "CounterQ could not start the interview.";
+      setErrorMessage(message);
+      throw error;
+    }
+  }, [ensureControlClient]);
+
   const endInterview = useCallback(() => {
     if (terminalSession || completionPending) {
       return;
@@ -346,12 +366,16 @@ export function useRealtimeVoice(
       return;
     }
     setIsRestoring(true);
-    void controlClient.restoreExistingDevelopmentInterview().catch((error) => {
-      setIsRestoring(false);
-      setErrorMessage(
-        error instanceof Error ? error.message : "CounterQ could not restore this interview.",
-      );
-    });
+    void controlClient.restoreExistingDevelopmentInterview()
+      .then((bootstrap) => {
+        if (!bootstrap) setIsRestoring(false);
+      })
+      .catch((error) => {
+        setIsRestoring(false);
+        setErrorMessage(
+          error instanceof Error ? error.message : "CounterQ could not restore this interview.",
+        );
+      });
   }, [ensureControlClient]);
 
   useEffect(() => disconnect, [disconnect]);
@@ -375,6 +399,7 @@ export function useRealtimeVoice(
     endInterview,
     completeForDeadline,
     ensureControlSession,
+    startInterview,
     enableMicrophone,
     mute,
     unmute,

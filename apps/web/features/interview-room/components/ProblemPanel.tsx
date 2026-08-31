@@ -1,7 +1,13 @@
-import type { DemoProblem } from "../models/candidate-visible";
+export type CandidateProblemView = {
+  title: string;
+  statement: string[];
+  examples: Array<{ input: string; output: string; explanation: string }>;
+  constraints: string[];
+  functionSignature: string;
+};
 
 type ProblemPanelProps = {
-  problem: DemoProblem;
+  problem: CandidateProblemView;
 };
 
 export function ProblemPanel({ problem }: ProblemPanelProps) {

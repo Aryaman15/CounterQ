@@ -1375,14 +1375,20 @@
             "title": "Interview Session Id"
           },
           "language": {
-            "default": "cpp",
-            "enum": [
-              "cpp",
-              "python",
-              "java"
+            "anyOf": [
+              {
+                "enum": [
+                  "cpp",
+                  "python",
+                  "java"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Language",
-            "type": "string"
+            "title": "Language"
           },
           "last_acknowledged_server_sequence": {
             "anyOf": [
@@ -1396,9 +1402,24 @@
             ],
             "title": "Last Acknowledged Server Sequence"
           },
+          "problem_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Version Id"
+          },
           "purpose": {
-            "const": "interview_demo",
             "default": "interview_demo",
+            "enum": [
+              "interview_demo",
+              "stage1_fixture"
+            ],
             "title": "Purpose",
             "type": "string"
           }
@@ -1468,6 +1489,9 @@
                 "type": "null"
               }
             ]
+          },
+          "problem": {
+            "$ref": "#/components/schemas/CandidateProblemDetail"
           },
           "protocol_version": {
             "const": "counterq.realtime.control.v1",
@@ -1550,6 +1574,7 @@
         "required": [
           "interview_session_id",
           "language",
+          "problem",
           "template",
           "configured_duration_seconds",
           "current_stage",

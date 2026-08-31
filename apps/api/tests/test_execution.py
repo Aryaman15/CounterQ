@@ -231,7 +231,15 @@ async def test_run_rebuild_uses_its_exact_problem_version_not_session_current_ve
             ],
         }
     }
+    newer_pack = await ProblemRepository(db_session).add_interview_pack_version(
+        problem_version=newer,
+        schema_version="interview-pack.v1",
+        pack_json={"fixture": "exact-problem-version-v2"},
+        review_status="REVIEWED",
+        authored_version="v2",
+    )
     development.interview_session.problem_version_id = newer.id
+    development.interview_session.interview_pack_version_id = newer_pack.id
     await db_session.flush()
 
     rebuilt = await service._request_for_run(run)
@@ -393,7 +401,15 @@ async def test_custom_retry_rebuilds_exact_problem_version_and_arguments(
             "custom_test_supported": False,
         }
     }
+    newer_pack = await ProblemRepository(db_session).add_interview_pack_version(
+        problem_version=newer,
+        schema_version="interview-pack.v1",
+        pack_json={"fixture": "custom-exact-v2"},
+        review_status="REVIEWED",
+        authored_version="v2",
+    )
     development.interview_session.problem_version_id = newer.id
+    development.interview_session.interview_pack_version_id = newer_pack.id
     await db_session.flush()
 
     rebuilt = await service._request_for_run(run)

@@ -123,7 +123,7 @@ async def test_development_bootstrap_endpoint_is_blocked_outside_development(
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         result = await client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest().model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
         )
 
     assert result.status_code == 403
@@ -149,7 +149,7 @@ async def test_development_bootstrap_endpoint_returns_persisted_interview(
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         result = await client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest().model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
         )
 
     assert result.status_code == 200
@@ -170,7 +170,7 @@ def test_control_websocket_accepts_client_hello_after_server_ready(tmp_path: Pat
     with TestClient(app) as client:
         bootstrap = client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest().model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
         )
         assert bootstrap.status_code == 200
         control_path = bootstrap.json()["control_websocket_path"]

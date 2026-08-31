@@ -244,7 +244,10 @@ export class RealtimeControlClient {
     if (!this.hasStoredDevelopmentSession()) {
       return null;
     }
-    await this.bootstrapDevelopmentInterview({ allowCreate: false });
+    const restored = await this.bootstrapDevelopmentInterview({ allowCreate: false });
+    if (!restored) {
+      return null;
+    }
     this.manualDisconnect = false;
     await this.openWebSocket();
     return this.bootstrap;
@@ -252,7 +255,10 @@ export class RealtimeControlClient {
 
   async connectDevelopmentInterview(): Promise<DevelopmentBootstrapResponse> {
     if (!this.bootstrap) {
-      await this.bootstrapDevelopmentInterview({ allowCreate: true });
+      const restored = await this.bootstrapDevelopmentInterview({ allowCreate: false });
+      if (!restored) {
+        throw new Error("Select a curated problem and language before starting.");
+      }
     }
 
     this.manualDisconnect = false;
@@ -260,7 +266,36 @@ export class RealtimeControlClient {
     return this.bootstrap!;
   }
 
-  private async bootstrapDevelopmentInterview({ allowCreate }: { allowCreate: boolean }): Promise<void> {
+  async startDevelopmentInterview(
+    problemVersionId: string,
+    language: "cpp" | "python" | "java",
+  ): Promise<DevelopmentBootstrapResponse> {
+    if (this.bootstrap || this.hasStoredDevelopmentSession()) {
+      throw new Error("An existing development interview must be restored first.");
+    }
+    this.developmentLanguage = language;
+    const created = await this.bootstrapDevelopmentInterview({
+      allowCreate: true,
+      problemVersionId,
+      language,
+    });
+    if (!created || !this.bootstrap) {
+      throw new Error("CounterQ could not create the curated interview session.");
+    }
+    this.manualDisconnect = false;
+    await this.openWebSocket();
+    return this.bootstrap;
+  }
+
+  private async bootstrapDevelopmentInterview({
+    allowCreate,
+    problemVersionId,
+    language,
+  }: {
+    allowCreate: boolean;
+    problemVersionId?: string;
+    language?: "cpp" | "python" | "java";
+  }): Promise<boolean> {
     const storedSessionId = this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY) ?? null;
     const request = async (interviewSessionId: string | null) => {
       const response = await this.fetchFn(`${this.apiBaseUrl}/api/realtime/development-interview`, {
@@ -271,20 +306,27 @@ export class RealtimeControlClient {
           interview_session_id: interviewSessionId,
           client_instance_id: this.clientInstanceId(),
           last_acknowledged_server_sequence: this.debug.lastServerSequence,
-          language: this.developmentLanguage,
+          ...(interviewSessionId
+            ? {}
+            : { problem_version_id: problemVersionId, language }),
         }),
       });
       return response;
     };
     let response = await request(storedSessionId);
-    if (response.status === 404 && storedSessionId && allowCreate) {
+    if (response.status === 404 && storedSessionId) {
       this.storage?.removeItem?.(DEVELOPMENT_SESSION_STORAGE_KEY);
+      if (!allowCreate) {
+        this.bootstrap = null;
+        return false;
+      }
       response = await request(null);
     }
     if (!response.ok) {
         throw new Error("CounterQ could not create a development interview session.");
     }
     this.bootstrap = (await response.json()) as DevelopmentBootstrapResponse;
+    this.developmentLanguage = this.bootstrap.language;
     this.storage?.setItem(DEVELOPMENT_SESSION_STORAGE_KEY, this.bootstrap.interview_session_id);
     this.loadClientState(this.bootstrap);
     this.patchDebug({
@@ -292,6 +334,7 @@ export class RealtimeControlClient {
       stateVersion: this.bootstrap.state_version,
       lastServerSequence: this.bootstrap.last_server_sequence,
     });
+    return true;
   }
 
   disconnect(): void {
@@ -1202,7 +1245,12 @@ export class RealtimeControlClient {
       // Re-read the candidate-safe canonical projection before reopening control.
       // This reconciles missed server ordering without replaying hidden events.
       void this.bootstrapDevelopmentInterview({ allowCreate: false })
-        .then(() => this.openWebSocket())
+        .then((restored) => {
+          if (!restored) {
+            throw new Error("Stored development interview is no longer resumable.");
+          }
+          return this.openWebSocket();
+        })
         .then(() => {
           this.reconnectAttempts = 0;
         })

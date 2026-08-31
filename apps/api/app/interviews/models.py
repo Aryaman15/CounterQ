@@ -92,6 +92,11 @@ class InterviewSession(Base):
         CheckConstraint("deadline_at > started_at", name="deadline_after_started"),
         UniqueConstraint("interview_configuration_id", name="uq_interview_sessions_configuration"),
         UniqueConstraint("id", "user_id", name="uq_interview_sessions_id_user"),
+        ForeignKeyConstraint(
+            ["interview_pack_version_id", "problem_version_id"],
+            ["interview_pack_versions.id", "interview_pack_versions.problem_version_id"],
+            name="fk_interview_sessions_pack_problem_version",
+        ),
         Index("ix_interview_sessions_user_status", "user_id", "status"),
         Index("ix_interview_sessions_user_completed_at", "user_id", text("completed_at DESC")),
     )
@@ -135,6 +140,7 @@ class InterviewSession(Base):
     problem_version: Mapped[ProblemVersion] = relationship(back_populates="interview_sessions")
     interview_pack_version: Mapped[InterviewPackVersion] = relationship(
         back_populates="interview_sessions",
+        foreign_keys=[interview_pack_version_id],
     )
     budget: Mapped[SessionBudget | None] = relationship(
         back_populates="interview_session",

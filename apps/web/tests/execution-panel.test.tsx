@@ -12,6 +12,7 @@ describe("ExecutionPanel", () => {
         onRun={vi.fn()}
         onToggle={vi.fn()}
         result={{
+          runKind: "VISIBLE",
           status: "SUCCEEDED",
           stdout: "",
           stderr: "",
@@ -24,6 +25,8 @@ describe("ExecutionPanel", () => {
               inputJson: { s: "abcabcbb" },
               expectedOutput: "3",
               actualOutput: "3",
+              actualOutputValue: 3,
+              comparisonKind: "EXPECTED",
               status: "PASSED",
             },
           ],
@@ -64,6 +67,7 @@ describe("ExecutionPanel", () => {
         onRun={vi.fn()}
         onToggle={vi.fn()}
         result={{
+          runKind: "VISIBLE",
           status: "COMPILE_ERROR",
           stdout: "",
           stderr: "",

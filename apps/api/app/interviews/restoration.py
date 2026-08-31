@@ -17,6 +17,8 @@ from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, 
 from app.interviews.runtime import InterviewRuntime
 from app.interviews.template_policy import template_for_duration
 from app.observation.models import CodeSnapshot, InterviewEvent, TranscriptSegment
+from app.problems.contracts import CandidateProblemDetail, candidate_problem_detail
+from app.problems.models import ProblemVersion
 
 RESTORE_PROTOCOL_VERSION: Literal["session.restore.v1"] = "session.restore.v1"
 MAX_RECENT_CONVERSATION_TURNS = 40
@@ -64,6 +66,7 @@ class RestoredInterview:
     unresolved_prompt: RestoredUnresolvedPrompt | None
     highest_client_sequence: int
     terminal_reason: TerminalReason | None
+    problem: CandidateProblemDetail
 
 
 class SessionRestorationService:
@@ -106,6 +109,25 @@ class SessionRestorationService:
             client_instance_id,
         )
         template = template_for_duration(interview.configuration.configured_duration_seconds)
+        if (
+            interview.interview_pack_version.problem_version_id
+            != interview.problem_version_id
+        ):
+            raise DevelopmentInterviewNotResumable(
+                "Interview Pack does not match the session ProblemVersion"
+            )
+        try:
+            problem = candidate_problem_detail(
+                interview.problem_version,
+                cast(
+                    Literal["cpp", "python", "java"],
+                    interview.configuration.language,
+                ),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise DevelopmentInterviewNotResumable(
+                "Interview problem projection is unavailable"
+            ) from exc
         return RestoredInterview(
             interview=interview,
             template=template.template if template is not None else "CUSTOM",
@@ -120,6 +142,7 @@ class SessionRestorationService:
                 if interview.status == "COMPLETED"
                 else None
             ),
+            problem=problem,
         )
 
     async def _terminal_reason(self, interview_session_id: UUID) -> TerminalReason:
@@ -143,6 +166,8 @@ class SessionRestorationService:
             select(InterviewSession)
             .options(
                 joinedload(InterviewSession.configuration),
+                joinedload(InterviewSession.problem_version).joinedload(ProblemVersion.problem),
+                joinedload(InterviewSession.interview_pack_version),
                 selectinload(InterviewSession.budget),
             )
             .where(InterviewSession.id == interview_session_id),

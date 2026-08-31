@@ -598,20 +598,18 @@ export interface components {
             client_instance_id?: string | null;
             /** Interview Session Id */
             interview_session_id?: string | null;
-            /**
-             * Language
-             * @default cpp
-             * @enum {string}
-             */
-            language: "cpp" | "python" | "java";
+            /** Language */
+            language?: ("cpp" | "python" | "java") | null;
             /** Last Acknowledged Server Sequence */
             last_acknowledged_server_sequence?: number | null;
+            /** Problem Version Id */
+            problem_version_id?: string | null;
             /**
              * Purpose
              * @default interview_demo
-             * @constant
+             * @enum {string}
              */
-            purpose: "interview_demo";
+            purpose: "interview_demo" | "stage1_fixture";
         };
         /** RealtimeDevelopmentBootstrapResponse */
         RealtimeDevelopmentBootstrapResponse: {
@@ -643,6 +641,7 @@ export interface components {
             /** Last Server Sequence */
             last_server_sequence: number;
             latest_code_snapshot?: components["schemas"]["RestoredCodeSnapshotMessage"] | null;
+            problem: components["schemas"]["CandidateProblemDetail"];
             /**
              * Protocol Version
              * @default counterq.realtime.control.v1

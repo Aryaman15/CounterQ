@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +15,7 @@ from app.interviews.repository import InterviewRepository
 from app.interviews.template_policy import InterviewTemplate, template_policy
 from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
 from app.problems.repository import ProblemRepository
+from app.problems.service import CuratedProblemService
 
 
 @dataclass(frozen=True)
@@ -48,7 +50,7 @@ async def create_development_interview(
     )
     problems = ProblemRepository(session)
     problem = await problems.add_problem(
-        source_type="CURATED",
+        source_type="DEVELOPMENT_FIXTURE",
         slug=f"longest-substring-without-repeating-characters-{suffix}",
         status="ACTIVE",
     )
@@ -63,7 +65,51 @@ async def create_development_interview(
         content_hash=f"sha256:longest-substring-{suffix}",
         schema_version="problem.v1",
     )
+    problem_version.constraints_json = {
+        "items": [
+            "0 <= s.length <= 5 * 10^4",
+            "s consists of English letters, digits, symbols, and spaces.",
+        ]
+    }
+    problem_version.examples_json = [
+        {
+            "input": 's = "abcabcbb"',
+            "output": "3",
+            "explanation": 'The answer is "abc", with length 3.',
+        }
+    ]
     problem_version.io_schema_json = {
+        "catalog_order": 0,
+        "review_status": "REVIEWED",
+        "languages": {
+            "cpp": {
+                "display_signature": "int lengthOfLongestSubstring(string s)",
+                "starter_code": (
+                    "class Solution {\npublic:\n"
+                    "    int lengthOfLongestSubstring(string s) {\n\n    }\n};"
+                ),
+            },
+            "python": {
+                "display_signature": (
+                    "def lengthOfLongestSubstring(self, s: str) -> int"
+                ),
+                "starter_code": (
+                    "class Solution:\n"
+                    "    def lengthOfLongestSubstring(self, s: str) -> int:\n"
+                    "        pass"
+                ),
+            },
+            "java": {
+                "display_signature": "int lengthOfLongestSubstring(String s)",
+                "starter_code": (
+                    "class Solution {\n"
+                    "    public int lengthOfLongestSubstring(String s) {\n"
+                    "        return 0;\n"
+                    "    }\n"
+                    "}"
+                ),
+            },
+        },
         "execution": {
             "method_name": "lengthOfLongestSubstring",
             "arguments": [{"name": "s", "type": "string"}],
@@ -87,6 +133,75 @@ async def create_development_interview(
         },
         review_status="REVIEWED",
         preparation_policy_key="stage1_runtime_fixture",
+    )
+    interviews = InterviewRepository(session)
+    configuration = await interviews.add_configuration(
+        mode="SIMULATION",
+        level="NEW_GRAD",
+        language=language,
+        configured_duration_seconds=policy.configured_duration_seconds,
+        problem_source="DEVELOPMENT_FIXTURE",
+    )
+    interview_session = await interviews.add_session(
+        user_id=user.id,
+        configuration_id=configuration.id,
+        problem_version_id=problem_version.id,
+        interview_pack_version_id=pack_version.id,
+        current_stage=initial_stage,
+        state_version=state_version,
+        status="ACTIVE",
+        started_at=created_at,
+        deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
+    )
+    budget = await interviews.add_budget(
+        session_id=interview_session.id,
+        max_duration_seconds=policy.configured_duration_seconds,
+        max_probes=policy.max_probes,
+        max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
+        max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
+        max_vision_calls=0,
+        soft_monetary_budget=Decimal("2.5000"),
+        hard_monetary_budget=Decimal("5.0000"),
+        realtime_reserved_budget=Decimal("1.2500"),
+    )
+    return DevelopmentInterview(
+        template=template,
+        user=user,
+        problem=problem,
+        problem_version=problem_version,
+        pack_version=pack_version,
+        configuration=configuration,
+        interview_session=interview_session,
+        budget=budget,
+    )
+
+
+async def create_curated_development_interview(
+    session: AsyncSession,
+    *,
+    problem_version_id: UUID,
+    language: str,
+    initial_stage: str = "IMPLEMENTATION",
+    state_version: int = 0,
+    template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
+    now: datetime | None = None,
+) -> DevelopmentInterview:
+    curated = CuratedProblemService(session)
+    problem_version = await curated.candidate_problem(problem_version_id)
+    languages = problem_version.io_schema_json.get("languages")
+    if not isinstance(languages, dict) or language not in languages:
+        raise ValueError("Requested language is not supported by the selected problem")
+    pack_version = await curated.reviewed_pack_for_problem(problem_version.id)
+    if pack_version.problem_version_id != problem_version.id:
+        raise ValueError("Reviewed Interview Pack does not belong to the selected problem version")
+
+    created_at = now or datetime.now(UTC)
+    policy = template_policy(template)
+    if policy.configured_duration_seconds is None:
+        raise ValueError("FULL_SIMULATION requires an explicit duration policy before use")
+    user = await UserRepository(session).add(
+        external_auth_provider="dev",
+        external_auth_subject=f"stage3-curated-candidate-{uuid7()}",
     )
     interviews = InterviewRepository(session)
     configuration = await interviews.add_configuration(
@@ -121,7 +236,7 @@ async def create_development_interview(
     return DevelopmentInterview(
         template=template,
         user=user,
-        problem=problem,
+        problem=problem_version.problem,
         problem_version=problem_version,
         pack_version=pack_version,
         configuration=configuration,

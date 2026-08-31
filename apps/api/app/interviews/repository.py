@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
 from app.observation.models import InterviewEvent
+from app.problems.models import InterviewPackVersion
 
 
 class InterviewRepository:
@@ -45,6 +46,9 @@ class InterviewRepository:
         started_at: datetime,
         deadline_at: datetime,
     ) -> InterviewSession:
+        pack = await self._session.get(InterviewPackVersion, interview_pack_version_id)
+        if pack is None or pack.problem_version_id != problem_version_id:
+            raise ValueError("Interview Pack must belong to the session ProblemVersion")
         interview_session = InterviewSession(
             user_id=user_id,
             interview_configuration_id=configuration_id,

@@ -703,7 +703,7 @@ async def test_development_smoke_endpoint_blocks_production_and_creates_no_inter
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         bootstrap = await client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest().model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
         )
         assert bootstrap.status_code == 200
         interview_session_id = bootstrap.json()["interview_session_id"]

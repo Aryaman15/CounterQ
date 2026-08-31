@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, TypeAdapter
+from pydantic import BaseModel, Field, TypeAdapter, model_validator
+
+from app.problems.contracts import CandidateLanguage, CandidateProblemDetail
 
 CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
     "counterq.realtime.control.v1"
@@ -12,11 +14,25 @@ CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
 
 
 class RealtimeDevelopmentBootstrapRequest(BaseModel):
-    purpose: Literal["interview_demo"] = "interview_demo"
+    purpose: Literal["interview_demo", "stage1_fixture"] = "interview_demo"
     interview_session_id: UUID | None = None
     client_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
     last_acknowledged_server_sequence: int | None = Field(default=None, ge=0)
-    language: Literal["cpp", "python", "java"] = "cpp"
+    problem_version_id: UUID | None = None
+    language: CandidateLanguage | None = None
+
+    @model_validator(mode="after")
+    def validate_creation_or_restoration(self) -> RealtimeDevelopmentBootstrapRequest:
+        if self.interview_session_id is None and self.purpose == "interview_demo":
+            if self.problem_version_id is None or self.language is None:
+                raise ValueError(
+                    "problem_version_id and language are required to create an interview"
+                )
+        elif self.interview_session_id is not None and (
+            self.problem_version_id is not None or self.language is not None
+        ):
+            raise ValueError("Problem and language cannot be changed while restoring a session")
+        return self
 
 
 class RestoredCodeSnapshotMessage(BaseModel):
@@ -45,6 +61,7 @@ class RestoredUnresolvedPromptMessage(BaseModel):
 class RealtimeDevelopmentBootstrapResponse(BaseModel):
     interview_session_id: UUID
     language: Literal["cpp", "python", "java"]
+    problem: CandidateProblemDetail
     template: str
     configured_duration_seconds: int
     current_stage: str

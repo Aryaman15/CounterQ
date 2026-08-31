@@ -211,6 +211,7 @@ class HookFakeControlClient {
   private connectImpl: () => Promise<typeof fakeDevelopmentBootstrap> = async () =>
     fakeDevelopmentBootstrap;
   connectDevelopmentInterview = vi.fn(() => this.connectImpl());
+  startDevelopmentInterview = vi.fn(() => this.connectImpl());
   hasStoredDevelopmentSession = vi.fn(() => false);
   restoreExistingDevelopmentInterview = vi.fn(async () => null);
   disconnect = vi.fn(() => {
@@ -274,6 +275,23 @@ const fakeSessionResponse = {
 const fakeDevelopmentBootstrap = {
   interview_session_id: "session-1",
   language: "cpp" as const,
+  problem: {
+    problem_version_id: "problem-version-1",
+    slug: "two-sum",
+    title: "Two Sum",
+    supported_languages: ["cpp", "python", "java"] as Array<"cpp" | "python" | "java">,
+    catalog_order: 1,
+    statement: "Return the two indices whose values sum to target.",
+    constraints: ["2 <= nums.length"],
+    examples: [{ input: "nums = [2,7], target = 9", output: "[0,1]", explanation: "2 + 7 = 9" }],
+    selected_language: "cpp" as const,
+    display_signature: "vector<int> twoSum(vector<int>& nums, int target)",
+    starter_code: "class Solution {};",
+    argument_schema: [{ name: "nums", type: "int[]" }, { name: "target", type: "int" }],
+    return_type: "int[]",
+    comparator: "EXACT",
+    custom_test_supported: true,
+  },
   template: "STANDARD_CODING_INTERVIEW",
   configured_duration_seconds: 1800,
   current_stage: "IMPLEMENTATION",

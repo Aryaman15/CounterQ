@@ -322,9 +322,15 @@ class CuratedProblemService:
                 )
             ).all()
         )
-        if not packs:
+        authored_packs = [
+            pack for pack in packs if re.fullmatch(r"v[1-9][0-9]*", pack.authored_version)
+        ]
+        if not authored_packs:
             raise CuratedProblemError("No reviewed Interview Pack is available")
-        return max(packs, key=lambda pack: _authored_version_key(pack.authored_version))
+        return max(
+            authored_packs,
+            key=lambda pack: _authored_version_key(pack.authored_version),
+        )
 
     async def problem_concepts_for_version(
         self,

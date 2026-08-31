@@ -102,6 +102,11 @@ class InterviewPackVersion(Base):
             "authored_version",
             name="uq_interview_pack_versions_problem_authored_version",
         ),
+        UniqueConstraint(
+            "id",
+            "problem_version_id",
+            name="uq_interview_pack_versions_id_problem_version",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
@@ -130,6 +135,7 @@ class InterviewPackVersion(Base):
     ai_policy_version: Mapped[AIPolicyVersion | None] = relationship()
     interview_sessions: Mapped[list[InterviewSession]] = relationship(
         back_populates="interview_pack_version",
+        foreign_keys="InterviewSession.interview_pack_version_id",
     )
 
 

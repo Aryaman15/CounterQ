@@ -21,6 +21,7 @@ import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import type { RealtimeVoiceControls } from "../realtime/useRealtimeVoice";
 import { EndInterviewDialog } from "./EndInterviewDialog";
 import { ExecutionPanel, type ExecutionViewResult } from "./ExecutionPanel";
+import { InterviewSetup } from "./InterviewSetup";
 import { InterviewHeader } from "./InterviewHeader";
 import { InterviewerSurface } from "./InterviewerSurface";
 import { MonacoInterviewEditor } from "./MonacoInterviewEditor";
@@ -29,11 +30,17 @@ import { RecentConversationDrawer } from "./RecentConversationDrawer";
 
 type InterviewRoomProps = {
   fixture: DemoInterviewRoomFixture;
+  allowFixturePreview?: boolean;
+  realtimeVoiceOverride?: RealtimeVoiceControls;
 };
 
 type DevelopmentRunResponse = components["schemas"]["DevelopmentRunResponse"];
 
-export function InterviewRoom({ fixture }: InterviewRoomProps) {
+export function InterviewRoom({
+  fixture,
+  allowFixturePreview = true,
+  realtimeVoiceOverride,
+}: InterviewRoomProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<"cpp" | "python" | "java">(
     fixture.language,
   );
@@ -52,8 +59,10 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const previousSelectedLanguageRef = useRef(selectedLanguage);
   const previousSessionIdRef = useRef<string | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
-  const realtimeVoice = useRealtimeVoice({ developmentLanguage: selectedLanguage });
+  const liveRealtimeVoice = useRealtimeVoice({ developmentLanguage: selectedLanguage });
+  const realtimeVoice = realtimeVoiceOverride ?? liveRealtimeVoice;
   const configuredLanguage = realtimeVoice.restoredBootstrap?.language ?? selectedLanguage;
+  const candidateProblem = realtimeVoice.restoredBootstrap?.problem ?? null;
   const editorStorageScope = useMemo<EditorStorageScope>(
     () => ({
       language: configuredLanguage,
@@ -69,6 +78,25 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     realtimeVoice.isRestoring,
   );
   const terminal = realtimeVoice.terminalSession;
+  const problemView = useMemo(() => {
+    if (!candidateProblem) {
+      return {
+        ...fixture.problem,
+        functionSignature: functionSignatureFor(configuredLanguage),
+      };
+    }
+    return {
+      title: candidateProblem.title,
+      statement: candidateProblem.statement.split(/\n\s*\n/).filter(Boolean),
+      functionSignature: candidateProblem.display_signature,
+      constraints: candidateProblem.constraints,
+      examples: candidateProblem.examples.map((example) => ({
+        input: String(example.input ?? ""),
+        output: String(example.output ?? ""),
+        explanation: String(example.explanation ?? ""),
+      })),
+    };
+  }, [candidateProblem, configuredLanguage, fixture.problem]);
 
   useEffect(() => {
     if (
@@ -180,7 +208,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       return;
     }
     const canonicalSource = realtimeVoice.restoredBootstrap?.latest_code_snapshot?.source_code;
-    const starterCode = developmentStarterCode[configuredLanguage];
+    const starterCode = candidateProblem?.starter_code ?? developmentStarterCode[configuredLanguage];
     const localSource = canonicalSource
       ? null
       : readStoredEditorCode(window.localStorage, "", editorStorageScope);
@@ -192,7 +220,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       }),
     );
     setEditorHydrated(true);
-  }, [configuredLanguage, editorStorageScope, realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap]);
+  }, [candidateProblem?.starter_code, configuredLanguage, editorStorageScope, realtimeVoice.isRestoring, realtimeVoice.restoredBootstrap]);
 
   useEffect(() => {
     const sessionId = realtimeVoice.restoredBootstrap?.interview_session_id ?? null;
@@ -214,7 +242,10 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     writeStoredEditorCode(window.localStorage, nextValue, editorStorageScope);
   }, [editorStorageScope]);
 
-  const runCurrentCode = useCallback(async () => {
+  const runCurrentCode = useCallback(async (
+    runKind: "VISIBLE" | "CUSTOM" = "VISIBLE",
+    customArguments?: Record<string, unknown>,
+  ) => {
     if (terminal || realtimeVoice.completionPending || executionRunning) return;
     setHasAttemptedRun(true);
     setExecutionExpanded(true);
@@ -235,13 +266,15 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
             client_event_id: `run-${idempotencyKey}`,
             client_instance_id: "interview-room-run",
             client_sequence: Date.now(),
-            run_kind: "VISIBLE",
+            run_kind: runKind,
+            ...(runKind === "CUSTOM" ? { custom_arguments: customArguments } : {}),
           }),
         },
       );
       if (!response.ok) throw new Error("Code execution is temporarily unavailable.");
       const result = await response.json() as DevelopmentRunResponse;
       setExecutionResult({
+        runKind: result.run_kind,
         status: result.status,
         stdout: result.stdout,
         stderr: result.stderr,
@@ -253,6 +286,8 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           inputJson: testCase.input_json,
           expectedOutput: testCase.expected_output,
           actualOutput: testCase.actual_output,
+          actualOutputValue: testCase.actual_output_value,
+          comparisonKind: testCase.comparison_kind,
           status: testCase.status,
         })),
       });
@@ -262,6 +297,14 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
       setExecutionRunning(false);
     }
   }, [editorCode, executionRunning, realtimeVoice, terminal]);
+
+  const startInterview = useCallback(async (
+    problemVersionId: string,
+    language: "cpp" | "python" | "java",
+  ) => {
+    setSelectedLanguage(language);
+    await realtimeVoice.startInterview(problemVersionId, language);
+  }, [realtimeVoice]);
 
   const updateWidthFromClientX = useCallback(
     (clientX: number) => {
@@ -321,6 +364,19 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
     [problemWidth],
   );
 
+  if (!allowFixturePreview && !realtimeVoice.restoredBootstrap) {
+    if (realtimeVoice.isRestoring) {
+      return <main className="interview-setup"><p role="status">Restoring interview…</p></main>;
+    }
+    return (
+      <InterviewSetup
+        busy={realtimeVoice.isRestoring}
+        error={realtimeVoice.errorMessage}
+        onStart={startInterview}
+      />
+    );
+  }
+
   return (
     <main
       className="interview-room"
@@ -336,7 +392,7 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
 
       <div ref={workspaceRef} className="workspace" style={workspaceStyle} aria-busy={realtimeVoice.isRestoring}>
         <ProblemPanel
-          problem={{ ...fixture.problem, functionSignature: functionSignatureFor(configuredLanguage) }}
+          problem={problemView}
         />
         <div
           className="workspace-resizer"
@@ -361,15 +417,15 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
               <h2 id="editor-title">{sourceFilenameFor(configuredLanguage)}</h2>
             </div>
             <div className="editor-meta">
-              {!realtimeVoice.restoredBootstrap && !realtimeVoice.isRestoring ? (
+              {allowFixturePreview && !realtimeVoice.restoredBootstrap ? (
                 <label className="development-language-picker">
                   <span className="sr-only">Development execution language</span>
                   <select
                     aria-label="Development execution language"
                     value={selectedLanguage}
-                    onChange={(event) =>
-                      setSelectedLanguage(event.target.value as "cpp" | "python" | "java")
-                    }
+                    onChange={(event) => setSelectedLanguage(
+                      event.target.value as "cpp" | "python" | "java"
+                    )}
                   >
                     <option value="cpp">C++17</option>
                     <option value="python">Python 3</option>
@@ -390,12 +446,15 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
           <ExecutionPanel
             expanded={executionExpanded}
             hasAttemptedRun={hasAttemptedRun}
-            onRun={runCurrentCode}
+            onRun={() => void runCurrentCode("VISIBLE")}
             onToggle={() => setExecutionExpanded((current) => !current)}
             running={executionRunning}
             result={executionResult}
             error={executionError}
             disabled={Boolean(terminal) || realtimeVoice.completionPending}
+            customTestSupported={candidateProblem?.custom_test_supported ?? false}
+            argumentSchema={candidateProblem?.argument_schema ?? []}
+            onRunCustom={(argumentsValue) => void runCurrentCode("CUSTOM", argumentsValue)}
           />
         </section>
       </div>
@@ -454,12 +513,8 @@ function sourceFilenameFor(language: "cpp" | "python" | "java"): string {
 }
 
 function functionSignatureFor(language: "cpp" | "python" | "java"): string {
-  if (language === "python") {
-    return "def lengthOfLongestSubstring(self, s: str) -> int";
-  }
-  if (language === "java") {
-    return "int lengthOfLongestSubstring(String s)";
-  }
+  if (language === "python") return "def lengthOfLongestSubstring(self, s: str) -> int";
+  if (language === "java") return "int lengthOfLongestSubstring(String s)";
   return "int lengthOfLongestSubstring(string s)";
 }
 

@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import { ChevronDown, ChevronUp, LoaderCircle, Play } from "lucide-react";
 
 export type ExecutionViewResult = {
+  runKind: "VISIBLE" | "CUSTOM";
   status: string;
   stdout: string;
   stderr: string;
@@ -14,6 +16,8 @@ export type ExecutionViewResult = {
     inputJson: Record<string, unknown>;
     expectedOutput: string | null;
     actualOutput: string | null;
+    actualOutputValue: unknown;
+    comparisonKind: "EXPECTED" | "NONE";
     status: string;
   }>;
 };
@@ -27,6 +31,9 @@ type ExecutionPanelProps = {
   result?: ExecutionViewResult | null;
   error?: string | null;
   disabled?: boolean;
+  customTestSupported?: boolean;
+  argumentSchema?: Array<Record<string, unknown>>;
+  onRunCustom?: (argumentsValue: Record<string, unknown>) => void;
 };
 
 export function ExecutionPanel({
@@ -38,7 +45,28 @@ export function ExecutionPanel({
   result = null,
   error = null,
   disabled = false,
+  customTestSupported = false,
+  argumentSchema = [],
+  onRunCustom,
 }: ExecutionPanelProps) {
+  const [customJson, setCustomJson] = useState("{}");
+  const [customError, setCustomError] = useState<string | null>(null);
+
+  const runCustom = () => {
+    try {
+      const parsed: unknown = JSON.parse(customJson);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("Custom arguments must be a JSON object.");
+      }
+      setCustomError(null);
+      onRunCustom?.(parsed as Record<string, unknown>);
+    } catch (parseError) {
+      setCustomError(
+        parseError instanceof Error ? parseError.message : "Enter a valid JSON object.",
+      );
+    }
+  };
+
   return (
     <section className="execution-panel" aria-labelledby="execution-title">
       <div className="execution-bar">
@@ -72,10 +100,14 @@ export function ExecutionPanel({
               <p><strong>Compile / Run</strong><span data-status={result.status}>{executionStatusLabel(result)}</span></p>
               {result.cases.map((testCase) => (
                 <div className="execution-case" key={testCase.identifier}>
-                  <span>{testCase.identifier.replace("visible-", "Visible case ")}</span>
-                  <span>{testCase.status === "PASSED" ? "Passed" : "Failed"}</span>
+                  <span>{result.runKind === "CUSTOM" ? "Custom test" : testCase.identifier.replace("visible-", "Visible case ")}</span>
+                  <span>{testCase.comparisonKind === "NONE" && testCase.status === "EXECUTED" ? "Executed" : testCase.status === "PASSED" ? "Passed" : "Failed"}</span>
                   <code>Input {JSON.stringify(testCase.inputJson)}</code>
-                  <code>Expected {testCase.expectedOutput ?? "-"} / Actual {testCase.actualOutput ?? "-"}</code>
+                  {testCase.comparisonKind === "NONE" ? (
+                    <code>Output {JSON.stringify(testCase.actualOutputValue ?? testCase.actualOutput)}</code>
+                  ) : (
+                    <code>Expected {testCase.expectedOutput ?? "-"} / Actual {testCase.actualOutput ?? "-"}</code>
+                  )}
                 </div>
               ))}
               {result.compilerOutput ? <pre aria-label="Compiler diagnostics">{result.compilerOutput}</pre> : null}
@@ -86,6 +118,24 @@ export function ExecutionPanel({
             <p>No code was compiled, run, or judged yet. Hidden tests are not available here.</p>
           ) : !error ? (
             <p>No code was compiled, run, or judged. Hidden tests are not available here.</p>
+          ) : null}
+          {customTestSupported ? (
+            <div className="custom-test-controls">
+              <label htmlFor="custom-test-json">Custom test arguments</label>
+              <p>
+                JSON object matching: {argumentSchema.map((argument) => `${String(argument.name)}: ${String(argument.type)}`).join(", ")}
+              </p>
+              <textarea
+                id="custom-test-json"
+                value={customJson}
+                onChange={(event) => setCustomJson(event.currentTarget.value)}
+                spellCheck={false}
+              />
+              {customError ? <p role="alert" className="execution-unavailable">{customError}</p> : null}
+              <button type="button" onClick={runCustom} disabled={disabled || running}>
+                Run custom test
+              </button>
+            </div>
           ) : null}
         </div>
       ) : null}
