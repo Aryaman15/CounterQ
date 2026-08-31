@@ -6,6 +6,7 @@ from typing import cast
 
 import httpx
 
+from app.execution.codecs import ExecutionCodecError, compare_output
 from app.execution.provider import (
     ExecutionCaseOutcome,
     ExecutionOutcome,
@@ -52,19 +53,38 @@ class LocalSandboxExecutorProvider:
         raw_cases = data.get("cases", [])
         if not isinstance(raw_cases, list):
             raise ExecutorProviderError()
-        cases: list[ExecutionCaseOutcome] = []
+        definitions = {case.identifier: case for case in request.cases}
+        raw_by_identifier: dict[str, dict[str, object]] = {}
         for raw_case in raw_cases:
             if not isinstance(raw_case, dict) or not isinstance(raw_case.get("identifier"), str):
                 raise ExecutorProviderError()
-            cases.append(
-                ExecutionCaseOutcome(
-                    identifier=raw_case["identifier"],
-                    actual_output=cast(str | None, raw_case.get("actual_output")),
-                    status=cast(str, raw_case.get("status", "FAILED")),
-                    duration_ms=cast(int | None, raw_case.get("duration_ms")),
-                    failure_classification=cast(str | None, raw_case.get("failure_classification")),
+            identifier = raw_case["identifier"]
+            if identifier not in definitions or identifier in raw_by_identifier:
+                raise ExecutorProviderError()
+            raw_by_identifier[identifier] = raw_case
+        cases: list[ExecutionCaseOutcome] = []
+        if data["status"] == "SUCCEEDED":
+            for definition in request.cases:
+                raw_case = raw_by_identifier.get(definition.identifier, {})
+                actual_output = cast(str | None, raw_case.get("actual_output"))
+                try:
+                    compared = compare_output(
+                        actual_output,
+                        definition.expected_output,
+                        definition.return_type,
+                        definition.comparator,
+                    )
+                except ExecutionCodecError as exc:
+                    raise ExecutorProviderError() from exc
+                cases.append(
+                    ExecutionCaseOutcome(
+                        identifier=definition.identifier,
+                        actual_output=compared.actual_output,
+                        status=compared.status,
+                        duration_ms=cast(int | None, raw_case.get("duration_ms")),
+                        failure_classification=compared.failure_classification,
+                    )
                 )
-            )
         return ExecutionOutcome(
             status=data["status"],
             provider_run_id=cast(str | None, data.get("provider_run_id")),

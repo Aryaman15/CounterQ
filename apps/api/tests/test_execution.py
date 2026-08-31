@@ -14,6 +14,7 @@ from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.runtime import SessionClosed
 from app.observation.models import InterviewEvent
+from app.problems.repository import ProblemRepository
 
 
 async def test_run_uses_exact_canonical_snapshot_and_persists_visible_results(
@@ -118,6 +119,43 @@ async def test_completed_session_cannot_start_run(db_session: AsyncSession) -> N
         )
 
 
+async def test_compile_failure_persists_every_visible_case_as_not_run(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = ExecutionService(
+        db_session,
+        FakeExecutorProvider(
+            ExecutionOutcome("COMPILE_ERROR", "compile-failure", compiler_output="bad")
+        ),
+    )
+    run, request, _ = await service.begin(
+        RunCommand(
+            session_id=development.interview_session.id,
+            source_code="class Solution {",
+            idempotency_key="compile-not-run",
+            client_event_id="compile-not-run-event",
+            client_instance_id="compile-not-run-browser",
+            client_sequence=1,
+        )
+    )
+    await service.complete(run.id, await service.execute(request))
+    results = list(
+        (
+            await db_session.scalars(
+                select(ExecutionTestResult)
+                .where(ExecutionTestResult.execution_run_id == run.id)
+                .order_by(ExecutionTestResult.test_identifier)
+            )
+        ).all()
+    )
+    assert len(results) == len(request.cases) == 3
+    assert {result.status for result in results} == {"NOT_RUN"}
+    assert {result.failure_classification for result in results} == {
+        "EXECUTION_COMPILE_ERROR"
+    }
+
+
 @pytest.mark.parametrize(
     ("language", "source"),
     [
@@ -148,3 +186,51 @@ async def test_configured_language_owns_snapshot_and_harness(
     assert provider.requests == []
     await service.complete(run.id, await service.execute(request))
     assert provider.requests[0].harness
+
+
+async def test_run_rebuild_uses_its_exact_problem_version_not_session_current_version(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = ExecutionService(
+        db_session, FakeExecutorProvider(ExecutionOutcome("SUCCEEDED", "exact-version"))
+    )
+    run, _, _ = await service.begin(
+        RunCommand(
+            session_id=development.interview_session.id,
+            source_code=(
+                "class Solution { public: int lengthOfLongestSubstring(string s) "
+                "{ return 3; } };"
+            ),
+            idempotency_key="exact-problem-version",
+            client_event_id="exact-problem-version-event",
+            client_instance_id="exact-problem-version-browser",
+            client_sequence=1,
+        )
+    )
+    newer = await ProblemRepository(db_session).add_problem_version(
+        problem=development.problem,
+        version="v2",
+        title="A newer immutable version",
+        statement="A deliberately different version.",
+        content_hash="sha256:exact-problem-version-v2",
+        schema_version="problem.v1",
+    )
+    newer.io_schema_json = {
+        "execution": {
+            "method_name": "differentMethod",
+            "arguments": [{"name": "value", "type": "int"}],
+            "return_type": "int",
+            "visible_cases": [
+                {"arguments": {"value": 1}, "expected_output": 1}
+            ],
+        }
+    }
+    development.interview_session.problem_version_id = newer.id
+    await db_session.flush()
+
+    rebuilt = await service._request_for_run(run)
+
+    assert run.problem_version_id == development.problem_version.id
+    assert "lengthOfLongestSubstring" in rebuilt.harness
+    assert "differentMethod" not in rebuilt.harness

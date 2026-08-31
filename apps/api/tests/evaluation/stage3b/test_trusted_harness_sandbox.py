@@ -19,11 +19,14 @@ pytestmark = pytest.mark.skipif(
 SANDBOX_URL = "http://127.0.0.1:8010"
 IO_SCHEMA = {
     "execution": {
-        "harness": "longest_substring_v1",
+        "method_name": "lengthOfLongestSubstring",
+        "arguments": [{"name": "s", "type": "string"}],
+        "return_type": "int",
+        "comparator": "EXACT",
         "visible_cases": [
-            {"s": "abcabcbb", "expected": 3},
-            {"s": "bbbbb", "expected": 1},
-            {"s": "pwwkew", "expected": 3},
+            {"arguments": {"s": "abcabcbb"}, "expected_output": 3},
+            {"arguments": {"s": "bbbbb"}, "expected_output": 1},
+            {"arguments": {"s": "pwwkew"}, "expected_output": 3},
         ],
     }
 }

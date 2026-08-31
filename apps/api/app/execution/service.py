@@ -10,7 +10,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.execution.harness import harness_for_problem
+from app.execution.harness import execution_request_for_problem
 from app.execution.models import ExecutionRun
 from app.execution.provider import ExecutionOutcome, ExecutionRequest, ExecutorProvider
 from app.execution.repository import ExecutionRepository
@@ -143,21 +143,34 @@ class ExecutionService:
                 )
             )
         request = await self._request_for_run(run)
-        cases = {case.identifier: case for case in request.cases}
+        outcomes = {case.identifier: case for case in outcome.cases}
         repository = ExecutionRepository(self._session)
-        for case in outcome.cases:
-            definition = cases.get(case.identifier)
-            if definition is None:
-                continue
+        for definition in request.cases:
+            case = outcomes.get(definition.identifier)
+            failure_classification: str | None
+            if case is None:
+                result_status = "NOT_RUN" if run.status != "SUCCEEDED" else "FAILED"
+                actual_output = None
+                duration_ms = None
+                failure_classification = (
+                    f"EXECUTION_{run.status}"
+                    if run.status != "SUCCEEDED"
+                    else "MISSING_CASE_OUTPUT"
+                )
+            else:
+                result_status = case.status
+                actual_output = case.actual_output
+                duration_ms = case.duration_ms
+                failure_classification = case.failure_classification
             await repository.add_result(
                 run_id=run.id,
-                identifier=case.identifier,
+                identifier=definition.identifier,
                 input_json=definition.input_json,
                 expected_output=definition.expected_output,
-                actual_output=case.actual_output,
-                status=case.status,
-                duration_ms=case.duration_ms,
-                failure_classification=case.failure_classification,
+                actual_output=actual_output,
+                status=result_status,
+                duration_ms=duration_ms,
+                failure_classification=failure_classification,
             )
         return run
 
@@ -184,23 +197,21 @@ class ExecutionService:
 
     async def _request_for_run(self, run: ExecutionRun) -> ExecutionRequest:
         snapshot = await self._session.get(CodeSnapshot, run.code_snapshot_id)
-        problem_version = await self._session.get(InterviewSession, run.interview_session_id)
-        if snapshot is None or problem_version is None:
+        interview = await self._session.get(InterviewSession, run.interview_session_id)
+        if snapshot is None or interview is None:
             raise ValueError("Execution provenance is incomplete")
         from app.problems.models import ProblemVersion
 
-        problem = await self._session.get(ProblemVersion, problem_version.problem_version_id)
+        problem = await self._session.get(ProblemVersion, run.problem_version_id)
         if problem is None:
             raise ValueError("Problem version was not found")
-        language = await self._configured_language(problem_version)
+        language = await self._configured_language(interview)
         if snapshot.language != language or run.language != language:
             raise ValueError("Canonical execution language is inconsistent")
-        harness, cases = harness_for_problem(problem.io_schema_json, language)
-        return ExecutionRequest(
+        return execution_request_for_problem(
+            io_schema=problem.io_schema_json,
             language=language,
             source_code=snapshot.source_code,
-            harness=harness,
-            cases=cases,
             compile_timeout_seconds=self._compile_timeout_seconds,
             run_timeout_seconds=self._run_timeout_seconds,
             memory_limit_mb=self._memory_limit_mb,

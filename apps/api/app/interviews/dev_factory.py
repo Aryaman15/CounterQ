@@ -65,12 +65,16 @@ async def create_development_interview(
     )
     problem_version.io_schema_json = {
         "execution": {
-            "harness": "longest_substring_v1",
+            "method_name": "lengthOfLongestSubstring",
+            "arguments": [{"name": "s", "type": "string"}],
+            "return_type": "int",
+            "comparator": "EXACT",
             "visible_cases": [
-                {"s": "abcabcbb", "expected": 3},
-                {"s": "bbbbb", "expected": 1},
-                {"s": "pwwkew", "expected": 3},
+                {"arguments": {"s": "abcabcbb"}, "expected_output": 3},
+                {"arguments": {"s": "bbbbb"}, "expected_output": 1},
+                {"arguments": {"s": "pwwkew"}, "expected_output": 3},
             ],
+            "custom_test_supported": True,
         }
     }
     pack_version = await problems.add_interview_pack_version(

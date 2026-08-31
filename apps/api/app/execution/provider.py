@@ -16,6 +16,8 @@ class ExecutionCase:
     input_json: dict[str, object]
     expected_output: str
     visible: bool = True
+    return_type: str = "int"
+    comparator: str = "EXACT"
 
 
 @dataclass(frozen=True)
