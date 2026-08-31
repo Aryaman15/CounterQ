@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from app.ai_gateway.provider import ReasoningRequest
-from app.ai_gateway.routes import build_reasoning_provider
+from app.ai_gateway.provider_factory import build_reasoning_provider
 from app.config.settings import create_settings
 from app.evals.examiner.harness import (
     aggregate_results,

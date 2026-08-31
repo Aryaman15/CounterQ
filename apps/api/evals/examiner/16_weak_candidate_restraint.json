@@ -9,9 +9,24 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I am still trying to decide how to store the numbers.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-contains-duplicate-v1",
+      "title": "Contains Duplicate",
       "statement": "Given an integer array nums, return true when any value occurs at least twice; otherwise return false.",
+      "constraints": {
+        "items": [
+          "0 <= nums.length <= 100000",
+          "-1000000000 <= nums[i] <= 1000000000"
+        ]
+      },
       "examples": [
         {
           "input": "nums = [1, 2, 3, 1]",
@@ -24,326 +39,377 @@
           "explanation": "Every value is distinct."
         }
       ],
-      "title": "Contains Duplicate",
-      "constraints": [
-        "0 <= nums.length <= 100000",
-        "-1000000000 <= nums[i] <= 1000000000"
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 2,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "seen_value_set",
-            "summary": "Return immediately when a value has already been observed in a hash set.",
-            "concept_keys": [
-              "hash_set",
-              "time_complexity"
-            ],
-            "applicability": "Unordered values when expected linear time is desired.",
-            "assumptions": [],
-            "key_invariants": [
-              "The set contains exactly the values examined so far."
-            ],
-            "time_complexity": "O(n) expected time",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Uses memory proportional to distinct input values."
-            ],
-            "common_implementation_variants": [
-              "compare set size after insertion"
-            ],
-            "common_failure_modes": [
-              "checking membership after an unconditional insert"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "sort_adjacent_values",
-            "summary": "Sort the values, either in place or in a copy, and compare neighboring values.",
-            "concept_keys": [
-              "sorting",
-              "time_complexity"
-            ],
-            "applicability": "When sorting is acceptable and hashing is undesirable.",
-            "assumptions": [
-              "Mutating input is either allowed or a copy is made."
-            ],
-            "key_invariants": [
-              "Equal values become adjacent after sorting."
-            ],
-            "time_complexity": "O(n log n)",
-            "space_complexity": "O(1) auxiliary only for an in-place constant-space sort; O(n) for an input copy, with additional working storage depending on the sorting implementation",
-            "tradeoffs": [
-              "An in-place sort changes input order; preserving the input requires a copy and O(n) additional storage."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "forgetting the empty-array boundary"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "seen_value_set",
-            "language": "cpp",
-            "source_code": "class Solution { public: bool containsDuplicate(vector<int> nums) { unordered_set<int> seen; for(int value: nums) if(!seen.insert(value).second) return true; return false; } };",
-            "review_status": "REVIEWED"
+        "execution": {
+          "method_name": "containsDuplicate",
+          "arguments": [
+            {
+              "name": "nums",
+              "type": "int[]"
+            }
+          ],
+          "return_type": "bool",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "nums": [
+                  1,
+                  2,
+                  3,
+                  1
+                ]
+              },
+              "expected_output": true
+            },
+            {
+              "arguments": {
+                "nums": [
+                  1,
+                  2,
+                  3,
+                  4
+                ]
+              },
+              "expected_output": false
+            },
+            {
+              "arguments": {
+                "nums": [
+                  1,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  1
+                ]
+              },
+              "expected_output": true
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "bool containsDuplicate(vector<int> nums)",
+            "starter_code": "class Solution {\npublic:\n    bool containsDuplicate(vector<int> nums) {\n        return false;\n    }\n};"
           },
-          {
-            "approach_id": "seen_value_set",
-            "language": "python",
-            "source_code": "class Solution:\n    def containsDuplicate(self, nums):\n        seen = set()\n        for value in nums:\n            if value in seen:\n                return True\n            seen.add(value)\n        return False",
-            "review_status": "REVIEWED"
+          "python": {
+            "display_signature": "def containsDuplicate(self, nums: list[int]) -> bool",
+            "starter_code": "class Solution:\n    def containsDuplicate(self, nums: list[int]) -> bool:\n        return False"
           },
-          {
-            "approach_id": "seen_value_set",
-            "language": "java",
-            "source_code": "class Solution { public boolean containsDuplicate(int[] nums) { java.util.Set<Integer> seen=new java.util.HashSet<>(); for(int value:nums) if(!seen.add(value)) return true; return false; } }",
-            "review_status": "REVIEWED"
+          "java": {
+            "display_signature": "boolean containsDuplicate(int[] nums)",
+            "starter_code": "class Solution {\n    public boolean containsDuplicate(int[] nums) {\n        return false;\n    }\n}"
           }
-        ],
-        "concepts": [
-          "hash_set",
-          "arrays",
-          "sorting",
-          "time_complexity"
-        ],
-        "invariants": [
-          {
-            "id": "seen_prefix",
-            "concept_keys": [
-              "hash_set"
-            ],
-            "diagnostic_goal": "The set is the distinct-value summary of the inspected prefix.",
-            "approach_id": "seen_value_set"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "early_exit_expected_linear",
-            "concept_keys": [
-              "hash_set",
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Explain expected O(n) work when the full array is scanned, possible early exit, and the lack of a universal worst-case hash guarantee.",
-            "approach_id": "seen_value_set"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "set_size_always_constant_space",
-            "concept_keys": [
-              "hash_set"
-            ],
-            "diagnostic_goal": "Recognize that the set can grow with the input."
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "duplicate_after_insert",
-            "concept_keys": [
-              "hash_set"
-            ],
-            "diagnostic_goal": "Check whether insertion was new before continuing.",
-            "approach_id": "seen_value_set"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "empty_array",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "Return false when no pair can exist."
-          },
-          {
-            "id": "distant_duplicate",
-            "concept_keys": [
-              "hash_set"
-            ],
-            "diagnostic_goal": "Do not rely on adjacent input values.",
-            "counterexample_id": "distant_duplicate"
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "distant_duplicate",
-            "input": [
-              1,
-              8,
-              4,
-              2,
-              8
-            ],
-            "purpose": "A duplicate far apart defeats adjacent-only scanning."
-          },
-          {
-            "id": "single_value",
-            "input": [
-              7
-            ],
-            "purpose": "A single value is never duplicated."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "memory_limited_input",
-            "concept_keys": [
-              "sorting",
-              "hash_set"
-            ],
-            "diagnostic_goal": "Compare a sort-based approach when hash-set memory is constrained."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_set_summary",
-            "concept_keys": [
-              "hash_set"
-            ],
-            "diagnostic_goal": "Defend why a repeated value is detected exactly when it is encountered again.",
-            "counterexample_id": "distant_duplicate",
-            "approach_id": "seen_value_set",
-            "relevant_strategies": [
-              "PROVE"
-            ]
-          },
-          {
-            "id": "compare_sorting",
-            "concept_keys": [
-              "sorting",
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Compare sort-and-scan with a hash set.",
-            "approach_id": "sort_adjacent_values",
-            "relevant_strategies": [
-              "TRADE_OFF",
-              "ALTERNATIVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "set_invariant",
-            "target_concepts": [
-              "hash_set"
-            ],
-            "target_approach_id": "seen_value_set",
-            "trigger_cues": [
-              "uses a set"
-            ],
-            "diagnostic_goal": "Test the prefix-summary invariant.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "set contains prior distinct values"
-            ],
-            "weak_or_misconception_signals": [
-              "cannot explain why distant duplicates work"
-            ],
-            "counterexample_id": "distant_duplicate",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "What does the set represent after each iteration?"
-            ]
-          },
-          {
-            "id": "space_tradeoff",
-            "target_concepts": [
-              "hash_set",
-              "sorting"
-            ],
-            "target_approach_id": "seen_value_set",
-            "trigger_cues": [
-              "claims constant space"
-            ],
-            "diagnostic_goal": "Test space accounting for distinct values.",
-            "relevant_strategies": [
-              "COMPLEXITY",
-              "TRADE_OFF"
-            ],
-            "expected_good_signals": [
-              "explains O(n) set growth"
-            ],
-            "weak_or_misconception_signals": [
-              "treats a growing set as constant"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "COMPLEXITY_EDGE_CASES"
-            ],
-            "sample_phrasings": [
-              "How large can the set become when no duplicate appears?"
-            ]
-          },
-          {
-            "id": "sorting_alternative",
-            "target_concepts": [
-              "sorting"
-            ],
-            "target_approach_id": "sort_adjacent_values",
-            "trigger_cues": [
-              "proposes sorting"
-            ],
-            "diagnostic_goal": "Test why sorting makes equality local.",
-            "relevant_strategies": [
-              "WHY",
-              "ALTERNATIVE"
-            ],
-            "expected_good_signals": [
-              "equal values are adjacent after sorting"
-            ],
-            "weak_or_misconception_signals": [
-              "only scans original neighbors"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DISCOVERY"
-            ],
-            "sample_phrasings": [
-              "Why is one adjacent scan enough after sorting?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "INTERN",
-            "guidance": "Assess whether the candidate can choose and use a set correctly."
-          },
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Expect explicit time and space tradeoff reasoning."
-          }
-        ],
-        "reference_reasoning": "A hash set is the reviewed expected approach, while sorting and other plausible correct strategies remain valid when their tradeoffs are defended."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I am still trying to decide how to store the numbers.",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "seen_value_set",
+          "summary": "Return immediately when a value has already been observed in a hash set.",
+          "concept_keys": [
+            "hash_set",
+            "time_complexity"
+          ],
+          "applicability": "Unordered values when expected linear time is desired.",
+          "assumptions": [],
+          "key_invariants": [
+            "The set contains exactly the values examined so far."
+          ],
+          "time_complexity": "O(n) expected time",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Uses memory proportional to distinct input values."
+          ],
+          "common_implementation_variants": [
+            "compare set size after insertion"
+          ],
+          "common_failure_modes": [
+            "checking membership after an unconditional insert"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "sort_adjacent_values",
+          "summary": "Sort the values, either in place or in a copy, and compare neighboring values.",
+          "concept_keys": [
+            "sorting",
+            "time_complexity"
+          ],
+          "applicability": "When sorting is acceptable and hashing is undesirable.",
+          "assumptions": [
+            "Mutating input is either allowed or a copy is made."
+          ],
+          "key_invariants": [
+            "Equal values become adjacent after sorting."
+          ],
+          "time_complexity": "O(n log n)",
+          "space_complexity": "O(1) auxiliary only for an in-place constant-space sort; O(n) for an input copy, with additional working storage depending on the sorting implementation",
+          "tradeoffs": [
+            "An in-place sort changes input order; preserving the input requires a copy and O(n) additional storage."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "forgetting the empty-array boundary"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "seen_value_set",
+          "language": "cpp",
+          "source_code": "class Solution { public: bool containsDuplicate(vector<int> nums) { unordered_set<int> seen; for(int value: nums) if(!seen.insert(value).second) return true; return false; } };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "seen_value_set",
+          "language": "python",
+          "source_code": "class Solution:\n    def containsDuplicate(self, nums):\n        seen = set()\n        for value in nums:\n            if value in seen:\n                return True\n            seen.add(value)\n        return False",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "seen_value_set",
+          "language": "java",
+          "source_code": "class Solution { public boolean containsDuplicate(int[] nums) { java.util.Set<Integer> seen=new java.util.HashSet<>(); for(int value:nums) if(!seen.add(value)) return true; return false; } }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "hash_set",
+        "arrays",
+        "sorting",
+        "time_complexity"
+      ],
+      "invariants": [
+        {
+          "id": "seen_prefix",
+          "concept_keys": [
+            "hash_set"
+          ],
+          "diagnostic_goal": "The set is the distinct-value summary of the inspected prefix.",
+          "approach_id": "seen_value_set"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "early_exit_expected_linear",
+          "concept_keys": [
+            "hash_set",
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Explain expected O(n) work when the full array is scanned, possible early exit, and the lack of a universal worst-case hash guarantee.",
+          "approach_id": "seen_value_set"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "set_size_always_constant_space",
+          "concept_keys": [
+            "hash_set"
+          ],
+          "diagnostic_goal": "Recognize that the set can grow with the input."
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "duplicate_after_insert",
+          "concept_keys": [
+            "hash_set"
+          ],
+          "diagnostic_goal": "Check whether insertion was new before continuing.",
+          "approach_id": "seen_value_set"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "empty_array",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "Return false when no pair can exist."
+        },
+        {
+          "id": "distant_duplicate",
+          "concept_keys": [
+            "hash_set"
+          ],
+          "diagnostic_goal": "Do not rely on adjacent input values.",
+          "counterexample_id": "distant_duplicate"
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "distant_duplicate",
+          "input": [
+            1,
+            8,
+            4,
+            2,
+            8
+          ],
+          "purpose": "A duplicate far apart defeats adjacent-only scanning."
+        },
+        {
+          "id": "single_value",
+          "input": [
+            7
+          ],
+          "purpose": "A single value is never duplicated."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "memory_limited_input",
+          "concept_keys": [
+            "sorting",
+            "hash_set"
+          ],
+          "diagnostic_goal": "Compare a sort-based approach when hash-set memory is constrained."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_set_summary",
+          "concept_keys": [
+            "hash_set"
+          ],
+          "diagnostic_goal": "Defend why a repeated value is detected exactly when it is encountered again.",
+          "counterexample_id": "distant_duplicate",
+          "approach_id": "seen_value_set",
+          "relevant_strategies": [
+            "PROVE"
+          ]
+        },
+        {
+          "id": "compare_sorting",
+          "concept_keys": [
+            "sorting",
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Compare sort-and-scan with a hash set.",
+          "approach_id": "sort_adjacent_values",
+          "relevant_strategies": [
+            "TRADE_OFF",
+            "ALTERNATIVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "set_invariant",
+          "target_concepts": [
+            "hash_set"
+          ],
+          "target_approach_id": "seen_value_set",
+          "trigger_cues": [
+            "uses a set"
+          ],
+          "diagnostic_goal": "Test the prefix-summary invariant.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "set contains prior distinct values"
+          ],
+          "weak_or_misconception_signals": [
+            "cannot explain why distant duplicates work"
+          ],
+          "counterexample_id": "distant_duplicate",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "What does the set represent after each iteration?"
+          ]
+        },
+        {
+          "id": "space_tradeoff",
+          "target_concepts": [
+            "hash_set",
+            "sorting"
+          ],
+          "target_approach_id": "seen_value_set",
+          "trigger_cues": [
+            "claims constant space"
+          ],
+          "diagnostic_goal": "Test space accounting for distinct values.",
+          "relevant_strategies": [
+            "COMPLEXITY",
+            "TRADE_OFF"
+          ],
+          "expected_good_signals": [
+            "explains O(n) set growth"
+          ],
+          "weak_or_misconception_signals": [
+            "treats a growing set as constant"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "COMPLEXITY_EDGE_CASES"
+          ],
+          "sample_phrasings": [
+            "How large can the set become when no duplicate appears?"
+          ]
+        },
+        {
+          "id": "sorting_alternative",
+          "target_concepts": [
+            "sorting"
+          ],
+          "target_approach_id": "sort_adjacent_values",
+          "trigger_cues": [
+            "proposes sorting"
+          ],
+          "diagnostic_goal": "Test why sorting makes equality local.",
+          "relevant_strategies": [
+            "WHY",
+            "ALTERNATIVE"
+          ],
+          "expected_good_signals": [
+            "equal values are adjacent after sorting"
+          ],
+          "weak_or_misconception_signals": [
+            "only scans original neighbors"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DISCOVERY"
+          ],
+          "sample_phrasings": [
+            "Why is one adjacent scan enough after sorting?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "INTERN",
+          "guidance": "Assess whether the candidate can choose and use a set correctly."
+        },
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Expect explicit time and space tradeoff reasoning."
+        }
+      ],
+      "reference_reasoning": "A hash set is the reviewed expected approach, while sorting and other plausible correct strategies remain valid when their tradeoffs are defended."
+    }
   },
   "expectations": {
     "expected_action": "WAIT",

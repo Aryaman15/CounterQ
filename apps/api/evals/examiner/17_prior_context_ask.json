@@ -9,334 +9,6 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
-    "problem_context": {
-      "io_schema": null,
-      "statement": "Given two strings s and t, return true if t can be formed by rearranging exactly the characters of s; otherwise return false.",
-      "examples": [
-        {
-          "input": "s = \"anagram\", t = \"nagaram\"",
-          "output": "true",
-          "explanation": "Both strings have the same character counts."
-        },
-        {
-          "input": "s = \"rat\", t = \"car\"",
-          "output": "false",
-          "explanation": "The character counts differ."
-        }
-      ],
-      "title": "Valid Anagram",
-      "constraints": [
-        "0 <= s.length, t.length <= 50000",
-        "s and t contain lowercase English letters."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v3",
-        "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "balanced_frequency_count",
-            "summary": "Reject unequal lengths, increment counts for one string, then decrement for the other.",
-            "concept_keys": [
-              "frequency_counting",
-              "time_complexity"
-            ],
-            "applicability": "Strings whose character identity can be counted.",
-            "assumptions": [
-              "The chosen count representation covers the input character domain."
-            ],
-            "key_invariants": [
-              "After processing prefixes of equal length, each count is the remaining excess from s over t."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(1) auxiliary space for the fixed 26-letter candidate contract; O(k) for a generalized character domain of size k",
-            "tradeoffs": [
-              "A fixed alphabet can use an array; broader text needs a map."
-            ],
-            "common_implementation_variants": [
-              "two maps followed by equality"
-            ],
-            "common_failure_modes": [
-              "forgetting unequal lengths",
-              "checking only which characters appear"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "sorted_character_sequences",
-            "summary": "Sort both character sequences and compare their ordered forms.",
-            "concept_keys": [
-              "sorting",
-              "time_complexity"
-            ],
-            "applicability": "When sorting copies is acceptable.",
-            "assumptions": [],
-            "key_invariants": [
-              "Equal multisets have identical sorted sequences."
-            ],
-            "time_complexity": "O(n log n)",
-            "space_complexity": "O(n) in typical string-copy implementations",
-            "tradeoffs": [
-              "Simpler to explain but slower than frequency counting."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "sorting one string only"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "balanced_frequency_count",
-            "language": "cpp",
-            "source_code": "class Solution { public: bool isAnagram(string s,string t){ if(s.size()!=t.size()) return false; int count[26]={}; for(char c:s) ++count[c-'a']; for(char c:t) if(--count[c-'a']<0) return false; return true; } };",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "balanced_frequency_count",
-            "language": "python",
-            "source_code": "class Solution:\n    def isAnagram(self, s, t):\n        if len(s) != len(t):\n            return False\n        counts = {}\n        for char in s:\n            counts[char] = counts.get(char, 0) + 1\n        for char in t:\n            counts[char] = counts.get(char, 0) - 1\n            if counts[char] < 0:\n                return False\n        return True",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "balanced_frequency_count",
-            "language": "java",
-            "source_code": "class Solution { public boolean isAnagram(String s,String t){ if(s.length()!=t.length()) return false; int[] count=new int[26]; for(char c:s.toCharArray()) count[c-'a']++; for(char c:t.toCharArray()) if(--count[c-'a']<0) return false; return true; } }",
-            "review_status": "REVIEWED"
-          }
-        ],
-        "concepts": [
-          "frequency_counting",
-          "sorting",
-          "time_complexity"
-        ],
-        "invariants": [
-          {
-            "id": "frequency_balance",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Each count represents unmatched occurrences after equal processing progress.",
-            "counterexample_id": "frequency_mismatch",
-            "approach_id": "balanced_frequency_count"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "linear_counts",
-            "concept_keys": [
-              "frequency_counting",
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Distinguish linear scans from sorting's logarithmic factor and explain why the 26-slot count array is O(1) under the lowercase-English contract.",
-            "approach_id": "balanced_frequency_count"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "same_character_set",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Require equal multiplicities, not merely the same distinct characters.",
-            "counterexample_id": "frequency_mismatch"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "missing_length_check",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Reject different lengths before accepting matching partial counts.",
-            "counterexample_id": "unequal_lengths",
-            "approach_id": "balanced_frequency_count"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "empty_strings",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Two empty strings have equal character multisets."
-          },
-          {
-            "id": "repeated_letters",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Account for every occurrence.",
-            "counterexample_id": "frequency_mismatch"
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "frequency_mismatch",
-            "input": {
-              "s": "aacc",
-              "t": "ccac"
-            },
-            "purpose": "The strings share characters but have different counts."
-          },
-          {
-            "id": "unequal_lengths",
-            "input": {
-              "s": "ab",
-              "t": "a"
-            },
-            "purpose": "An anagram must have equal total length."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "broader_character_domain",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Choose a map or another representation if fixed lowercase indexing is invalid."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_frequency_balance",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Defend why a negative decrement proves a missing character occurrence.",
-            "counterexample_id": "frequency_mismatch",
-            "approach_id": "balanced_frequency_count",
-            "relevant_strategies": [
-              "PROVE",
-              "COUNTEREXAMPLE"
-            ]
-          },
-          {
-            "id": "fixed_alphabet_assumption",
-            "concept_keys": [
-              "frequency_counting"
-            ],
-            "diagnostic_goal": "Test whether the candidate recognizes the character-domain assumption.",
-            "approach_id": "balanced_frequency_count",
-            "relevant_strategies": [
-              "ASSUMPTION_CHALLENGE",
-              "CONSTRAINT_MUTATION"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "same_set_not_enough",
-            "target_concepts": [
-              "frequency_counting"
-            ],
-            "target_approach_id": "balanced_frequency_count",
-            "trigger_cues": [
-              "compares seen characters"
-            ],
-            "diagnostic_goal": "Test multiplicity reasoning.",
-            "relevant_strategies": [
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "tracks counts rather than membership alone"
-            ],
-            "weak_or_misconception_signals": [
-              "accepts equal character sets"
-            ],
-            "counterexample_id": "frequency_mismatch",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "IMPLEMENTATION"
-            ],
-            "sample_phrasings": [
-              "What would distinguish these strings when their character sets match?"
-            ]
-          },
-          {
-            "id": "alphabet_representation",
-            "target_concepts": [
-              "frequency_counting"
-            ],
-            "target_approach_id": "balanced_frequency_count",
-            "trigger_cues": [
-              "uses an array of 26"
-            ],
-            "diagnostic_goal": "Clarify the input-domain assumption behind fixed indexing.",
-            "relevant_strategies": [
-              "ASSUMPTION_CHALLENGE",
-              "CONSTRAINT_MUTATION"
-            ],
-            "expected_good_signals": [
-              "chooses a map for broader characters"
-            ],
-            "weak_or_misconception_signals": [
-              "assumes arbitrary text fits 26 slots"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "CONSTRAINT_MUTATION"
-            ],
-            "sample_phrasings": [
-              "What would change if the input were not limited to lowercase letters?"
-            ]
-          },
-          {
-            "id": "sorting_tradeoff",
-            "target_concepts": [
-              "sorting",
-              "time_complexity"
-            ],
-            "target_approach_id": "sorted_character_sequences",
-            "trigger_cues": [
-              "proposes sorting"
-            ],
-            "diagnostic_goal": "Compare sorting with direct counting.",
-            "relevant_strategies": [
-              "TRADE_OFF",
-              "COMPLEXITY"
-            ],
-            "expected_good_signals": [
-              "identifies sorting's O(n log n) cost"
-            ],
-            "weak_or_misconception_signals": [
-              "calls both approaches equivalent in cost"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD",
-              "EARLY_CAREER"
-            ],
-            "applicable_stages": [
-              "COMPLEXITY_EDGE_CASES"
-            ],
-            "sample_phrasings": [
-              "What tradeoff are you making by sorting the strings?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "INTERN",
-            "guidance": "Focus on count correctness and duplicate characters."
-          },
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Expect the alphabet-domain assumption to be explicit."
-          }
-        ],
-        "reference_reasoning": "Frequency counting is the reviewed primary prior, but a candidate may present other correct ways to compare character multisets."
-      },
-      "review_status": "REVIEWED"
-    },
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
     "candidate_statement": "I compare the counts, but I have not described the representation.",
@@ -354,6 +26,389 @@
           "note": "Evaluation-only, not durable Evidence"
         }
       ]
+    },
+    "problem_context": {
+      "problem_version_id": "evaluation-problem-valid-anagram-v3",
+      "title": "Valid Anagram",
+      "statement": "Given two strings s and t, return true if t can be formed by rearranging exactly the characters of s; otherwise return false.",
+      "constraints": {
+        "items": [
+          "0 <= s.length, t.length <= 50000",
+          "s and t contain lowercase English letters."
+        ]
+      },
+      "examples": [
+        {
+          "input": "s = \"anagram\", t = \"nagaram\"",
+          "output": "true",
+          "explanation": "Both strings have the same character counts."
+        },
+        {
+          "input": "s = \"rat\", t = \"car\"",
+          "output": "false",
+          "explanation": "The character counts differ."
+        }
+      ],
+      "io_schema": {
+        "catalog_order": 3,
+        "review_status": "REVIEWED",
+        "execution": {
+          "method_name": "isAnagram",
+          "arguments": [
+            {
+              "name": "s",
+              "type": "string"
+            },
+            {
+              "name": "t",
+              "type": "string"
+            }
+          ],
+          "return_type": "bool",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "s": "anagram",
+                "t": "nagaram"
+              },
+              "expected_output": true
+            },
+            {
+              "arguments": {
+                "s": "rat",
+                "t": "car"
+              },
+              "expected_output": false
+            },
+            {
+              "arguments": {
+                "s": "aacc",
+                "t": "ccac"
+              },
+              "expected_output": false
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "bool isAnagram(string s, string t)",
+            "starter_code": "class Solution {\npublic:\n    bool isAnagram(string s, string t) {\n        return false;\n    }\n};"
+          },
+          "python": {
+            "display_signature": "def isAnagram(self, s: str, t: str) -> bool",
+            "starter_code": "class Solution:\n    def isAnagram(self, s: str, t: str) -> bool:\n        return False"
+          },
+          "java": {
+            "display_signature": "boolean isAnagram(String s, String t)",
+            "starter_code": "class Solution {\n    public boolean isAnagram(String s, String t) {\n        return false;\n    }\n}"
+          }
+        }
+      }
+    },
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v3",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "balanced_frequency_count",
+          "summary": "Reject unequal lengths, increment counts for one string, then decrement for the other.",
+          "concept_keys": [
+            "frequency_counting",
+            "time_complexity"
+          ],
+          "applicability": "Strings whose character identity can be counted.",
+          "assumptions": [
+            "The chosen count representation covers the input character domain."
+          ],
+          "key_invariants": [
+            "After processing prefixes of equal length, each count is the remaining excess from s over t."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(1) auxiliary space for the fixed 26-letter candidate contract; O(k) for a generalized character domain of size k",
+          "tradeoffs": [
+            "A fixed alphabet can use an array; broader text needs a map."
+          ],
+          "common_implementation_variants": [
+            "two maps followed by equality"
+          ],
+          "common_failure_modes": [
+            "forgetting unequal lengths",
+            "checking only which characters appear"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "sorted_character_sequences",
+          "summary": "Sort both character sequences and compare their ordered forms.",
+          "concept_keys": [
+            "sorting",
+            "time_complexity"
+          ],
+          "applicability": "When sorting copies is acceptable.",
+          "assumptions": [],
+          "key_invariants": [
+            "Equal multisets have identical sorted sequences."
+          ],
+          "time_complexity": "O(n log n)",
+          "space_complexity": "O(n) in typical string-copy implementations",
+          "tradeoffs": [
+            "Simpler to explain but slower than frequency counting."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "sorting one string only"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "balanced_frequency_count",
+          "language": "cpp",
+          "source_code": "class Solution { public: bool isAnagram(string s,string t){ if(s.size()!=t.size()) return false; int count[26]={}; for(char c:s) ++count[c-'a']; for(char c:t) if(--count[c-'a']<0) return false; return true; } };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "balanced_frequency_count",
+          "language": "python",
+          "source_code": "class Solution:\n    def isAnagram(self, s, t):\n        if len(s) != len(t):\n            return False\n        counts = {}\n        for char in s:\n            counts[char] = counts.get(char, 0) + 1\n        for char in t:\n            counts[char] = counts.get(char, 0) - 1\n            if counts[char] < 0:\n                return False\n        return True",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "balanced_frequency_count",
+          "language": "java",
+          "source_code": "class Solution { public boolean isAnagram(String s,String t){ if(s.length()!=t.length()) return false; int[] count=new int[26]; for(char c:s.toCharArray()) count[c-'a']++; for(char c:t.toCharArray()) if(--count[c-'a']<0) return false; return true; } }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "frequency_counting",
+        "sorting",
+        "time_complexity"
+      ],
+      "invariants": [
+        {
+          "id": "frequency_balance",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Each count represents unmatched occurrences after equal processing progress.",
+          "counterexample_id": "frequency_mismatch",
+          "approach_id": "balanced_frequency_count"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "linear_counts",
+          "concept_keys": [
+            "frequency_counting",
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Distinguish linear scans from sorting's logarithmic factor and explain why the 26-slot count array is O(1) under the lowercase-English contract.",
+          "approach_id": "balanced_frequency_count"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "same_character_set",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Require equal multiplicities, not merely the same distinct characters.",
+          "counterexample_id": "frequency_mismatch"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "missing_length_check",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Reject different lengths before accepting matching partial counts.",
+          "counterexample_id": "unequal_lengths",
+          "approach_id": "balanced_frequency_count"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "empty_strings",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Two empty strings have equal character multisets."
+        },
+        {
+          "id": "repeated_letters",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Account for every occurrence.",
+          "counterexample_id": "frequency_mismatch"
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "frequency_mismatch",
+          "input": {
+            "s": "aacc",
+            "t": "ccac"
+          },
+          "purpose": "The strings share characters but have different counts."
+        },
+        {
+          "id": "unequal_lengths",
+          "input": {
+            "s": "ab",
+            "t": "a"
+          },
+          "purpose": "An anagram must have equal total length."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "broader_character_domain",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Choose a map or another representation if fixed lowercase indexing is invalid."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_frequency_balance",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Defend why a negative decrement proves a missing character occurrence.",
+          "counterexample_id": "frequency_mismatch",
+          "approach_id": "balanced_frequency_count",
+          "relevant_strategies": [
+            "PROVE",
+            "COUNTEREXAMPLE"
+          ]
+        },
+        {
+          "id": "fixed_alphabet_assumption",
+          "concept_keys": [
+            "frequency_counting"
+          ],
+          "diagnostic_goal": "Test whether the candidate recognizes the character-domain assumption.",
+          "approach_id": "balanced_frequency_count",
+          "relevant_strategies": [
+            "ASSUMPTION_CHALLENGE",
+            "CONSTRAINT_MUTATION"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "same_set_not_enough",
+          "target_concepts": [
+            "frequency_counting"
+          ],
+          "target_approach_id": "balanced_frequency_count",
+          "trigger_cues": [
+            "compares seen characters"
+          ],
+          "diagnostic_goal": "Test multiplicity reasoning.",
+          "relevant_strategies": [
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "tracks counts rather than membership alone"
+          ],
+          "weak_or_misconception_signals": [
+            "accepts equal character sets"
+          ],
+          "counterexample_id": "frequency_mismatch",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "IMPLEMENTATION"
+          ],
+          "sample_phrasings": [
+            "What would distinguish these strings when their character sets match?"
+          ]
+        },
+        {
+          "id": "alphabet_representation",
+          "target_concepts": [
+            "frequency_counting"
+          ],
+          "target_approach_id": "balanced_frequency_count",
+          "trigger_cues": [
+            "uses an array of 26"
+          ],
+          "diagnostic_goal": "Clarify the input-domain assumption behind fixed indexing.",
+          "relevant_strategies": [
+            "ASSUMPTION_CHALLENGE",
+            "CONSTRAINT_MUTATION"
+          ],
+          "expected_good_signals": [
+            "chooses a map for broader characters"
+          ],
+          "weak_or_misconception_signals": [
+            "assumes arbitrary text fits 26 slots"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "CONSTRAINT_MUTATION"
+          ],
+          "sample_phrasings": [
+            "What would change if the input were not limited to lowercase letters?"
+          ]
+        },
+        {
+          "id": "sorting_tradeoff",
+          "target_concepts": [
+            "sorting",
+            "time_complexity"
+          ],
+          "target_approach_id": "sorted_character_sequences",
+          "trigger_cues": [
+            "proposes sorting"
+          ],
+          "diagnostic_goal": "Compare sorting with direct counting.",
+          "relevant_strategies": [
+            "TRADE_OFF",
+            "COMPLEXITY"
+          ],
+          "expected_good_signals": [
+            "identifies sorting's O(n log n) cost"
+          ],
+          "weak_or_misconception_signals": [
+            "calls both approaches equivalent in cost"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD",
+            "EARLY_CAREER"
+          ],
+          "applicable_stages": [
+            "COMPLEXITY_EDGE_CASES"
+          ],
+          "sample_phrasings": [
+            "What tradeoff are you making by sorting the strings?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "INTERN",
+          "guidance": "Focus on count correctness and duplicate characters."
+        },
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Expect the alphabet-domain assumption to be explicit."
+        }
+      ],
+      "reference_reasoning": "Frequency counting is the reviewed primary prior, but a candidate may present other correct ways to compare character multisets."
     }
   },
   "expectations": {

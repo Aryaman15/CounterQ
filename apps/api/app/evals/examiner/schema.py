@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from app.db.constants import INTERVIEW_LEVELS, INTERVIEW_STAGES
 from app.examiner.analysis_schema import ExaminerAction, ExaminerProbeStrategy, ExaminerTargetKind
 from app.examiner.context import ELIGIBLE_LIVE_EXAMINER_OBSERVATIONS
+from app.examiner.context_contract import (
+    ExecutionContextSummary,
+    RecentClaimSummary,
+    RecentDeliveredPromptIntentSummary,
+    SyntheticPriorContext,
+)
 
 CandidateLevel = Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]
 InterviewStage = Literal[
@@ -26,6 +32,26 @@ InterviewStage = Literal[
 SourceObservationType = Literal["CANDIDATE_TRANSCRIPT_FINALIZED", "CODE_MEANINGFULLY_CHANGED"]
 
 
+class EvaluationTimeContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    remaining_seconds: int = Field(ge=0)
+    source_event_watermark: int = Field(default=1, ge=1)
+    source_state_version: int = Field(default=1, ge=1)
+    current_state_version: int = Field(default=1, ge=1)
+    newer_code_snapshot_exists: bool = False
+    newer_candidate_transcript_exists: bool = False
+
+
+class EvaluationProblemContext(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    problem_version_id: str
+    title: str
+    statement: str
+    constraints: dict[Literal["items"], list[str]]
+    examples: list[dict[str, str]]
+    io_schema: dict[str, JsonValue]
+
+
 class EvaluationInput(BaseModel):
     """Only this model is accepted by the production-parity input serializer."""
 
@@ -33,19 +59,21 @@ class EvaluationInput(BaseModel):
     candidate_level: CandidateLevel
     mode: Literal["SIMULATION", "COACH"]
     state: InterviewStage
-    time_context: dict[str, object]
+    time_context: EvaluationTimeContext
     remaining_probe_budget: int = Field(ge=0)
-    problem_context: dict[str, object]
-    interview_pack_excerpt: dict[str, object] | str
+    problem_context: EvaluationProblemContext
+    interview_pack: dict[str, JsonValue]
     source_observation_type: SourceObservationType
     recent_transcript: list[str] = Field(default_factory=list)
     candidate_statement: str | None = None
     code_snapshot: str | None = None
     code_diff: str | None = None
-    execution_context: dict[str, object] | None = None
-    recent_claims: list[dict[str, object]] = Field(default_factory=list)
-    recent_delivered_prompt_intents: list[dict[str, object]] = Field(default_factory=list)
-    evaluation_context_extension: dict[str, object] | None = None
+    execution_context: ExecutionContextSummary | None = None
+    recent_claims: list[RecentClaimSummary] = Field(default_factory=list)
+    recent_delivered_prompt_intents: list[RecentDeliveredPromptIntentSummary] = Field(
+        default_factory=list
+    )
+    evaluation_context_extension: SyntheticPriorContext | None = None
 
     @model_validator(mode="after")
     def validate_domain_values(self) -> EvaluationInput:
@@ -123,6 +151,10 @@ class EvaluationResult(BaseModel):
     obvious_answer_leakage: bool
     stale_behavior_violation: bool
     duplicate_probe_violation: bool
+    strategy_applicable: bool
+    answer_leakage_applicable: bool
+    stale_suppression_applicable: bool
+    duplicate_suppression_applicable: bool
     manual_technical_review_required: bool
     candidate_specificity_review_required: bool
     technical_rationale: str

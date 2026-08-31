@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from app.evals.examiner.schema import EvaluationFixture, EvaluationInput, EvaluationResult
 from app.examiner.analysis_schema import ExaminerAnalysisResult
-from app.examiner.context import serialize_examiner_context
+from app.examiner.context import (
+    serialize_examiner_context,
+    serialize_source_freshness,
+    serialize_source_observation,
+)
+from app.examiner.context_contract import ExaminerDiagnosticContext
 from app.interviews.prompt_authorization import compose_candidate_safe_prompt
 
 FIXTURE_DIRECTORY = Path(__file__).resolve().parents[3] / "evals" / "examiner"
@@ -23,24 +29,17 @@ def load_fixtures(directory: Path = FIXTURE_DIRECTORY) -> list[EvaluationFixture
 
 def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
     """Create the exact production context sections from evaluation-only input."""
-    source: dict[str, object] = {
-        "kind": value.source_observation_type,
-        "source_event_id": "evaluation-source-event",
-        "source_event_watermark": value.time_context.get("source_event_watermark", 1),
-        "source_state_version": value.time_context.get("source_state_version", 1),
-        "source_stage": value.state,
-        "trigger_class": "EVALUATION_FIXTURE",
-        "occurred_at": "2000-01-01T00:00:00+00:00",
-    }
+    transcript: dict[str, object] | None = None
     if value.source_observation_type == "CANDIDATE_TRANSCRIPT_FINALIZED":
-        source["transcript"] = {
+        transcript = {
             "transcript_segment_id": "evaluation-transcript",
             "text": value.candidate_statement or "\n".join(value.recent_transcript),
             "associated_code_snapshot_id": None,
             "associated_code_snapshot_version": None,
         }
+    code: dict[str, object] | None = None
     if value.code_snapshot is not None:
-        source["code"] = {
+        code = {
             "code_snapshot_id": "evaluation-code-snapshot",
             "code_snapshot_version": 1,
             "content_hash": "evaluation-only",
@@ -48,6 +47,27 @@ def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
             "code_diff_id": "evaluation-code-diff" if value.code_diff else None,
             "code_diff_content": value.code_diff,
         }
+    is_code = value.source_observation_type == "CODE_MEANINGFULLY_CHANGED"
+    source = serialize_source_observation(
+        kind=value.source_observation_type,
+        source_event_id="evaluation-source-event",
+        source_event_watermark=value.time_context.source_event_watermark,
+        source_state_version=value.time_context.source_state_version,
+        source_stage=value.state,
+        trigger_class="CODE_EDIT_BURST" if is_code else "VOICE_TURN_COMPLETED",
+        occurred_at="2000-01-01T00:00:00+00:00",
+        transcript=transcript,
+        code=code,
+    )
+    diagnostic_context = ExaminerDiagnosticContext(
+        remaining_probe_budget=value.remaining_probe_budget,
+        recent_transcript=value.recent_transcript,
+        execution_context=value.execution_context,
+        recent_claims=value.recent_claims,
+        recent_delivered_prompt_intents=value.recent_delivered_prompt_intents,
+        synthetic_prior_context=value.evaluation_context_extension,
+    )
+    pack = value.interview_pack
     return serialize_examiner_context(
         trusted_policy={
             "simulation_no_hints": value.mode == "SIMULATION",
@@ -61,44 +81,43 @@ def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
             "language": "cpp",
             "current_stage": value.state,
             "status": "ACTIVE",
-            "state_version": value.time_context.get("current_state_version", 1),
-            "source_state_version": value.time_context.get("source_state_version", 1),
-            "source_event_watermark": value.time_context.get("source_event_watermark", 1),
-            "remaining_seconds": value.time_context.get("remaining_seconds", 0),
+            "state_version": value.time_context.current_state_version,
+            "source_state_version": value.time_context.source_state_version,
+            "source_event_watermark": value.time_context.source_event_watermark,
+            "remaining_seconds": value.time_context.remaining_seconds,
         },
-        problem=value.problem_context,
+        problem=value.problem_context.model_dump(mode="json"),
         interview_pack={
             "interview_pack_version_id": "evaluation-pack",
-            "schema_version": "interview-pack.v1",
-            "review_status": "REVIEWED",
-            "pack": value.interview_pack_excerpt,
+            "schema_version": pack.get("schema_version"),
+            "review_status": pack.get("review_status"),
+            "pack": pack,
         },
         source_observation=source,
-        source_freshness={
-            "source_is_current_at_watermark": True,
-            "latest_code_snapshot_id": "evaluation-code-snapshot" if value.code_snapshot else None,
-            "latest_code_snapshot_version": 1 if value.code_snapshot else None,
-            "is_latest_code_snapshot": not bool(
-                value.time_context.get("newer_code_snapshot_exists")
+        source_freshness=serialize_source_freshness(
+            latest_code_snapshot_id="evaluation-code-snapshot" if value.code_snapshot else None,
+            latest_code_snapshot_version=1 if value.code_snapshot else None,
+            is_latest_code_snapshot=(
+                value.code_snapshot is not None
+                and not value.time_context.newer_code_snapshot_exists
             ),
-            "newer_code_snapshot_exists": bool(
-                value.time_context.get("newer_code_snapshot_exists")
+            newer_code_snapshot_exists=value.time_context.newer_code_snapshot_exists,
+            newer_candidate_transcript_exists=(
+                value.time_context.newer_candidate_transcript_exists
             ),
-            "newer_candidate_transcript_exists": False,
-            "freshness_semantics": "Production-parity evaluation fixture.",
-        },
+        ),
         recent_history=[
             {
                 "event_id": "evaluation-history",
-                "server_sequence": 1,
-                "event_type": "CONTEXT",
-                "source": "SYSTEM",
-                "state_version": 1,
-                "code_snapshot_id": None,
-                "payload_keys": [],
+                "server_sequence": value.time_context.source_event_watermark,
+                "event_type": "MEANINGFUL_CODE_CHANGE" if is_code else "TRANSCRIPT_FINALIZED",
+                "source": "NATIVE_EDITOR" if is_code else "CANDIDATE_VOICE",
+                "state_version": value.time_context.source_state_version,
+                "code_snapshot_id": "evaluation-code-snapshot" if is_code else None,
+                "payload_keys": ["interview_stage"],
             }
         ],
-        evaluation_context_extension=value.evaluation_context_extension,
+        diagnostic_context=diagnostic_context.model_dump(mode="json", exclude_none=True),
     )
 
 
@@ -161,6 +180,10 @@ def score_fixture(
         stale_behavior_violation=expected.expect_stale_suppression and decision.action != "WAIT",
         duplicate_probe_violation=expected.expect_duplicate_suppression
         and decision.action == "PROBE",
+        strategy_applicable=expected.expected_action == "PROBE",
+        answer_leakage_applicable=bool(expected.must_not_reveal),
+        stale_suppression_applicable=expected.expect_stale_suppression,
+        duplicate_suppression_applicable=expected.expect_duplicate_suppression,
         manual_technical_review_required=fixture.review.requires_manual_technical_review,
         candidate_specificity_review_required=fixture.review.requires_candidate_specificity_review,
         technical_rationale=decision.technical_rationale,
@@ -178,28 +201,20 @@ def score_fixture(
 def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
     actions = Counter(result.actual_action for result in results)
 
-    def metric(items: list[EvaluationResult], predicate: Any) -> dict[str, object]:
+    def metric(
+        items: list[EvaluationResult], predicate: Callable[[EvaluationResult], bool]
+    ) -> dict[str, object]:
+        numerator = sum(predicate(item) for item in items)
         return {
-            "numerator": sum(predicate(item) for item in items),
+            "numerator": numerator,
             "denominator": len(items),
-            "rate": (sum(predicate(item) for item in items) / len(items) if items else None),
+            "rate": numerator / len(items) if items else None,
         }
 
-    probes = [item for item in results if item.actual_action == "PROBE"]
-    stale_expected = [
-        item for item in results if item.fixture_id in {"stale-code-wait", "stale-state-wait"}
-    ]
-    duplicate_expected = [
-        item
-        for item in results
-        if item.fixture_id in {"longest-substring-self-correction", "two-sum-repeated-concept-wait"}
-    ]
-    leakage = [
-        item
-        for item in results
-        if item.fixture_id
-        in {"two-sum-hash-assumption", "longest-substring-invariant-prove", "stale-code-wait"}
-    ]
+    probes = [item for item in results if item.strategy_applicable]
+    stale_expected = [item for item in results if item.stale_suppression_applicable]
+    duplicate_expected = [item for item in results if item.duplicate_suppression_applicable]
+    leakage = [item for item in results if item.answer_leakage_applicable]
     return {
         "fixtures": len(results),
         "action_correctness": metric(results, lambda item: item.action_correct),

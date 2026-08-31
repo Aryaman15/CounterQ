@@ -20,7 +20,12 @@ from app.ai_gateway.provider import (
     ReasoningProvider,
     ReasoningProviderError,
 )
-from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
+from app.ai_gateway.provider_factory import (
+    ReasoningProviderConfigurationError,
+)
+from app.ai_gateway.provider_factory import (
+    build_reasoning_provider as build_configured_reasoning_provider,
+)
 from app.ai_gateway.structured_output import StrictReasoningOutputModel
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
@@ -68,15 +73,16 @@ class DevelopmentReasoningSmokeResponse(BaseModel):
 
 
 def build_reasoning_provider(settings: Settings) -> ReasoningProvider:
-    if settings.reasoning_provider != "openai":
+    try:
+        return build_configured_reasoning_provider(settings)
+    except ReasoningProviderConfigurationError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
                 "category": "configuration_error",
                 "message": "Configured reasoning provider is unsupported",
             },
-        )
-    return OpenAIReasoningProvider(settings)
+        ) from exc
 
 
 def get_reasoning_provider_builder() -> Callable[[Settings], ReasoningProvider]:

@@ -9,9 +9,25 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
+    "recent_transcript": [],
+    "candidate_statement": null,
+    "code_snapshot": "if (visited[node]) return false; visited[node] = true;",
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-course-schedule-v1",
+      "title": "Course Schedule",
       "statement": "Given numCourses course IDs from 0 through numCourses - 1 and prerequisite pairs [course, prerequisite], return true if every course can be completed. Each pair means prerequisite must be completed before course.",
+      "constraints": {
+        "items": [
+          "1 <= numCourses <= 2000",
+          "0 <= prerequisites.length <= 5000",
+          "Every course ID in prerequisites is between 0 and numCourses - 1."
+        ]
+      },
       "examples": [
         {
           "input": "numCourses = 2, prerequisites = [[1,0]]",
@@ -24,349 +40,402 @@
           "explanation": "The two courses form a directed cycle."
         }
       ],
-      "title": "Course Schedule",
-      "constraints": [
-        "1 <= numCourses <= 2000",
-        "0 <= prerequisites.length <= 5000",
-        "Every course ID in prerequisites is between 0 and numCourses - 1."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 20,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "kahn_indegree_processing",
-            "summary": "Process all zero-indegree courses and remove their outgoing prerequisite edges.",
-            "concept_keys": [
-              "graph_traversal",
-              "topological_sort",
-              "cycle_detection",
-              "bfs"
-            ],
-            "applicability": "Directed prerequisite graphs.",
-            "assumptions": [],
-            "key_invariants": [
-              "Only zero-indegree courses are currently eligible.",
-              "Processing all nodes proves no directed cycle remains."
-            ],
-            "time_complexity": "O(V + E), where V = numCourses and E = prerequisites.length",
-            "space_complexity": "O(V + E) for adjacency, indegree, and the zero-indegree queue",
-            "tradeoffs": [
-              "Needs adjacency and indegree structures."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "reverse edge direction without changing indegree",
-              "accepting partial processing"
-            ]
-          },
-          {
-            "approach_id": "dfs_active_path_cycle_detection",
-            "summary": "Detect a node encountered on the current DFS path.",
-            "concept_keys": [
-              "graph_traversal",
-              "dfs",
-              "cycle_detection"
-            ],
-            "applicability": "Directed cycle detection.",
-            "assumptions": [],
-            "key_invariants": [
-              "UNVISITED nodes have not been explored, ACTIVE nodes are on the current recursion path, and FINISHED nodes are fully explored.",
-              "Revisiting ACTIVE proves a directed cycle; reaching FINISHED does not."
-            ],
-            "time_complexity": "O(V + E), where V = numCourses and E = prerequisites.length",
-            "space_complexity": "O(V + E) for adjacency and traversal state, including an O(V) worst-case recursion stack",
-            "tradeoffs": [
-              "Requires distinguishing active state from finished visitation."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "confusing visited with active"
-            ]
-          }
-        ],
-        "alternative_approaches": [],
-        "reference_solutions": [
-          {
-            "approach_id": "kahn_indegree_processing",
-            "language": "cpp",
-            "source_code": "class Solution { public: bool canFinish(int n,vector<vector<int>> p){vector<vector<int>> g(n);vector<int>d(n);for(auto x:p){g[x[1]].push_back(x[0]);d[x[0]]++;}queue<int>q;for(int i=0;i<n;i++)if(!d[i])q.push(i);int done=0;while(!q.empty()){int u=q.front();q.pop();done++;for(int v:g[u])if(!--d[v])q.push(v);}return done==n;} };",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "kahn_indegree_processing",
-            "language": "python",
-            "source_code": "class Solution:\n    def canFinish(self, n, prerequisites):\n        graph=[[] for _ in range(n)]; degree=[0]*n\n        for course, prereq in prerequisites: graph[prereq].append(course); degree[course]+=1\n        queue=[i for i in range(n) if degree[i]==0]; done=0\n        for node in queue:\n            done+=1\n            for nxt in graph[node]:\n                degree[nxt]-=1\n                if degree[nxt]==0: queue.append(nxt)\n        return done==n",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "kahn_indegree_processing",
-            "language": "java",
-            "source_code": "class Solution { public boolean canFinish(int n,int[][] p){java.util.List<Integer>[] g=new java.util.List[n];int[]d=new int[n];for(int i=0;i<n;i++)g[i]=new java.util.ArrayList<>();for(int[]x:p){g[x[1]].add(x[0]);d[x[0]]++;}java.util.ArrayDeque<Integer>q=new java.util.ArrayDeque<>();for(int i=0;i<n;i++)if(d[i]==0)q.add(i);int done=0;while(!q.isEmpty()){int u=q.remove();done++;for(int v:g[u])if(--d[v]==0)q.add(v);}return done==n;} }",
-            "review_status": "REVIEWED"
-          }
-        ],
-        "concepts": [
-          "graph_traversal",
-          "topological_sort",
-          "cycle_detection",
-          "dfs",
-          "bfs"
-        ],
-        "invariants": [
-          {
-            "id": "eligible_zero_indegree",
-            "concept_keys": [
-              "topological_sort"
-            ],
-            "diagnostic_goal": "A zero-indegree course has no remaining prerequisite.",
-            "approach_id": "kahn_indegree_processing"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "nodes_edges_once",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "Each course and prerequisite edge is processed a bounded number of times.",
-            "approach_id": "kahn_indegree_processing"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "partial_is_success",
-            "concept_keys": [
-              "cycle_detection"
-            ],
-            "diagnostic_goal": "Some processable courses do not prove every course can finish.",
-            "counterexample_id": "cycle"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "edge_direction",
-            "concept_keys": [
-              "topological_sort"
-            ],
-            "diagnostic_goal": "Build prerequisite to dependent edges consistently.",
-            "approach_id": "kahn_indegree_processing"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "self_cycle",
-            "concept_keys": [
-              "cycle_detection"
-            ],
-            "diagnostic_goal": "A course requiring itself is impossible.",
-            "counterexample_id": "self_cycle"
-          },
-          {
-            "id": "empty_prerequisites",
-            "concept_keys": [
-              "topological_sort"
-            ],
-            "diagnostic_goal": "With no edges, every course starts at indegree zero."
-          },
-          {
-            "id": "disconnected_cycle",
-            "concept_keys": [
-              "cycle_detection"
-            ],
-            "diagnostic_goal": "A cycle in one disconnected component still prevents completing every course.",
-            "counterexample_id": "disconnected_cycle"
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "cycle",
-            "input": {
-              "numCourses": 2,
-              "prerequisites": [
-                [
-                  1,
-                  0
-                ],
-                [
-                  0,
-                  1
-                ]
-              ]
+        "execution": {
+          "method_name": "canFinish",
+          "arguments": [
+            {
+              "name": "numCourses",
+              "type": "int"
             },
-            "purpose": "No node has zero indegree."
-          },
-          {
-            "id": "self_cycle",
-            "input": {
-              "numCourses": 1,
-              "prerequisites": [
-                [
-                  0,
-                  0
+            {
+              "name": "prerequisites",
+              "type": "int[][]"
+            }
+          ],
+          "return_type": "bool",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "numCourses": 2,
+                "prerequisites": [
+                  [
+                    1,
+                    0
+                  ]
                 ]
-              ]
+              },
+              "expected_output": true
             },
-            "purpose": "A self dependency is a cycle."
-          },
-          {
-            "id": "disconnected_cycle",
-            "input": {
-              "numCourses": 4,
-              "prerequisites": [
-                [
-                  1,
-                  0
-                ],
-                [
-                  2,
-                  3
-                ],
-                [
-                  3,
-                  2
+            {
+              "arguments": {
+                "numCourses": 2,
+                "prerequisites": [
+                  [
+                    1,
+                    0
+                  ],
+                  [
+                    0,
+                    1
+                  ]
                 ]
-              ]
+              },
+              "expected_output": false
             },
-            "purpose": "The processable component 0 to 1 does not hide the cycle between courses 2 and 3."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "return_order",
-            "concept_keys": [
-              "topological_sort"
-            ],
-            "diagnostic_goal": "The same processing can emit one valid ordering."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_all_processed",
-            "concept_keys": [
-              "cycle_detection",
-              "topological_sort"
-            ],
-            "diagnostic_goal": "Defend why processing every node is equivalent to no cycle.",
-            "approach_id": "kahn_indegree_processing",
-            "relevant_strategies": [
-              "PROVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "indegree_meaning",
-            "target_concepts": [
-              "topological_sort"
-            ],
-            "target_approach_id": "kahn_indegree_processing",
-            "trigger_cues": [
-              "uses indegrees"
-            ],
-            "diagnostic_goal": "Test edge direction and eligibility.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "indegree counts remaining prerequisites"
-            ],
-            "weak_or_misconception_signals": [
-              "reverses edges inconsistently"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "What does an indegree of zero mean for a course?"
-            ]
+            {
+              "arguments": {
+                "numCourses": 3,
+                "prerequisites": []
+              },
+              "expected_output": true
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "bool canFinish(int numCourses, vector<vector<int>> prerequisites)",
+            "starter_code": "class Solution { public: bool canFinish(int numCourses, vector<vector<int>> prerequisites) { return false; } };"
           },
-          {
-            "id": "partial_cycle",
-            "target_concepts": [
-              "cycle_detection"
-            ],
-            "target_approach_id": "kahn_indegree_processing",
-            "trigger_cues": [
-              "returns after processing nodes"
-            ],
-            "diagnostic_goal": "Test partial graph cycle handling.",
-            "relevant_strategies": [
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "compares processed count to all courses"
-            ],
-            "weak_or_misconception_signals": [
-              "accepts any processed prefix"
-            ],
-            "counterexample_id": "cycle",
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "TESTING_DEBUGGING"
-            ],
-            "sample_phrasings": [
-              "What must be true about the processed count before you return true?"
-            ]
+          "python": {
+            "display_signature": "def canFinish(self, numCourses: int, prerequisites: list[list[int]]) -> bool",
+            "starter_code": "class Solution:\n    def canFinish(self, numCourses: int, prerequisites: list[list[int]]) -> bool:\n        return False"
           },
-          {
-            "id": "dfs_states",
-            "target_concepts": [
-              "dfs",
-              "cycle_detection"
-            ],
-            "target_approach_id": "dfs_active_path_cycle_detection",
-            "trigger_cues": [
-              "proposes DFS"
-            ],
-            "diagnostic_goal": "Test visited versus active-path state.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "identifies a back edge to active path"
-            ],
-            "weak_or_misconception_signals": [
-              "treats every visited node as a cycle"
-            ],
-            "applicable_levels": [
-              "EARLY_CAREER"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "Why is an active-path revisit different from reaching a finished node?"
-            ]
+          "java": {
+            "display_signature": "boolean canFinish(int numCourses, int[][] prerequisites)",
+            "starter_code": "class Solution { public boolean canFinish(int numCourses, int[][] prerequisites) { return false; } }"
           }
-        ],
-        "level_considerations": [
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Focus on edge direction and complete-processing proof."
-          }
-        ],
-        "reference_reasoning": "Kahn processing and DFS active-path detection are both strong valid priors; other correct directed-cycle methods remain valid."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
-    "recent_transcript": [],
-    "candidate_statement": null,
-    "code_snapshot": "if (visited[node]) return false; visited[node] = true;",
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "kahn_indegree_processing",
+          "summary": "Process all zero-indegree courses and remove their outgoing prerequisite edges.",
+          "concept_keys": [
+            "graph_traversal",
+            "topological_sort",
+            "cycle_detection",
+            "bfs"
+          ],
+          "applicability": "Directed prerequisite graphs.",
+          "assumptions": [],
+          "key_invariants": [
+            "Only zero-indegree courses are currently eligible.",
+            "Processing all nodes proves no directed cycle remains."
+          ],
+          "time_complexity": "O(V + E), where V = numCourses and E = prerequisites.length",
+          "space_complexity": "O(V + E) for adjacency, indegree, and the zero-indegree queue",
+          "tradeoffs": [
+            "Needs adjacency and indegree structures."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "reverse edge direction without changing indegree",
+            "accepting partial processing"
+          ]
+        },
+        {
+          "approach_id": "dfs_active_path_cycle_detection",
+          "summary": "Detect a node encountered on the current DFS path.",
+          "concept_keys": [
+            "graph_traversal",
+            "dfs",
+            "cycle_detection"
+          ],
+          "applicability": "Directed cycle detection.",
+          "assumptions": [],
+          "key_invariants": [
+            "UNVISITED nodes have not been explored, ACTIVE nodes are on the current recursion path, and FINISHED nodes are fully explored.",
+            "Revisiting ACTIVE proves a directed cycle; reaching FINISHED does not."
+          ],
+          "time_complexity": "O(V + E), where V = numCourses and E = prerequisites.length",
+          "space_complexity": "O(V + E) for adjacency and traversal state, including an O(V) worst-case recursion stack",
+          "tradeoffs": [
+            "Requires distinguishing active state from finished visitation."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "confusing visited with active"
+          ]
+        }
+      ],
+      "alternative_approaches": [],
+      "reference_solutions": [
+        {
+          "approach_id": "kahn_indegree_processing",
+          "language": "cpp",
+          "source_code": "class Solution { public: bool canFinish(int n,vector<vector<int>> p){vector<vector<int>> g(n);vector<int>d(n);for(auto x:p){g[x[1]].push_back(x[0]);d[x[0]]++;}queue<int>q;for(int i=0;i<n;i++)if(!d[i])q.push(i);int done=0;while(!q.empty()){int u=q.front();q.pop();done++;for(int v:g[u])if(!--d[v])q.push(v);}return done==n;} };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "kahn_indegree_processing",
+          "language": "python",
+          "source_code": "class Solution:\n    def canFinish(self, n, prerequisites):\n        graph=[[] for _ in range(n)]; degree=[0]*n\n        for course, prereq in prerequisites: graph[prereq].append(course); degree[course]+=1\n        queue=[i for i in range(n) if degree[i]==0]; done=0\n        for node in queue:\n            done+=1\n            for nxt in graph[node]:\n                degree[nxt]-=1\n                if degree[nxt]==0: queue.append(nxt)\n        return done==n",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "kahn_indegree_processing",
+          "language": "java",
+          "source_code": "class Solution { public boolean canFinish(int n,int[][] p){java.util.List<Integer>[] g=new java.util.List[n];int[]d=new int[n];for(int i=0;i<n;i++)g[i]=new java.util.ArrayList<>();for(int[]x:p){g[x[1]].add(x[0]);d[x[0]]++;}java.util.ArrayDeque<Integer>q=new java.util.ArrayDeque<>();for(int i=0;i<n;i++)if(d[i]==0)q.add(i);int done=0;while(!q.isEmpty()){int u=q.remove();done++;for(int v:g[u])if(--d[v]==0)q.add(v);}return done==n;} }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "graph_traversal",
+        "topological_sort",
+        "cycle_detection",
+        "dfs",
+        "bfs"
+      ],
+      "invariants": [
+        {
+          "id": "eligible_zero_indegree",
+          "concept_keys": [
+            "topological_sort"
+          ],
+          "diagnostic_goal": "A zero-indegree course has no remaining prerequisite.",
+          "approach_id": "kahn_indegree_processing"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "nodes_edges_once",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Each course and prerequisite edge is processed a bounded number of times.",
+          "approach_id": "kahn_indegree_processing"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "partial_is_success",
+          "concept_keys": [
+            "cycle_detection"
+          ],
+          "diagnostic_goal": "Some processable courses do not prove every course can finish.",
+          "counterexample_id": "cycle"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "edge_direction",
+          "concept_keys": [
+            "topological_sort"
+          ],
+          "diagnostic_goal": "Build prerequisite to dependent edges consistently.",
+          "approach_id": "kahn_indegree_processing"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "self_cycle",
+          "concept_keys": [
+            "cycle_detection"
+          ],
+          "diagnostic_goal": "A course requiring itself is impossible.",
+          "counterexample_id": "self_cycle"
+        },
+        {
+          "id": "empty_prerequisites",
+          "concept_keys": [
+            "topological_sort"
+          ],
+          "diagnostic_goal": "With no edges, every course starts at indegree zero."
+        },
+        {
+          "id": "disconnected_cycle",
+          "concept_keys": [
+            "cycle_detection"
+          ],
+          "diagnostic_goal": "A cycle in one disconnected component still prevents completing every course.",
+          "counterexample_id": "disconnected_cycle"
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "cycle",
+          "input": {
+            "numCourses": 2,
+            "prerequisites": [
+              [
+                1,
+                0
+              ],
+              [
+                0,
+                1
+              ]
+            ]
+          },
+          "purpose": "No node has zero indegree."
+        },
+        {
+          "id": "self_cycle",
+          "input": {
+            "numCourses": 1,
+            "prerequisites": [
+              [
+                0,
+                0
+              ]
+            ]
+          },
+          "purpose": "A self dependency is a cycle."
+        },
+        {
+          "id": "disconnected_cycle",
+          "input": {
+            "numCourses": 4,
+            "prerequisites": [
+              [
+                1,
+                0
+              ],
+              [
+                2,
+                3
+              ],
+              [
+                3,
+                2
+              ]
+            ]
+          },
+          "purpose": "The processable component 0 to 1 does not hide the cycle between courses 2 and 3."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "return_order",
+          "concept_keys": [
+            "topological_sort"
+          ],
+          "diagnostic_goal": "The same processing can emit one valid ordering."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_all_processed",
+          "concept_keys": [
+            "cycle_detection",
+            "topological_sort"
+          ],
+          "diagnostic_goal": "Defend why processing every node is equivalent to no cycle.",
+          "approach_id": "kahn_indegree_processing",
+          "relevant_strategies": [
+            "PROVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "indegree_meaning",
+          "target_concepts": [
+            "topological_sort"
+          ],
+          "target_approach_id": "kahn_indegree_processing",
+          "trigger_cues": [
+            "uses indegrees"
+          ],
+          "diagnostic_goal": "Test edge direction and eligibility.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "indegree counts remaining prerequisites"
+          ],
+          "weak_or_misconception_signals": [
+            "reverses edges inconsistently"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "What does an indegree of zero mean for a course?"
+          ]
+        },
+        {
+          "id": "partial_cycle",
+          "target_concepts": [
+            "cycle_detection"
+          ],
+          "target_approach_id": "kahn_indegree_processing",
+          "trigger_cues": [
+            "returns after processing nodes"
+          ],
+          "diagnostic_goal": "Test partial graph cycle handling.",
+          "relevant_strategies": [
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "compares processed count to all courses"
+          ],
+          "weak_or_misconception_signals": [
+            "accepts any processed prefix"
+          ],
+          "counterexample_id": "cycle",
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "TESTING_DEBUGGING"
+          ],
+          "sample_phrasings": [
+            "What must be true about the processed count before you return true?"
+          ]
+        },
+        {
+          "id": "dfs_states",
+          "target_concepts": [
+            "dfs",
+            "cycle_detection"
+          ],
+          "target_approach_id": "dfs_active_path_cycle_detection",
+          "trigger_cues": [
+            "proposes DFS"
+          ],
+          "diagnostic_goal": "Test visited versus active-path state.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "identifies a back edge to active path"
+          ],
+          "weak_or_misconception_signals": [
+            "treats every visited node as a cycle"
+          ],
+          "applicable_levels": [
+            "EARLY_CAREER"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "Why is an active-path revisit different from reaching a finished node?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Focus on edge direction and complete-processing proof."
+        }
+      ],
+      "reference_reasoning": "Kahn processing and DFS active-path detection are both strong valid priors; other correct directed-cycle methods remain valid."
+    }
   },
   "expectations": {
     "expected_action": "PROBE",

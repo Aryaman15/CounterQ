@@ -7,13 +7,29 @@
     "state": "WRAP_UP",
     "time_context": {
       "source_state_version": 4,
-      "remaining_seconds": 600,
+      "remaining_seconds": 90,
       "current_state_version": 5
     },
     "remaining_probe_budget": 0,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I would take the larger previous total.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-house-robber-v1",
+      "title": "House Robber",
       "statement": "Given an array nums where nums[i] is the non-negative amount in house i, return the largest amount obtainable without selecting two adjacent houses.",
+      "constraints": {
+        "items": [
+          "0 <= nums.length <= 100000",
+          "0 <= nums[i] <= 10000",
+          "Houses are arranged in a line, not a circle."
+        ]
+      },
       "examples": [
         {
           "input": "nums = [1,2,3,1]",
@@ -26,299 +42,342 @@
           "explanation": "Select amounts 2, 9, and 1."
         }
       ],
-      "title": "House Robber",
-      "constraints": [
-        "0 <= nums.length <= 100000",
-        "0 <= nums[i] <= 10000",
-        "Houses are arranged in a line, not a circle."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 17,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "rolling_prefix_dp",
-            "summary": "For each house, choose the better of skipping it or taking it plus the best prefix ending two houses earlier.",
-            "concept_keys": [
-              "dynamic_programming",
-              "dynamic_programming_state",
-              "arrays",
-              "space_complexity"
-            ],
-            "applicability": "Linearly arranged houses with non-negative values and adjacency exclusion.",
-            "assumptions": [],
-            "key_invariants": [
-              "Before processing house i, prev1 is the optimum over houses 0 through i - 1.",
-              "Before processing house i, prev2 is the optimum over houses 0 through i - 2; current = max(prev1, prev2 + nums[i]) is computed before shifting either state."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(1)",
-            "tradeoffs": [
-              "Rolling values save DP-array storage but need simultaneous-state update discipline."
-            ],
-            "common_implementation_variants": [
-              "explicit dp array"
-            ],
-            "common_failure_modes": [
-              "greedy neighbor choice",
-              "overwriting prev2 before using it"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "explicit_dp_array",
-            "summary": "Store the best feasible amount for every prefix.",
-            "concept_keys": [
-              "dynamic_programming",
-              "dynamic_programming_state"
-            ],
-            "applicability": "When the recurrence is easier to inspect as an array.",
-            "assumptions": [],
-            "key_invariants": [
-              "dp[i] is the best result through house i."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Clearer state history but unnecessary storage for the base output."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "bad small-array initialization"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "rolling_prefix_dp",
-            "language": "cpp",
-            "source_code": "class Solution { public: int rob(vector<int> nums){int prev2=0,prev1=0;for(int value:nums){int current=max(prev1,prev2+value);prev2=prev1;prev1=current;}return prev1;} };",
-            "review_status": "REVIEWED"
+        "execution": {
+          "method_name": "rob",
+          "arguments": [
+            {
+              "name": "nums",
+              "type": "int[]"
+            }
+          ],
+          "return_type": "int",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "nums": [
+                  1,
+                  2,
+                  3,
+                  1
+                ]
+              },
+              "expected_output": 4
+            },
+            {
+              "arguments": {
+                "nums": [
+                  2,
+                  7,
+                  9,
+                  3,
+                  1
+                ]
+              },
+              "expected_output": 12
+            },
+            {
+              "arguments": {
+                "nums": []
+              },
+              "expected_output": 0
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "int rob(vector<int> nums)",
+            "starter_code": "class Solution { public: int rob(vector<int> nums) { return 0; } };"
           },
-          {
-            "approach_id": "rolling_prefix_dp",
-            "language": "python",
-            "source_code": "class Solution:\n    def rob(self, nums):\n        prev2 = prev1 = 0\n        for value in nums:\n            prev2, prev1 = prev1, max(prev1, prev2 + value)\n        return prev1",
-            "review_status": "REVIEWED"
+          "python": {
+            "display_signature": "def rob(self, nums: list[int]) -> int",
+            "starter_code": "class Solution:\n    def rob(self, nums: list[int]) -> int:\n        return 0"
           },
-          {
-            "approach_id": "rolling_prefix_dp",
-            "language": "java",
-            "source_code": "class Solution { public int rob(int[] nums){int prev2=0,prev1=0;for(int value:nums){int current=Math.max(prev1,prev2+value);prev2=prev1;prev1=current;}return prev1;} }",
-            "review_status": "REVIEWED"
+          "java": {
+            "display_signature": "int rob(int[] nums)",
+            "starter_code": "class Solution { public int rob(int[] nums) { return 0; } }"
           }
-        ],
-        "concepts": [
-          "dynamic_programming",
-          "dynamic_programming_state",
-          "arrays",
-          "space_complexity"
-        ],
-        "invariants": [
-          {
-            "id": "best_prefix_choice",
-            "concept_keys": [
-              "dynamic_programming_state"
-            ],
-            "diagnostic_goal": "Each prefix optimum either skips current or takes it with the non-adjacent prefix optimum.",
-            "counterexample_id": "greedy_failure",
-            "approach_id": "rolling_prefix_dp"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "two_state_space",
-            "concept_keys": [
-              "space_complexity"
-            ],
-            "diagnostic_goal": "Only two prior prefix states are needed.",
-            "approach_id": "rolling_prefix_dp"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "local_largest_greedy",
-            "concept_keys": [
-              "dynamic_programming"
-            ],
-            "diagnostic_goal": "A locally larger neighbor need not give the global optimum.",
-            "counterexample_id": "greedy_failure"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "adjacent_take",
-            "concept_keys": [
-              "dynamic_programming_state"
-            ],
-            "diagnostic_goal": "Taking current must use the state two positions back.",
-            "approach_id": "rolling_prefix_dp"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "empty_houses",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "No houses yield zero."
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "greedy_failure",
-            "input": [
-              2,
-              3,
-              2
-            ],
-            "purpose": "Choosing the locally largest house 3 yields 3, while the two non-adjacent houses of value 2 yield 4."
-          },
-          {
-            "id": "two_houses",
-            "input": [
-              2,
-              1
-            ],
-            "purpose": "Tests the smallest adjacent choice."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "circular_houses",
-            "concept_keys": [
-              "dynamic_programming_state"
-            ],
-            "diagnostic_goal": "A circle requires separating cases that include or exclude the first house."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_recurrence",
-            "concept_keys": [
-              "dynamic_programming_state"
-            ],
-            "diagnostic_goal": "Defend the two exhaustive decisions at each house.",
-            "approach_id": "rolling_prefix_dp",
-            "relevant_strategies": [
-              "PROVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "state_before_value",
-            "target_concepts": [
-              "dynamic_programming_state"
-            ],
-            "target_approach_id": "rolling_prefix_dp",
-            "trigger_cues": [
-              "uses prev values"
-            ],
-            "diagnostic_goal": "Test rolling-state meaning.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "identifies two prior prefix optima"
-            ],
-            "weak_or_misconception_signals": [
-              "cannot say which prefix each variable covers"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "What do prev2 and prev1 mean before this house is processed?"
-            ]
-          },
-          {
-            "id": "greedy_counterexample",
-            "target_concepts": [
-              "dynamic_programming"
-            ],
-            "target_approach_id": "rolling_prefix_dp",
-            "trigger_cues": [
-              "chooses locally larger values"
-            ],
-            "diagnostic_goal": "Test why greedy is insufficient.",
-            "relevant_strategies": [
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "compares global prefix options"
-            ],
-            "weak_or_misconception_signals": [
-              "commits to a neighbor greedily"
-            ],
-            "counterexample_id": "greedy_failure",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DISCOVERY"
-            ],
-            "sample_phrasings": [
-              "Why is choosing the larger adjacent amount not enough here?"
-            ]
-          },
-          {
-            "id": "circular_mutation",
-            "target_concepts": [
-              "dynamic_programming_state"
-            ],
-            "target_approach_id": "rolling_prefix_dp",
-            "trigger_cues": [
-              "understands line recurrence"
-            ],
-            "diagnostic_goal": "Test circular constraint adaptation.",
-            "relevant_strategies": [
-              "CONSTRAINT_MUTATION"
-            ],
-            "expected_good_signals": [
-              "splits first-included and first-excluded cases"
-            ],
-            "weak_or_misconception_signals": [
-              "uses the line recurrence unchanged"
-            ],
-            "applicable_levels": [
-              "EARLY_CAREER"
-            ],
-            "applicable_stages": [
-              "CONSTRAINT_MUTATION"
-            ],
-            "sample_phrasings": [
-              "What conflict appears if the first and last houses are adjacent?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Focus on recurrence meaning and rolling-state update order."
-          }
-        ],
-        "reference_reasoning": "Rolling DP is a strong prior; explicit DP and other correct formulations remain valid."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I would take the larger previous total.",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "rolling_prefix_dp",
+          "summary": "For each house, choose the better of skipping it or taking it plus the best prefix ending two houses earlier.",
+          "concept_keys": [
+            "dynamic_programming",
+            "dynamic_programming_state",
+            "arrays",
+            "space_complexity"
+          ],
+          "applicability": "Linearly arranged houses with non-negative values and adjacency exclusion.",
+          "assumptions": [],
+          "key_invariants": [
+            "Before processing house i, prev1 is the optimum over houses 0 through i - 1.",
+            "Before processing house i, prev2 is the optimum over houses 0 through i - 2; current = max(prev1, prev2 + nums[i]) is computed before shifting either state."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(1)",
+          "tradeoffs": [
+            "Rolling values save DP-array storage but need simultaneous-state update discipline."
+          ],
+          "common_implementation_variants": [
+            "explicit dp array"
+          ],
+          "common_failure_modes": [
+            "greedy neighbor choice",
+            "overwriting prev2 before using it"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "explicit_dp_array",
+          "summary": "Store the best feasible amount for every prefix.",
+          "concept_keys": [
+            "dynamic_programming",
+            "dynamic_programming_state"
+          ],
+          "applicability": "When the recurrence is easier to inspect as an array.",
+          "assumptions": [],
+          "key_invariants": [
+            "dp[i] is the best result through house i."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Clearer state history but unnecessary storage for the base output."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "bad small-array initialization"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "rolling_prefix_dp",
+          "language": "cpp",
+          "source_code": "class Solution { public: int rob(vector<int> nums){int prev2=0,prev1=0;for(int value:nums){int current=max(prev1,prev2+value);prev2=prev1;prev1=current;}return prev1;} };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "rolling_prefix_dp",
+          "language": "python",
+          "source_code": "class Solution:\n    def rob(self, nums):\n        prev2 = prev1 = 0\n        for value in nums:\n            prev2, prev1 = prev1, max(prev1, prev2 + value)\n        return prev1",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "rolling_prefix_dp",
+          "language": "java",
+          "source_code": "class Solution { public int rob(int[] nums){int prev2=0,prev1=0;for(int value:nums){int current=Math.max(prev1,prev2+value);prev2=prev1;prev1=current;}return prev1;} }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "dynamic_programming",
+        "dynamic_programming_state",
+        "arrays",
+        "space_complexity"
+      ],
+      "invariants": [
+        {
+          "id": "best_prefix_choice",
+          "concept_keys": [
+            "dynamic_programming_state"
+          ],
+          "diagnostic_goal": "Each prefix optimum either skips current or takes it with the non-adjacent prefix optimum.",
+          "counterexample_id": "greedy_failure",
+          "approach_id": "rolling_prefix_dp"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "two_state_space",
+          "concept_keys": [
+            "space_complexity"
+          ],
+          "diagnostic_goal": "Only two prior prefix states are needed.",
+          "approach_id": "rolling_prefix_dp"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "local_largest_greedy",
+          "concept_keys": [
+            "dynamic_programming"
+          ],
+          "diagnostic_goal": "A locally larger neighbor need not give the global optimum.",
+          "counterexample_id": "greedy_failure"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "adjacent_take",
+          "concept_keys": [
+            "dynamic_programming_state"
+          ],
+          "diagnostic_goal": "Taking current must use the state two positions back.",
+          "approach_id": "rolling_prefix_dp"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "empty_houses",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "No houses yield zero."
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "greedy_failure",
+          "input": [
+            2,
+            3,
+            2
+          ],
+          "purpose": "Choosing the locally largest house 3 yields 3, while the two non-adjacent houses of value 2 yield 4."
+        },
+        {
+          "id": "two_houses",
+          "input": [
+            2,
+            1
+          ],
+          "purpose": "Tests the smallest adjacent choice."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "circular_houses",
+          "concept_keys": [
+            "dynamic_programming_state"
+          ],
+          "diagnostic_goal": "A circle requires separating cases that include or exclude the first house."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_recurrence",
+          "concept_keys": [
+            "dynamic_programming_state"
+          ],
+          "diagnostic_goal": "Defend the two exhaustive decisions at each house.",
+          "approach_id": "rolling_prefix_dp",
+          "relevant_strategies": [
+            "PROVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "state_before_value",
+          "target_concepts": [
+            "dynamic_programming_state"
+          ],
+          "target_approach_id": "rolling_prefix_dp",
+          "trigger_cues": [
+            "uses prev values"
+          ],
+          "diagnostic_goal": "Test rolling-state meaning.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "identifies two prior prefix optima"
+          ],
+          "weak_or_misconception_signals": [
+            "cannot say which prefix each variable covers"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "What do prev2 and prev1 mean before this house is processed?"
+          ]
+        },
+        {
+          "id": "greedy_counterexample",
+          "target_concepts": [
+            "dynamic_programming"
+          ],
+          "target_approach_id": "rolling_prefix_dp",
+          "trigger_cues": [
+            "chooses locally larger values"
+          ],
+          "diagnostic_goal": "Test why greedy is insufficient.",
+          "relevant_strategies": [
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "compares global prefix options"
+          ],
+          "weak_or_misconception_signals": [
+            "commits to a neighbor greedily"
+          ],
+          "counterexample_id": "greedy_failure",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DISCOVERY"
+          ],
+          "sample_phrasings": [
+            "Why is choosing the larger adjacent amount not enough here?"
+          ]
+        },
+        {
+          "id": "circular_mutation",
+          "target_concepts": [
+            "dynamic_programming_state"
+          ],
+          "target_approach_id": "rolling_prefix_dp",
+          "trigger_cues": [
+            "understands line recurrence"
+          ],
+          "diagnostic_goal": "Test circular constraint adaptation.",
+          "relevant_strategies": [
+            "CONSTRAINT_MUTATION"
+          ],
+          "expected_good_signals": [
+            "splits first-included and first-excluded cases"
+          ],
+          "weak_or_misconception_signals": [
+            "uses the line recurrence unchanged"
+          ],
+          "applicable_levels": [
+            "EARLY_CAREER"
+          ],
+          "applicable_stages": [
+            "CONSTRAINT_MUTATION"
+          ],
+          "sample_phrasings": [
+            "What conflict appears if the first and last houses are adjacent?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Focus on recurrence meaning and rolling-state update order."
+        }
+      ],
+      "reference_reasoning": "Rolling DP is a strong prior; explicit DP and other correct formulations remain valid."
+    }
   },
   "expectations": {
     "expected_action": "WAIT",

@@ -9,9 +9,24 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I would move a pointer, but I have not said how I choose which one.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-container-with-most-water-v1",
+      "title": "Container With Most Water",
       "statement": "Given an array height where height[i] is the height of a vertical line at position i, choose two lines that, with the horizontal axis, hold the greatest amount of water. Return that maximum area.",
+      "constraints": {
+        "items": [
+          "2 <= height.length <= 100000",
+          "0 <= height[i] <= 10000"
+        ]
+      },
       "examples": [
         {
           "input": "height = [1,8,6,2,5,4,8,3,7]",
@@ -24,317 +39,367 @@
           "explanation": "The only pair has width 1 and limiting height 1."
         }
       ],
-      "title": "Container With Most Water",
-      "constraints": [
-        "2 <= height.length <= 100000",
-        "0 <= height[i] <= 10000"
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 9,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "shorter_side_two_pointers",
-            "summary": "Start at both ends and move inward only from a shorter boundary after evaluating the area.",
-            "concept_keys": [
-              "two_pointers",
-              "two_pointer_reasoning",
-              "arrays",
-              "time_complexity"
-            ],
-            "applicability": "Ordered positions where area depends on distance and the smaller endpoint height.",
-            "assumptions": [],
-            "key_invariants": [
-              "Discarding the shorter boundary cannot remove a better pair using that boundary because width only decreases and the limiting height cannot improve unless that boundary changes."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(1)",
-            "tradeoffs": [
-              "Requires a proof of the discard rule rather than a greedy height-only intuition."
-            ],
-            "common_implementation_variants": [
-              "move either side on equal heights"
-            ],
-            "common_failure_modes": [
-              "moving the taller side",
-              "using max height instead of min height"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "all_pairs_baseline",
-            "summary": "Evaluate every pair of lines.",
-            "concept_keys": [
-              "arrays",
-              "time_complexity"
-            ],
-            "applicability": "Only small inputs or a correctness baseline.",
-            "assumptions": [],
-            "key_invariants": [
-              "Every possible container pair is examined."
-            ],
-            "time_complexity": "O(n^2)",
-            "space_complexity": "O(1)",
-            "tradeoffs": [
-              "Direct but not suitable for the largest inputs."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "omitting end pairs"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "shorter_side_two_pointers",
-            "language": "cpp",
-            "source_code": "class Solution { public: int maxArea(vector<int> height){ int left=0,right=height.size()-1,best=0; while(left<right){ best=max(best,(right-left)*min(height[left],height[right])); if(height[left]<height[right]) left++; else right--; } return best; } };",
-            "review_status": "REVIEWED"
+        "execution": {
+          "method_name": "maxArea",
+          "arguments": [
+            {
+              "name": "height",
+              "type": "int[]"
+            }
+          ],
+          "return_type": "int",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "height": [
+                  1,
+                  8,
+                  6,
+                  2,
+                  5,
+                  4,
+                  8,
+                  3,
+                  7
+                ]
+              },
+              "expected_output": 49
+            },
+            {
+              "arguments": {
+                "height": [
+                  1,
+                  1
+                ]
+              },
+              "expected_output": 1
+            },
+            {
+              "arguments": {
+                "height": [
+                  1,
+                  2,
+                  1
+                ]
+              },
+              "expected_output": 2
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "int maxArea(vector<int> height)",
+            "starter_code": "class Solution {\npublic:\n    int maxArea(vector<int> height) {\n        return 0;\n    }\n};"
           },
-          {
-            "approach_id": "shorter_side_two_pointers",
-            "language": "python",
-            "source_code": "class Solution:\n    def maxArea(self, height):\n        left, right, best = 0, len(height) - 1, 0\n        while left < right:\n            best = max(best, (right - left) * min(height[left], height[right]))\n            if height[left] < height[right]:\n                left += 1\n            else:\n                right -= 1\n        return best",
-            "review_status": "REVIEWED"
+          "python": {
+            "display_signature": "def maxArea(self, height: list[int]) -> int",
+            "starter_code": "class Solution:\n    def maxArea(self, height: list[int]) -> int:\n        return 0"
           },
-          {
-            "approach_id": "shorter_side_two_pointers",
-            "language": "java",
-            "source_code": "class Solution { public int maxArea(int[] height){ int left=0,right=height.length-1,best=0; while(left<right){best=Math.max(best,(right-left)*Math.min(height[left],height[right])); if(height[left]<height[right]) left++; else right--;} return best; } }",
-            "review_status": "REVIEWED"
+          "java": {
+            "display_signature": "int maxArea(int[] height)",
+            "starter_code": "class Solution {\n    public int maxArea(int[] height) {\n        return 0;\n    }\n}"
           }
-        ],
-        "concepts": [
-          "two_pointers",
-          "two_pointer_reasoning",
-          "arrays",
-          "time_complexity"
-        ],
-        "invariants": [
-          {
-            "id": "shorter_boundary_discard",
-            "concept_keys": [
-              "two_pointer_reasoning"
-            ],
-            "diagnostic_goal": "Moving the shorter line is safe because keeping it only narrows width while retaining the same height limit.",
-            "counterexample_id": "taller_move",
-            "approach_id": "shorter_side_two_pointers"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "one_inward_move",
-            "concept_keys": [
-              "two_pointers",
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Each iteration advances exactly one boundary.",
-            "approach_id": "shorter_side_two_pointers"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "maximize_height_only",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "Area depends on both width and the shorter height.",
-            "counterexample_id": "asymmetric_width"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "move_taller_boundary",
-            "concept_keys": [
-              "two_pointer_reasoning"
-            ],
-            "diagnostic_goal": "Do not discard the boundary that could still improve the limiting height.",
-            "counterexample_id": "taller_move",
-            "approach_id": "shorter_side_two_pointers"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "two_lines",
-            "concept_keys": [
-              "two_pointers"
-            ],
-            "diagnostic_goal": "The only pair must be evaluated."
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "taller_move",
-            "input": [
-              1,
-              2,
-              4,
-              3
-            ],
-            "purpose": "Always moving the taller endpoint discards index 3 immediately and misses the optimal pair at indices 1 and 3."
-          },
-          {
-            "id": "asymmetric_width",
-            "input": [
-              1,
-              10,
-              1,
-              1
-            ],
-            "purpose": "The tallest line does not determine the optimum: the shorter outer lines hold area 3, while any pair using height 10 holds at most area 2."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "equal_heights",
-            "concept_keys": [
-              "two_pointers"
-            ],
-            "diagnostic_goal": "Either boundary may move when heights tie, provided progress is made."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_shorter_discard",
-            "concept_keys": [
-              "two_pointer_reasoning"
-            ],
-            "diagnostic_goal": "Defend the greedy discard argument.",
-            "approach_id": "shorter_side_two_pointers",
-            "relevant_strategies": [
-              "PROVE"
-            ]
-          },
-          {
-            "id": "contrast_quadratic",
-            "concept_keys": [
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Compare exhaustive pairs with the pointer proof.",
-            "approach_id": "all_pairs_baseline",
-            "relevant_strategies": [
-              "COMPLEXITY",
-              "ALTERNATIVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "why_shorter_moves",
-            "target_concepts": [
-              "two_pointer_reasoning"
-            ],
-            "target_approach_id": "shorter_side_two_pointers",
-            "trigger_cues": [
-              "moves one pointer"
-            ],
-            "diagnostic_goal": "Test the discard proof.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "explains width decreases while short height remains limiting"
-            ],
-            "weak_or_misconception_signals": [
-              "moves the taller line by intuition"
-            ],
-            "counterexample_id": "taller_move",
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "Why can no better container still use the shorter boundary?"
-            ]
-          },
-          {
-            "id": "equal_heights_progress",
-            "target_concepts": [
-              "two_pointers"
-            ],
-            "target_approach_id": "shorter_side_two_pointers",
-            "trigger_cues": [
-              "branches on height comparison"
-            ],
-            "diagnostic_goal": "Test equal-height progress.",
-            "relevant_strategies": [
-              "EDGE_CASE",
-              "IMPLEMENTATION_CHOICE"
-            ],
-            "expected_good_signals": [
-              "moves either boundary on equality"
-            ],
-            "weak_or_misconception_signals": [
-              "leaves both pointers unchanged"
-            ],
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "IMPLEMENTATION"
-            ],
-            "sample_phrasings": [
-              "What must happen when both endpoint heights are equal?"
-            ]
-          },
-          {
-            "id": "area_components",
-            "target_concepts": [
-              "arrays"
-            ],
-            "target_approach_id": "shorter_side_two_pointers",
-            "trigger_cues": [
-              "focuses only on height"
-            ],
-            "diagnostic_goal": "Test area derivation.",
-            "relevant_strategies": [
-              "WHY",
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "uses width times minimum height"
-            ],
-            "weak_or_misconception_signals": [
-              "maximizes height alone"
-            ],
-            "counterexample_id": "asymmetric_width",
-            "applicable_levels": [
-              "INTERN"
-            ],
-            "applicable_stages": [
-              "APPROACH_DISCOVERY"
-            ],
-            "sample_phrasings": [
-              "Which two quantities determine the area of a chosen pair?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Prioritize a sound shorter-side discard proof."
-          }
-        ],
-        "reference_reasoning": "Two pointers are the strong prior, but a candidate may use another valid approach if its complexity and correctness are clear."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I would move a pointer, but I have not said how I choose which one.",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "shorter_side_two_pointers",
+          "summary": "Start at both ends and move inward only from a shorter boundary after evaluating the area.",
+          "concept_keys": [
+            "two_pointers",
+            "two_pointer_reasoning",
+            "arrays",
+            "time_complexity"
+          ],
+          "applicability": "Ordered positions where area depends on distance and the smaller endpoint height.",
+          "assumptions": [],
+          "key_invariants": [
+            "Discarding the shorter boundary cannot remove a better pair using that boundary because width only decreases and the limiting height cannot improve unless that boundary changes."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(1)",
+          "tradeoffs": [
+            "Requires a proof of the discard rule rather than a greedy height-only intuition."
+          ],
+          "common_implementation_variants": [
+            "move either side on equal heights"
+          ],
+          "common_failure_modes": [
+            "moving the taller side",
+            "using max height instead of min height"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "all_pairs_baseline",
+          "summary": "Evaluate every pair of lines.",
+          "concept_keys": [
+            "arrays",
+            "time_complexity"
+          ],
+          "applicability": "Only small inputs or a correctness baseline.",
+          "assumptions": [],
+          "key_invariants": [
+            "Every possible container pair is examined."
+          ],
+          "time_complexity": "O(n^2)",
+          "space_complexity": "O(1)",
+          "tradeoffs": [
+            "Direct but not suitable for the largest inputs."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "omitting end pairs"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "shorter_side_two_pointers",
+          "language": "cpp",
+          "source_code": "class Solution { public: int maxArea(vector<int> height){ int left=0,right=height.size()-1,best=0; while(left<right){ best=max(best,(right-left)*min(height[left],height[right])); if(height[left]<height[right]) left++; else right--; } return best; } };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "shorter_side_two_pointers",
+          "language": "python",
+          "source_code": "class Solution:\n    def maxArea(self, height):\n        left, right, best = 0, len(height) - 1, 0\n        while left < right:\n            best = max(best, (right - left) * min(height[left], height[right]))\n            if height[left] < height[right]:\n                left += 1\n            else:\n                right -= 1\n        return best",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "shorter_side_two_pointers",
+          "language": "java",
+          "source_code": "class Solution { public int maxArea(int[] height){ int left=0,right=height.length-1,best=0; while(left<right){best=Math.max(best,(right-left)*Math.min(height[left],height[right])); if(height[left]<height[right]) left++; else right--;} return best; } }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "two_pointers",
+        "two_pointer_reasoning",
+        "arrays",
+        "time_complexity"
+      ],
+      "invariants": [
+        {
+          "id": "shorter_boundary_discard",
+          "concept_keys": [
+            "two_pointer_reasoning"
+          ],
+          "diagnostic_goal": "Moving the shorter line is safe because keeping it only narrows width while retaining the same height limit.",
+          "counterexample_id": "taller_move",
+          "approach_id": "shorter_side_two_pointers"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "one_inward_move",
+          "concept_keys": [
+            "two_pointers",
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Each iteration advances exactly one boundary.",
+          "approach_id": "shorter_side_two_pointers"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "maximize_height_only",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "Area depends on both width and the shorter height.",
+          "counterexample_id": "asymmetric_width"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "move_taller_boundary",
+          "concept_keys": [
+            "two_pointer_reasoning"
+          ],
+          "diagnostic_goal": "Do not discard the boundary that could still improve the limiting height.",
+          "counterexample_id": "taller_move",
+          "approach_id": "shorter_side_two_pointers"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "two_lines",
+          "concept_keys": [
+            "two_pointers"
+          ],
+          "diagnostic_goal": "The only pair must be evaluated."
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "taller_move",
+          "input": [
+            1,
+            2,
+            4,
+            3
+          ],
+          "purpose": "Always moving the taller endpoint discards index 3 immediately and misses the optimal pair at indices 1 and 3."
+        },
+        {
+          "id": "asymmetric_width",
+          "input": [
+            1,
+            10,
+            1,
+            1
+          ],
+          "purpose": "The tallest line does not determine the optimum: the shorter outer lines hold area 3, while any pair using height 10 holds at most area 2."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "equal_heights",
+          "concept_keys": [
+            "two_pointers"
+          ],
+          "diagnostic_goal": "Either boundary may move when heights tie, provided progress is made."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_shorter_discard",
+          "concept_keys": [
+            "two_pointer_reasoning"
+          ],
+          "diagnostic_goal": "Defend the greedy discard argument.",
+          "approach_id": "shorter_side_two_pointers",
+          "relevant_strategies": [
+            "PROVE"
+          ]
+        },
+        {
+          "id": "contrast_quadratic",
+          "concept_keys": [
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Compare exhaustive pairs with the pointer proof.",
+          "approach_id": "all_pairs_baseline",
+          "relevant_strategies": [
+            "COMPLEXITY",
+            "ALTERNATIVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "why_shorter_moves",
+          "target_concepts": [
+            "two_pointer_reasoning"
+          ],
+          "target_approach_id": "shorter_side_two_pointers",
+          "trigger_cues": [
+            "moves one pointer"
+          ],
+          "diagnostic_goal": "Test the discard proof.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "explains width decreases while short height remains limiting"
+          ],
+          "weak_or_misconception_signals": [
+            "moves the taller line by intuition"
+          ],
+          "counterexample_id": "taller_move",
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "Why can no better container still use the shorter boundary?"
+          ]
+        },
+        {
+          "id": "equal_heights_progress",
+          "target_concepts": [
+            "two_pointers"
+          ],
+          "target_approach_id": "shorter_side_two_pointers",
+          "trigger_cues": [
+            "branches on height comparison"
+          ],
+          "diagnostic_goal": "Test equal-height progress.",
+          "relevant_strategies": [
+            "EDGE_CASE",
+            "IMPLEMENTATION_CHOICE"
+          ],
+          "expected_good_signals": [
+            "moves either boundary on equality"
+          ],
+          "weak_or_misconception_signals": [
+            "leaves both pointers unchanged"
+          ],
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "IMPLEMENTATION"
+          ],
+          "sample_phrasings": [
+            "What must happen when both endpoint heights are equal?"
+          ]
+        },
+        {
+          "id": "area_components",
+          "target_concepts": [
+            "arrays"
+          ],
+          "target_approach_id": "shorter_side_two_pointers",
+          "trigger_cues": [
+            "focuses only on height"
+          ],
+          "diagnostic_goal": "Test area derivation.",
+          "relevant_strategies": [
+            "WHY",
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "uses width times minimum height"
+          ],
+          "weak_or_misconception_signals": [
+            "maximizes height alone"
+          ],
+          "counterexample_id": "asymmetric_width",
+          "applicable_levels": [
+            "INTERN"
+          ],
+          "applicable_stages": [
+            "APPROACH_DISCOVERY"
+          ],
+          "sample_phrasings": [
+            "Which two quantities determine the area of a chosen pair?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Prioritize a sound shorter-side discard proof."
+        }
+      ],
+      "reference_reasoning": "Two pointers are the strong prior, but a candidate may use another valid approach if its complexity and correctness are clear."
+    }
   },
   "expectations": {
     "expected_action": "ASK",
@@ -359,10 +424,11 @@
     "label_sentinel": "EVAL_ONLY_CONTAINER_WATER_ASK_OBJECTIVE"
   },
   "review": {
-    "description": "A missing objective detail calls for an informational ASK, not a technical probe.",
-    "manual_review_notes": null,
+    "description": "The candidate has not explained the pointer-movement criterion, so a neutral ASK is needed before judgment.",
+    "manual_review_notes": "ASK requests missing candidate reasoning; it does not answer a factual problem question.",
     "tags": [
-      "ask"
+      "ask",
+      "missing-candidate-reasoning"
     ],
     "requires_manual_technical_review": false,
     "requires_candidate_specificity_review": false

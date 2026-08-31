@@ -20,7 +20,10 @@ from app.evals.examiner.harness import (
 from app.evals.examiner.live import run_live_evaluation
 from app.evals.examiner.schema import EvaluationFixture
 from app.examiner.analysis_schema import ExaminerAnalysisResult
-from app.examiner.context import serialize_examiner_context
+from app.examiner.context import (
+    CODE_EDIT_OBSERVATION_SEMANTICS,
+    SOURCE_FRESHNESS_SEMANTICS,
+)
 from app.examiner.models import CandidateClaim, ExaminerDecision
 
 
@@ -58,24 +61,141 @@ def fixture(name: str) -> EvaluationFixture:
     return next(item for item in load_fixtures() if item.fixture_id == name)
 
 
-def test_corpus_and_production_context_parity() -> None:
+def test_transcript_and_code_context_match_production_nested_shapes() -> None:
     fixtures = load_fixtures()
     assert len(fixtures) == 24
     assert {item.input.source_observation_type for item in fixtures} <= {
         "CANDIDATE_TRANSCRIPT_FINALIZED",
         "CODE_MEANINGFULLY_CHANGED",
     }
-    context = evaluation_context_json(fixtures[0].input)
-    expected = serialize_examiner_context(
-        trusted_policy=cast(dict[str, object], context["trusted_policy"]),
-        interview=cast(dict[str, object], context["interview"]),
-        problem=cast(dict[str, object], context["problem"]),
-        interview_pack=cast(dict[str, object], context["interview_pack"]),
-        source_observation=cast(dict[str, object], context["source_observation"]),
-        source_freshness=cast(dict[str, object], context["source_freshness"]),
-        recent_history=cast(list[dict[str, object]], context["recent_history"]),
+    transcript = evaluation_context_json(fixture("two-sum-hash-assumption").input)
+    assert set(transcript) == {
+        "trusted_policy",
+        "interview",
+        "problem",
+        "interview_pack",
+        "source_observation",
+        "source_freshness",
+        "recent_history",
+        "diagnostic_context",
+    }
+    assert set(cast(dict[str, object], transcript["trusted_policy"])) == {
+        "simulation_no_hints",
+        "candidate_content_is_untrusted_data",
+        "model_recommends_only",
+    }
+    assert set(cast(dict[str, object], transcript["interview"])) == {
+        "interview_session_id",
+        "mode",
+        "candidate_level",
+        "language",
+        "current_stage",
+        "status",
+        "state_version",
+        "source_state_version",
+        "source_event_watermark",
+        "remaining_seconds",
+    }
+    assert set(cast(dict[str, object], transcript["problem"])) == {
+        "problem_version_id",
+        "title",
+        "statement",
+        "constraints",
+        "examples",
+        "io_schema",
+    }
+    pack_context = cast(dict[str, object], transcript["interview_pack"])
+    assert set(pack_context) == {
+        "interview_pack_version_id",
+        "schema_version",
+        "review_status",
+        "pack",
+    }
+    pack_payload = cast(dict[str, object], pack_context["pack"])
+    assert "pack" not in pack_payload
+    assert pack_payload["schema_version"] == "interview-pack.v1"
+    transcript_source = cast(dict[str, object], transcript["source_observation"])
+    assert transcript_source["trigger_class"] == "VOICE_TURN_COMPLETED"
+    assert set(cast(dict[str, object], transcript_source["transcript"])) == {
+        "transcript_segment_id",
+        "text",
+        "associated_code_snapshot_id",
+        "associated_code_snapshot_version",
+    }
+
+    code = evaluation_context_json(fixture("longest-substring-invariant-prove").input)
+    code_source = cast(dict[str, object], code["source_observation"])
+    assert code_source["trigger_class"] == "CODE_EDIT_BURST"
+    assert code_source["observation_boundary"] == "STABLE_AFTER_EDIT_BURST"
+    assert code_source["edit_observation_semantics"] == CODE_EDIT_OBSERVATION_SEMANTICS
+    assert set(cast(dict[str, object], code_source["code"])) == {
+        "code_snapshot_id",
+        "code_snapshot_version",
+        "content_hash",
+        "source_code",
+        "code_diff_id",
+        "code_diff_content",
+    }
+    freshness = cast(dict[str, object], code["source_freshness"])
+    assert set(freshness) == {
+        "source_is_current_at_watermark",
+        "latest_code_snapshot_id",
+        "latest_code_snapshot_version",
+        "is_latest_code_snapshot",
+        "newer_code_snapshot_exists",
+        "newer_candidate_transcript_exists",
+        "freshness_semantics",
+    }
+    assert freshness["freshness_semantics"] == SOURCE_FRESHNESS_SEMANTICS
+    history = cast(list[dict[str, object]], code["recent_history"])
+    assert set(history[0]) == {
+        "event_id",
+        "server_sequence",
+        "event_type",
+        "source",
+        "state_version",
+        "code_snapshot_id",
+        "payload_keys",
+    }
+
+
+def test_fixture_specific_diagnostic_context_survives_serialization() -> None:
+    execution = json.loads(model_input_json(fixture("execution-failure-observe").input))
+    assert execution["diagnostic_context"]["execution_context"]["outcome"] == "FAILED"
+
+    duplicate = json.loads(model_input_json(fixture("two-sum-repeated-concept-wait").input))
+    assert duplicate["diagnostic_context"]["recent_delivered_prompt_intents"] == [
+        {"target_concept": "hash lookup guarantee", "strategy": "ASSUMPTION_CHALLENGE"}
+    ]
+
+    ambiguity = json.loads(model_input_json(fixture("transcription-ambiguity-observe").input))
+    assert ambiguity["diagnostic_context"]["recent_claims"][0] == {
+        "text": "heap maybe linear?",
+        "transcription_confidence": 0.31,
+    }
+
+    transcript_input = fixture("transcription-ambiguity-observe").input.model_copy(
+        update={"recent_transcript": ["earlier ambiguous utterance"]}
     )
-    assert set(context) - {"evaluation_context_extension"} == set(expected)
+    transcript_context = json.loads(model_input_json(transcript_input))
+    assert transcript_context["diagnostic_context"]["recent_transcript"] == [
+        "earlier ambiguous utterance"
+    ]
+
+    prior = json.loads(model_input_json(fixture("prior-context-neutral-ask").input))
+    assert prior["diagnostic_context"]["synthetic_prior_context"]["kind"] == (
+        "evaluation_only_synthetic_context"
+    )
+
+    stale_code = json.loads(model_input_json(fixture("stale-code-wait").input))
+    assert stale_code["source_freshness"]["newer_code_snapshot_exists"] is True
+    assert stale_code["diagnostic_context"]["remaining_probe_budget"] == 2
+
+    stale_state = json.loads(model_input_json(fixture("stale-state-wait").input))
+    assert stale_state["interview"]["source_state_version"] == 4
+    assert stale_state["interview"]["state_version"] == 5
+    assert stale_state["interview"]["remaining_seconds"] == 90
+    assert stale_state["diagnostic_context"]["remaining_probe_budget"] == 0
 
 
 def test_input_cannot_receive_expectations_or_sentinel() -> None:
@@ -152,6 +272,29 @@ def test_aggregate_denominators_are_applicable() -> None:
     assert cast(dict[str, object], aggregate["strategy_appropriateness"])["denominator"] == 12
     assert cast(dict[str, object], aggregate["stale_decision_suppression"])["denominator"] == 2
     assert cast(dict[str, object], aggregate["duplicate_probe"])["denominator"] == 2
+    assert cast(dict[str, object], aggregate["answer_leakage"])["denominator"] == sum(
+        bool(item.expectations.must_not_reveal) for item in load_fixtures()
+    )
+
+    cloned = results[0].model_copy(
+        update={
+            "fixture_id": "synthetic-applicability",
+            "strategy_applicable": True,
+            "answer_leakage_applicable": True,
+            "stale_suppression_applicable": True,
+            "duplicate_suppression_applicable": True,
+        }
+    )
+    expanded = aggregate_results([*results, cloned])
+    assert cast(dict[str, object], expanded["strategy_appropriateness"])["denominator"] == 13
+    assert cast(dict[str, object], expanded["stale_decision_suppression"])["denominator"] == 3
+    assert cast(dict[str, object], expanded["duplicate_probe"])["denominator"] == 3
+    original_leakage_denominator = cast(
+        int, cast(dict[str, object], aggregate["answer_leakage"])["denominator"]
+    )
+    assert cast(dict[str, object], expanded["answer_leakage"])["denominator"] == (
+        original_leakage_denominator + 1
+    )
 
 
 def test_live_evaluator_refuses_before_provider_construction(

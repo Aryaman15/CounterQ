@@ -9,9 +9,26 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I mark each discovered land cell before exploring neighbors.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-number-of-islands-v2",
+      "title": "Number of Islands",
       "statement": "Given grid, an array of equal-length strings containing only \"0\" and \"1\", return the number of land components. Land cells connect only up, down, left, and right.",
+      "constraints": {
+        "items": [
+          "0 <= grid.length <= 300",
+          "0 <= grid[i].length <= 300",
+          "All rows have equal length.",
+          "Each character is \"0\" or \"1\"."
+        ]
+      },
       "examples": [
         {
           "input": "grid = [\"11110\", \"11010\", \"11000\", \"00000\"]",
@@ -24,303 +41,347 @@
           "explanation": "The land forms three separate components."
         }
       ],
-      "title": "Number of Islands",
-      "constraints": [
-        "0 <= grid.length <= 300",
-        "0 <= grid[i].length <= 300",
-        "All rows have equal length.",
-        "Each character is \"0\" or \"1\"."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 19,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "dfs_flood_fill",
-            "summary": "When unvisited land is found, use an explicit stack to traverse and mark its complete four-direction component.",
-            "concept_keys": [
-              "graph_traversal",
-              "dfs",
-              "arrays"
-            ],
-            "applicability": "Finite rectangular grids with orthogonal adjacency.",
-            "assumptions": [],
-            "key_invariants": [
-              "A traversal marks every cell in its component before another count begins."
-            ],
-            "time_complexity": "O(rows * columns)",
-            "space_complexity": "O(rows * columns)",
-            "tradeoffs": [
-              "The explicit stack avoids language call-stack failure while retaining O(rows * columns) worst-case storage."
-            ],
-            "common_implementation_variants": [
-              "recursive DFS only when component depth is safely bounded",
-              "BFS"
-            ],
-            "common_failure_modes": [
-              "diagonal traversal",
-              "marking too late"
-            ]
+        "execution": {
+          "method_name": "numIslands",
+          "arguments": [
+            {
+              "name": "grid",
+              "type": "string[]"
+            }
+          ],
+          "return_type": "int",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "grid": [
+                  "11110",
+                  "11010",
+                  "11000",
+                  "00000"
+                ]
+              },
+              "expected_output": 1
+            },
+            {
+              "arguments": {
+                "grid": [
+                  "11000",
+                  "11000",
+                  "00100",
+                  "00011"
+                ]
+              },
+              "expected_output": 3
+            },
+            {
+              "arguments": {
+                "grid": [
+                  "10",
+                  "01"
+                ]
+              },
+              "expected_output": 2
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "int numIslands(vector<string> grid)",
+            "starter_code": "class Solution { public: int numIslands(vector<string> grid) { return 0; } };"
           },
-          {
-            "approach_id": "bfs_flood_fill",
-            "summary": "Use a queue to mark each discovered component.",
-            "concept_keys": [
-              "graph_traversal",
-              "bfs",
-              "arrays"
-            ],
-            "applicability": "Same grid traversal semantics with explicit queue storage.",
-            "assumptions": [],
-            "key_invariants": [
-              "A cell is marked when enqueued so it enters once."
-            ],
-            "time_complexity": "O(rows * columns)",
-            "space_complexity": "O(rows * columns)",
-            "tradeoffs": [
-              "Avoids recursion depth but maintains a queue."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "enqueueing cells repeatedly"
-            ]
-          }
-        ],
-        "alternative_approaches": [],
-        "reference_solutions": [
-          {
-            "approach_id": "dfs_flood_fill",
-            "language": "cpp",
-            "source_code": "class Solution { public: int numIslands(vector<string> grid){int rows=grid.size(),cols=rows?grid[0].size():0,count=0;const int directions[4][2]={{1,0},{-1,0},{0,1},{0,-1}};for(int r=0;r<rows;r++){for(int c=0;c<cols;c++){if(grid[r][c]!='1')continue;count++;vector<pair<int,int>> stack{{r,c}};grid[r][c]='0';while(!stack.empty()){auto [cr,cc]=stack.back();stack.pop_back();for(auto &direction:directions){int nr=cr+direction[0],nc=cc+direction[1];if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&grid[nr][nc]=='1'){grid[nr][nc]='0';stack.push_back({nr,nc});}}}}}return count;} };",
-            "review_status": "REVIEWED",
-            "implementation_notes": "Iterative DFS marks land when discovered and is safe for a connected component spanning the full candidate grid."
+          "python": {
+            "display_signature": "def numIslands(self, grid: list[str]) -> int",
+            "starter_code": "class Solution:\n    def numIslands(self, grid: list[str]) -> int:\n        return 0"
           },
-          {
-            "approach_id": "dfs_flood_fill",
-            "language": "python",
-            "source_code": "class Solution:\n    def numIslands(self, grid):\n        rows = len(grid)\n        cols = len(grid[0]) if rows else 0\n        seen = set()\n        count = 0\n        for row in range(rows):\n            for col in range(cols):\n                if grid[row][col] != '1' or (row, col) in seen:\n                    continue\n                count += 1\n                seen.add((row, col))\n                stack = [(row, col)]\n                while stack:\n                    current_row, current_col = stack.pop()\n                    for next_row, next_col in ((current_row + 1, current_col), (current_row - 1, current_col), (current_row, current_col + 1), (current_row, current_col - 1)):\n                        if 0 <= next_row < rows and 0 <= next_col < cols and grid[next_row][next_col] == '1' and (next_row, next_col) not in seen:\n                            seen.add((next_row, next_col))\n                            stack.append((next_row, next_col))\n        return count",
-            "review_status": "REVIEWED",
-            "implementation_notes": "Iterative DFS avoids Python recursion-limit failure on a component containing tens of thousands of cells."
-          },
-          {
-            "approach_id": "dfs_flood_fill",
-            "language": "java",
-            "source_code": "class Solution { public int numIslands(String[] grid){int rows=grid.length,cols=rows==0?0:grid[0].length(),count=0;boolean[][] seen=new boolean[rows][cols];int[][] directions={{1,0},{-1,0},{0,1},{0,-1}};for(int r=0;r<rows;r++){for(int c=0;c<cols;c++){if(grid[r].charAt(c)!='1'||seen[r][c])continue;count++;java.util.ArrayDeque<Integer> stack=new java.util.ArrayDeque<>();seen[r][c]=true;stack.push(r*cols+c);while(!stack.isEmpty()){int cell=stack.pop(),cr=cell/cols,cc=cell%cols;for(int[] direction:directions){int nr=cr+direction[0],nc=cc+direction[1];if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&grid[nr].charAt(nc)=='1'&&!seen[nr][nc]){seen[nr][nc]=true;stack.push(nr*cols+nc);}}}}}return count;} }",
-            "review_status": "REVIEWED",
-            "implementation_notes": "Iterative DFS marks before pushing, preventing duplicate work and avoiding JVM call-stack depth limits."
+          "java": {
+            "display_signature": "int numIslands(String[] grid)",
+            "starter_code": "class Solution { public int numIslands(String[] grid) { return 0; } }"
           }
-        ],
-        "concepts": [
-          "graph_traversal",
-          "dfs",
-          "bfs",
-          "arrays"
-        ],
-        "invariants": [
-          {
-            "id": "component_marked_once",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "A counted component cannot seed another island count.",
-            "counterexample_id": "diagonal",
-            "approach_id": "dfs_flood_fill"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "each_cell_once",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "Each cell is visited at most once.",
-            "approach_id": "dfs_flood_fill"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "diagonal_connection",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "Diagonal land does not connect.",
-            "counterexample_id": "diagonal"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "mark_after_enqueue",
-            "concept_keys": [
-              "bfs"
-            ],
-            "diagnostic_goal": "Mark upon discovery to avoid repeat work.",
-            "approach_id": "bfs_flood_fill"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "all_water",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "Water never starts traversal."
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "diagonal",
-            "input": [
-              "10",
-              "01"
-            ],
-            "purpose": "Diagonal cells are two islands."
-          },
-          {
-            "id": "all_water",
-            "input": [
-              "00",
-              "00"
-            ],
-            "purpose": "No component exists."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "diagonal_adjacency",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "Adding diagonal neighbors changes the traversal neighborhood."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_component_count",
-            "concept_keys": [
-              "graph_traversal"
-            ],
-            "diagnostic_goal": "Defend why counting begins exactly once per component.",
-            "approach_id": "dfs_flood_fill",
-            "relevant_strategies": [
-              "PROVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "count_trigger",
-            "target_concepts": [
-              "graph_traversal"
-            ],
-            "target_approach_id": "dfs_flood_fill",
-            "trigger_cues": [
-              "increments count"
-            ],
-            "diagnostic_goal": "Test component discovery.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "increments only for unvisited land"
-            ],
-            "weak_or_misconception_signals": [
-              "counts every land cell"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "IMPLEMENTATION"
-            ],
-            "sample_phrasings": [
-              "What exact condition begins a new island count?"
-            ]
-          },
-          {
-            "id": "diagonal_rule",
-            "target_concepts": [
-              "graph_traversal"
-            ],
-            "target_approach_id": "dfs_flood_fill",
-            "trigger_cues": [
-              "lists neighbors"
-            ],
-            "diagnostic_goal": "Test adjacency semantics.",
-            "relevant_strategies": [
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "uses only four directions"
-            ],
-            "weak_or_misconception_signals": [
-              "connects diagonal land"
-            ],
-            "counterexample_id": "diagonal",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "TESTING_DEBUGGING"
-            ],
-            "sample_phrasings": [
-              "How many islands are in [10,01] under this definition?"
-            ]
-          },
-          {
-            "id": "dfs_bfs_tradeoff",
-            "target_concepts": [
-              "dfs",
-              "bfs"
-            ],
-            "target_approach_id": "bfs_flood_fill",
-            "trigger_cues": [
-              "chooses traversal"
-            ],
-            "diagnostic_goal": "Compare recursion and queue storage.",
-            "relevant_strategies": [
-              "TRADE_OFF",
-              "ALTERNATIVE"
-            ],
-            "expected_good_signals": [
-              "mentions recursive depth risk"
-            ],
-            "weak_or_misconception_signals": [
-              "claims no resource difference"
-            ],
-            "applicable_levels": [
-              "EARLY_CAREER"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "Why might you prefer iterative traversal for a very large island?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Focus on visited timing and four-direction connectivity."
-          }
-        ],
-        "reference_reasoning": "DFS and BFS flood fill are both strong valid priors; other correct component-traversal methods remain valid."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I mark each discovered land cell before exploring neighbors.",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "dfs_flood_fill",
+          "summary": "When unvisited land is found, use an explicit stack to traverse and mark its complete four-direction component.",
+          "concept_keys": [
+            "graph_traversal",
+            "dfs",
+            "arrays"
+          ],
+          "applicability": "Finite rectangular grids with orthogonal adjacency.",
+          "assumptions": [],
+          "key_invariants": [
+            "A traversal marks every cell in its component before another count begins."
+          ],
+          "time_complexity": "O(rows * columns)",
+          "space_complexity": "O(rows * columns)",
+          "tradeoffs": [
+            "The explicit stack avoids language call-stack failure while retaining O(rows * columns) worst-case storage."
+          ],
+          "common_implementation_variants": [
+            "recursive DFS only when component depth is safely bounded",
+            "BFS"
+          ],
+          "common_failure_modes": [
+            "diagonal traversal",
+            "marking too late"
+          ]
+        },
+        {
+          "approach_id": "bfs_flood_fill",
+          "summary": "Use a queue to mark each discovered component.",
+          "concept_keys": [
+            "graph_traversal",
+            "bfs",
+            "arrays"
+          ],
+          "applicability": "Same grid traversal semantics with explicit queue storage.",
+          "assumptions": [],
+          "key_invariants": [
+            "A cell is marked when enqueued so it enters once."
+          ],
+          "time_complexity": "O(rows * columns)",
+          "space_complexity": "O(rows * columns)",
+          "tradeoffs": [
+            "Avoids recursion depth but maintains a queue."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "enqueueing cells repeatedly"
+          ]
+        }
+      ],
+      "alternative_approaches": [],
+      "reference_solutions": [
+        {
+          "approach_id": "dfs_flood_fill",
+          "language": "cpp",
+          "source_code": "class Solution { public: int numIslands(vector<string> grid){int rows=grid.size(),cols=rows?grid[0].size():0,count=0;const int directions[4][2]={{1,0},{-1,0},{0,1},{0,-1}};for(int r=0;r<rows;r++){for(int c=0;c<cols;c++){if(grid[r][c]!='1')continue;count++;vector<pair<int,int>> stack{{r,c}};grid[r][c]='0';while(!stack.empty()){auto [cr,cc]=stack.back();stack.pop_back();for(auto &direction:directions){int nr=cr+direction[0],nc=cc+direction[1];if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&grid[nr][nc]=='1'){grid[nr][nc]='0';stack.push_back({nr,nc});}}}}}return count;} };",
+          "review_status": "REVIEWED",
+          "implementation_notes": "Iterative DFS marks land when discovered and is safe for a connected component spanning the full candidate grid."
+        },
+        {
+          "approach_id": "dfs_flood_fill",
+          "language": "python",
+          "source_code": "class Solution:\n    def numIslands(self, grid):\n        rows = len(grid)\n        cols = len(grid[0]) if rows else 0\n        seen = set()\n        count = 0\n        for row in range(rows):\n            for col in range(cols):\n                if grid[row][col] != '1' or (row, col) in seen:\n                    continue\n                count += 1\n                seen.add((row, col))\n                stack = [(row, col)]\n                while stack:\n                    current_row, current_col = stack.pop()\n                    for next_row, next_col in ((current_row + 1, current_col), (current_row - 1, current_col), (current_row, current_col + 1), (current_row, current_col - 1)):\n                        if 0 <= next_row < rows and 0 <= next_col < cols and grid[next_row][next_col] == '1' and (next_row, next_col) not in seen:\n                            seen.add((next_row, next_col))\n                            stack.append((next_row, next_col))\n        return count",
+          "review_status": "REVIEWED",
+          "implementation_notes": "Iterative DFS avoids Python recursion-limit failure on a component containing tens of thousands of cells."
+        },
+        {
+          "approach_id": "dfs_flood_fill",
+          "language": "java",
+          "source_code": "class Solution { public int numIslands(String[] grid){int rows=grid.length,cols=rows==0?0:grid[0].length(),count=0;boolean[][] seen=new boolean[rows][cols];int[][] directions={{1,0},{-1,0},{0,1},{0,-1}};for(int r=0;r<rows;r++){for(int c=0;c<cols;c++){if(grid[r].charAt(c)!='1'||seen[r][c])continue;count++;java.util.ArrayDeque<Integer> stack=new java.util.ArrayDeque<>();seen[r][c]=true;stack.push(r*cols+c);while(!stack.isEmpty()){int cell=stack.pop(),cr=cell/cols,cc=cell%cols;for(int[] direction:directions){int nr=cr+direction[0],nc=cc+direction[1];if(nr>=0&&nr<rows&&nc>=0&&nc<cols&&grid[nr].charAt(nc)=='1'&&!seen[nr][nc]){seen[nr][nc]=true;stack.push(nr*cols+nc);}}}}}return count;} }",
+          "review_status": "REVIEWED",
+          "implementation_notes": "Iterative DFS marks before pushing, preventing duplicate work and avoiding JVM call-stack depth limits."
+        }
+      ],
+      "concepts": [
+        "graph_traversal",
+        "dfs",
+        "bfs",
+        "arrays"
+      ],
+      "invariants": [
+        {
+          "id": "component_marked_once",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "A counted component cannot seed another island count.",
+          "counterexample_id": "diagonal",
+          "approach_id": "dfs_flood_fill"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "each_cell_once",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Each cell is visited at most once.",
+          "approach_id": "dfs_flood_fill"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "diagonal_connection",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Diagonal land does not connect.",
+          "counterexample_id": "diagonal"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "mark_after_enqueue",
+          "concept_keys": [
+            "bfs"
+          ],
+          "diagnostic_goal": "Mark upon discovery to avoid repeat work.",
+          "approach_id": "bfs_flood_fill"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "all_water",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "Water never starts traversal."
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "diagonal",
+          "input": [
+            "10",
+            "01"
+          ],
+          "purpose": "Diagonal cells are two islands."
+        },
+        {
+          "id": "all_water",
+          "input": [
+            "00",
+            "00"
+          ],
+          "purpose": "No component exists."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "diagonal_adjacency",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Adding diagonal neighbors changes the traversal neighborhood."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_component_count",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Defend why counting begins exactly once per component.",
+          "approach_id": "dfs_flood_fill",
+          "relevant_strategies": [
+            "PROVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "count_trigger",
+          "target_concepts": [
+            "graph_traversal"
+          ],
+          "target_approach_id": "dfs_flood_fill",
+          "trigger_cues": [
+            "increments count"
+          ],
+          "diagnostic_goal": "Test component discovery.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "increments only for unvisited land"
+          ],
+          "weak_or_misconception_signals": [
+            "counts every land cell"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "IMPLEMENTATION"
+          ],
+          "sample_phrasings": [
+            "What exact condition begins a new island count?"
+          ]
+        },
+        {
+          "id": "diagonal_rule",
+          "target_concepts": [
+            "graph_traversal"
+          ],
+          "target_approach_id": "dfs_flood_fill",
+          "trigger_cues": [
+            "lists neighbors"
+          ],
+          "diagnostic_goal": "Test adjacency semantics.",
+          "relevant_strategies": [
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "uses only four directions"
+          ],
+          "weak_or_misconception_signals": [
+            "connects diagonal land"
+          ],
+          "counterexample_id": "diagonal",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "TESTING_DEBUGGING"
+          ],
+          "sample_phrasings": [
+            "How many islands are in [10,01] under this definition?"
+          ]
+        },
+        {
+          "id": "dfs_bfs_tradeoff",
+          "target_concepts": [
+            "dfs",
+            "bfs"
+          ],
+          "target_approach_id": "bfs_flood_fill",
+          "trigger_cues": [
+            "chooses traversal"
+          ],
+          "diagnostic_goal": "Compare recursion and queue storage.",
+          "relevant_strategies": [
+            "TRADE_OFF",
+            "ALTERNATIVE"
+          ],
+          "expected_good_signals": [
+            "mentions recursive depth risk"
+          ],
+          "weak_or_misconception_signals": [
+            "claims no resource difference"
+          ],
+          "applicable_levels": [
+            "EARLY_CAREER"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "Why might you prefer iterative traversal for a very large island?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Focus on visited timing and four-direction connectivity."
+        }
+      ],
+      "reference_reasoning": "DFS and BFS flood fill are both strong valid priors; other correct component-traversal methods remain valid."
+    }
   },
   "expectations": {
     "expected_action": "PROBE",

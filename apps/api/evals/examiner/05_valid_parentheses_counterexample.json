@@ -9,9 +9,24 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I only need equal counts of opening and closing brackets.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-valid-parentheses-v2",
+      "title": "Valid Parentheses",
       "statement": "Given a string containing only the characters (, ), [, ], {, and }, return true when every opening bracket is closed by the same bracket type in the correct nesting order.",
+      "constraints": {
+        "items": [
+          "0 <= s.length <= 100000",
+          "s contains only the six bracket characters described above."
+        ]
+      },
       "examples": [
         {
           "input": "s = \"()[]{}\"",
@@ -24,337 +39,370 @@
           "explanation": "The closing parenthesis does not match the most recent opener."
         }
       ],
-      "title": "Valid Parentheses",
-      "constraints": [
-        "0 <= s.length <= 100000",
-        "s contains only the six bracket characters described above."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v2",
+      "io_schema": {
+        "catalog_order": 10,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "expected_closing_stack",
-            "summary": "Push the closing bracket expected for each opener; every closer must match the stack top.",
-            "concept_keys": [
-              "stack",
-              "time_complexity",
-              "space_complexity"
-            ],
-            "applicability": "Properly nested delimiter languages with finitely many bracket types.",
-            "assumptions": [
-              "Input is restricted to supported bracket characters."
-            ],
-            "key_invariants": [
-              "The stack top is the only closing bracket that can legally appear next."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Stores unresolved nesting depth."
-            ],
-            "common_implementation_variants": [
-              "push openers and map closers back to them"
-            ],
-            "common_failure_modes": [
-              "popping an empty stack",
-              "forgetting unmatched openers at the end"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "opening_bracket_stack",
-            "summary": "Push opening brackets and verify each closer against the matching opener.",
-            "concept_keys": [
-              "stack"
-            ],
-            "applicability": "Equivalent stack formulation when a closer-to-opener map is clearer.",
-            "assumptions": [],
-            "key_invariants": [
-              "The stack holds unmatched opening brackets in nesting order."
-            ],
-            "time_complexity": "O(n)",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Needs an explicit matching map on closing input."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "comparing against the wrong mapping direction"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "expected_closing_stack",
-            "language": "cpp",
-            "source_code": "class Solution { public: bool isValid(string s){ vector<char> expected; for(char c:s){ if(c=='(') expected.push_back(')'); else if(c=='[') expected.push_back(']'); else if(c=='{') expected.push_back('}'); else { if(expected.empty()||expected.back()!=c) return false; expected.pop_back(); } } return expected.empty(); } };",
-            "review_status": "REVIEWED"
+        "execution": {
+          "method_name": "isValid",
+          "arguments": [
+            {
+              "name": "s",
+              "type": "string"
+            }
+          ],
+          "return_type": "bool",
+          "comparator": "EXACT",
+          "visible_cases": [
+            {
+              "arguments": {
+                "s": "()[]{}"
+              },
+              "expected_output": true
+            },
+            {
+              "arguments": {
+                "s": "([)]"
+              },
+              "expected_output": false
+            },
+            {
+              "arguments": {
+                "s": "("
+              },
+              "expected_output": false
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "bool isValid(string s)",
+            "starter_code": "class Solution {\npublic:\n    bool isValid(string s) {\n        return false;\n    }\n};"
           },
-          {
-            "approach_id": "expected_closing_stack",
-            "language": "python",
-            "source_code": "class Solution:\n    def isValid(self, s):\n        expected = []\n        pairs = {'(': ')', '[': ']', '{': '}'}\n        for char in s:\n            if char in pairs:\n                expected.append(pairs[char])\n            elif not expected or expected.pop() != char:\n                return False\n        return not expected",
-            "review_status": "REVIEWED"
+          "python": {
+            "display_signature": "def isValid(self, s: str) -> bool",
+            "starter_code": "class Solution:\n    def isValid(self, s: str) -> bool:\n        return False"
           },
-          {
-            "approach_id": "expected_closing_stack",
-            "language": "java",
-            "source_code": "class Solution { public boolean isValid(String s){ java.util.Deque<Character> expected=new java.util.ArrayDeque<>(); for(char c:s.toCharArray()){ if(c=='(') expected.push(')'); else if(c=='[') expected.push(']'); else if(c=='{') expected.push('}'); else { if(expected.isEmpty()||expected.pop()!=c) return false; } } return expected.isEmpty(); } }",
-            "review_status": "REVIEWED"
+          "java": {
+            "display_signature": "boolean isValid(String s)",
+            "starter_code": "class Solution {\n    public boolean isValid(String s) {\n        return false;\n    }\n}"
           }
-        ],
-        "concepts": [
-          "stack",
-          "time_complexity",
-          "space_complexity"
-        ],
-        "invariants": [
-          {
-            "id": "top_is_next_required_closer",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "The top expected closer corresponds to the most recently unmatched opener.",
-            "counterexample_id": "wrong_nesting",
-            "approach_id": "expected_closing_stack"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "each_bracket_once",
-            "concept_keys": [
-              "stack",
-              "time_complexity",
-              "space_complexity"
-            ],
-            "diagnostic_goal": "Explain one push or pop per bracket and the worst-case nesting storage.",
-            "approach_id": "expected_closing_stack"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "equal_counts_suffice",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Balanced totals alone do not prove correct nesting.",
-            "counterexample_id": "wrong_nesting"
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "pop_empty_stack",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Reject a closer before any compatible opener.",
-            "counterexample_id": "premature_closer",
-            "approach_id": "expected_closing_stack"
-          },
-          {
-            "id": "ignore_remaining_openers",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Reject nonempty stack after processing all input.",
-            "counterexample_id": "unmatched_opener",
-            "approach_id": "expected_closing_stack"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "empty_string",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "No unmatched brackets is valid."
-          },
-          {
-            "id": "nested_mismatch",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Reject a closer that violates last-opened-first-closed order.",
-            "counterexample_id": "wrong_nesting"
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "wrong_nesting",
-            "input": "([)]",
-            "purpose": "Equal counts but invalid nesting."
-          },
-          {
-            "id": "premature_closer",
-            "input": ")(",
-            "purpose": "The first closer has no opener."
-          },
-          {
-            "id": "unmatched_opener",
-            "input": "(",
-            "purpose": "Unresolved opening brackets remain at the end."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "additional_delimiter_types",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Extend the mapping while preserving the same nesting invariant."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_lifo_nesting",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Defend why the latest unmatched opener determines the only legal next closer.",
-            "counterexample_id": "wrong_nesting",
-            "approach_id": "expected_closing_stack",
-            "relevant_strategies": [
-              "PROVE",
-              "COUNTEREXAMPLE"
-            ]
-          },
-          {
-            "id": "test_terminal_stack",
-            "concept_keys": [
-              "stack"
-            ],
-            "diagnostic_goal": "Test why an empty final stack is necessary as well as sufficient with per-character checks.",
-            "counterexample_id": "unmatched_opener",
-            "approach_id": "expected_closing_stack",
-            "relevant_strategies": [
-              "PROVE",
-              "EDGE_CASE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "why_top_controls_next",
-            "target_concepts": [
-              "stack"
-            ],
-            "target_approach_id": "expected_closing_stack",
-            "trigger_cues": [
-              "uses a stack"
-            ],
-            "diagnostic_goal": "Test LIFO nesting reasoning.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "identifies most recent unmatched opener"
-            ],
-            "weak_or_misconception_signals": [
-              "checks only total counts"
-            ],
-            "counterexample_id": "wrong_nesting",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "Why must this closing bracket match the most recent opener?"
-            ]
-          },
-          {
-            "id": "premature_closing",
-            "target_concepts": [
-              "stack"
-            ],
-            "target_approach_id": "expected_closing_stack",
-            "trigger_cues": [
-              "pops without an emptiness check"
-            ],
-            "diagnostic_goal": "Test the empty-stack boundary.",
-            "relevant_strategies": [
-              "EDGE_CASE",
-              "COUNTEREXAMPLE"
-            ],
-            "expected_good_signals": [
-              "rejects when no expected closer exists"
-            ],
-            "weak_or_misconception_signals": [
-              "underflows or accepts a premature closer"
-            ],
-            "counterexample_id": "premature_closer",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "TESTING_DEBUGGING"
-            ],
-            "sample_phrasings": [
-              "What does your code do when the first character is a closing bracket?"
-            ]
-          },
-          {
-            "id": "end_state",
-            "target_concepts": [
-              "stack"
-            ],
-            "target_approach_id": "expected_closing_stack",
-            "trigger_cues": [
-              "returns true after scanning"
-            ],
-            "diagnostic_goal": "Test final unresolved-openers handling.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "requires an empty stack at end"
-            ],
-            "weak_or_misconception_signals": [
-              "accepts a string ending with openers"
-            ],
-            "counterexample_id": "unmatched_opener",
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "TESTING_DEBUGGING"
-            ],
-            "sample_phrasings": [
-              "What remaining state must be true after the final character?"
-            ]
-          }
-        ],
-        "level_considerations": [
-          {
-            "level": "INTERN",
-            "guidance": "Focus on matching type and nesting order."
-          },
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Expect a defensible stack invariant and boundary handling."
-          }
-        ],
-        "reference_reasoning": "The expected-closing stack is the reviewed primary formulation, while equivalent opener-stack implementations remain valid when they preserve the same nesting invariant."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I only need equal counts of opening and closing brackets.",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v2",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "expected_closing_stack",
+          "summary": "Push the closing bracket expected for each opener; every closer must match the stack top.",
+          "concept_keys": [
+            "stack",
+            "time_complexity",
+            "space_complexity"
+          ],
+          "applicability": "Properly nested delimiter languages with finitely many bracket types.",
+          "assumptions": [
+            "Input is restricted to supported bracket characters."
+          ],
+          "key_invariants": [
+            "The stack top is the only closing bracket that can legally appear next."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Stores unresolved nesting depth."
+          ],
+          "common_implementation_variants": [
+            "push openers and map closers back to them"
+          ],
+          "common_failure_modes": [
+            "popping an empty stack",
+            "forgetting unmatched openers at the end"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "opening_bracket_stack",
+          "summary": "Push opening brackets and verify each closer against the matching opener.",
+          "concept_keys": [
+            "stack"
+          ],
+          "applicability": "Equivalent stack formulation when a closer-to-opener map is clearer.",
+          "assumptions": [],
+          "key_invariants": [
+            "The stack holds unmatched opening brackets in nesting order."
+          ],
+          "time_complexity": "O(n)",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Needs an explicit matching map on closing input."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "comparing against the wrong mapping direction"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "expected_closing_stack",
+          "language": "cpp",
+          "source_code": "class Solution { public: bool isValid(string s){ vector<char> expected; for(char c:s){ if(c=='(') expected.push_back(')'); else if(c=='[') expected.push_back(']'); else if(c=='{') expected.push_back('}'); else { if(expected.empty()||expected.back()!=c) return false; expected.pop_back(); } } return expected.empty(); } };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "expected_closing_stack",
+          "language": "python",
+          "source_code": "class Solution:\n    def isValid(self, s):\n        expected = []\n        pairs = {'(': ')', '[': ']', '{': '}'}\n        for char in s:\n            if char in pairs:\n                expected.append(pairs[char])\n            elif not expected or expected.pop() != char:\n                return False\n        return not expected",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "expected_closing_stack",
+          "language": "java",
+          "source_code": "class Solution { public boolean isValid(String s){ java.util.Deque<Character> expected=new java.util.ArrayDeque<>(); for(char c:s.toCharArray()){ if(c=='(') expected.push(')'); else if(c=='[') expected.push(']'); else if(c=='{') expected.push('}'); else { if(expected.isEmpty()||expected.pop()!=c) return false; } } return expected.isEmpty(); } }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "stack",
+        "time_complexity",
+        "space_complexity"
+      ],
+      "invariants": [
+        {
+          "id": "top_is_next_required_closer",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "The top expected closer corresponds to the most recently unmatched opener.",
+          "counterexample_id": "wrong_nesting",
+          "approach_id": "expected_closing_stack"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "each_bracket_once",
+          "concept_keys": [
+            "stack",
+            "time_complexity",
+            "space_complexity"
+          ],
+          "diagnostic_goal": "Explain one push or pop per bracket and the worst-case nesting storage.",
+          "approach_id": "expected_closing_stack"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "equal_counts_suffice",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Balanced totals alone do not prove correct nesting.",
+          "counterexample_id": "wrong_nesting"
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "pop_empty_stack",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Reject a closer before any compatible opener.",
+          "counterexample_id": "premature_closer",
+          "approach_id": "expected_closing_stack"
+        },
+        {
+          "id": "ignore_remaining_openers",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Reject nonempty stack after processing all input.",
+          "counterexample_id": "unmatched_opener",
+          "approach_id": "expected_closing_stack"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "empty_string",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "No unmatched brackets is valid."
+        },
+        {
+          "id": "nested_mismatch",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Reject a closer that violates last-opened-first-closed order.",
+          "counterexample_id": "wrong_nesting"
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "wrong_nesting",
+          "input": "([)]",
+          "purpose": "Equal counts but invalid nesting."
+        },
+        {
+          "id": "premature_closer",
+          "input": ")(",
+          "purpose": "The first closer has no opener."
+        },
+        {
+          "id": "unmatched_opener",
+          "input": "(",
+          "purpose": "Unresolved opening brackets remain at the end."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "additional_delimiter_types",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Extend the mapping while preserving the same nesting invariant."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_lifo_nesting",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Defend why the latest unmatched opener determines the only legal next closer.",
+          "counterexample_id": "wrong_nesting",
+          "approach_id": "expected_closing_stack",
+          "relevant_strategies": [
+            "PROVE",
+            "COUNTEREXAMPLE"
+          ]
+        },
+        {
+          "id": "test_terminal_stack",
+          "concept_keys": [
+            "stack"
+          ],
+          "diagnostic_goal": "Test why an empty final stack is necessary as well as sufficient with per-character checks.",
+          "counterexample_id": "unmatched_opener",
+          "approach_id": "expected_closing_stack",
+          "relevant_strategies": [
+            "PROVE",
+            "EDGE_CASE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "why_top_controls_next",
+          "target_concepts": [
+            "stack"
+          ],
+          "target_approach_id": "expected_closing_stack",
+          "trigger_cues": [
+            "uses a stack"
+          ],
+          "diagnostic_goal": "Test LIFO nesting reasoning.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "identifies most recent unmatched opener"
+          ],
+          "weak_or_misconception_signals": [
+            "checks only total counts"
+          ],
+          "counterexample_id": "wrong_nesting",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "Why must this closing bracket match the most recent opener?"
+          ]
+        },
+        {
+          "id": "premature_closing",
+          "target_concepts": [
+            "stack"
+          ],
+          "target_approach_id": "expected_closing_stack",
+          "trigger_cues": [
+            "pops without an emptiness check"
+          ],
+          "diagnostic_goal": "Test the empty-stack boundary.",
+          "relevant_strategies": [
+            "EDGE_CASE",
+            "COUNTEREXAMPLE"
+          ],
+          "expected_good_signals": [
+            "rejects when no expected closer exists"
+          ],
+          "weak_or_misconception_signals": [
+            "underflows or accepts a premature closer"
+          ],
+          "counterexample_id": "premature_closer",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "TESTING_DEBUGGING"
+          ],
+          "sample_phrasings": [
+            "What does your code do when the first character is a closing bracket?"
+          ]
+        },
+        {
+          "id": "end_state",
+          "target_concepts": [
+            "stack"
+          ],
+          "target_approach_id": "expected_closing_stack",
+          "trigger_cues": [
+            "returns true after scanning"
+          ],
+          "diagnostic_goal": "Test final unresolved-openers handling.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "requires an empty stack at end"
+          ],
+          "weak_or_misconception_signals": [
+            "accepts a string ending with openers"
+          ],
+          "counterexample_id": "unmatched_opener",
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "TESTING_DEBUGGING"
+          ],
+          "sample_phrasings": [
+            "What remaining state must be true after the final character?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "INTERN",
+          "guidance": "Focus on matching type and nesting order."
+        },
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Expect a defensible stack invariant and boundary handling."
+        }
+      ],
+      "reference_reasoning": "The expected-closing stack is the reviewed primary formulation, while equivalent opener-stack implementations remain valid when they preserve the same nesting invariant."
+    }
   },
   "expectations": {
     "expected_action": "PROBE",

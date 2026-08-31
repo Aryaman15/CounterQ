@@ -9,9 +9,25 @@
       "remaining_seconds": 600
     },
     "remaining_probe_budget": 2,
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I check the complement before storing this index, so I cannot reuse it; this is expected O(n).",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": [],
     "problem_context": {
-      "io_schema": null,
+      "problem_version_id": "evaluation-problem-two-sum-v1",
+      "title": "Two Sum",
       "statement": "Given an integer array nums and an integer target, return the indices of two distinct elements whose values add to target. You may return the two indices in either order.",
+      "constraints": {
+        "items": [
+          "2 <= nums.length <= 100000",
+          "-1000000000 <= nums[i], target <= 1000000000",
+          "Exactly one valid pair exists for every input used by this problem."
+        ]
+      },
       "examples": [
         {
           "input": "nums = [2, 7, 11, 15], target = 9",
@@ -24,382 +40,442 @@
           "explanation": "The two equal values are separate array elements."
         }
       ],
-      "title": "Two Sum",
-      "constraints": [
-        "2 <= nums.length <= 100000",
-        "-1000000000 <= nums[i], target <= 1000000000",
-        "Exactly one valid pair exists for every input used by this problem."
-      ]
-    },
-    "interview_pack_excerpt": {
-      "schema_version": "interview-pack.v1",
-      "pack": {
-        "schema_version": "interview-pack.v1",
-        "version": "v1",
+      "io_schema": {
+        "catalog_order": 1,
         "review_status": "REVIEWED",
-        "expected_approaches": [
-          {
-            "approach_id": "one_pass_complement_map",
-            "summary": "Store each seen value with its index and look up the complement before inserting the current item.",
-            "concept_keys": [
-              "hash_map",
-              "arrays",
-              "time_complexity"
-            ],
-            "applicability": "An unsorted array with a unique target pair.",
-            "assumptions": [
-              "Indices, rather than values alone, are required."
-            ],
-            "key_invariants": [
-              "Before index i is inserted, the map contains only earlier indices.",
-              "A complement lookup therefore cannot reuse the current element."
-            ],
-            "time_complexity": "O(n) expected time",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Uses auxiliary memory to avoid quadratic pair enumeration."
-            ],
-            "common_implementation_variants": [
-              "insert then check while excluding the current index"
-            ],
-            "common_failure_modes": [
-              "reusing one element",
-              "overwriting a needed duplicate index"
-            ]
-          }
-        ],
-        "alternative_approaches": [
-          {
-            "approach_id": "brute_force_pairs",
-            "summary": "Enumerate every pair of distinct indices.",
-            "concept_keys": [
-              "arrays",
-              "time_complexity"
-            ],
-            "applicability": "Small inputs or as a correctness baseline.",
-            "assumptions": [],
-            "key_invariants": [
-              "The inner index is always greater than the outer index."
-            ],
-            "time_complexity": "O(n^2)",
-            "space_complexity": "O(1)",
-            "tradeoffs": [
-              "Simple but too slow for the largest inputs."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "starting the inner loop at the same index"
-            ]
-          },
-          {
-            "approach_id": "sorted_two_pointers_with_indices",
-            "summary": "Sort value-index pairs and move two pointers toward the target sum.",
-            "concept_keys": [
-              "sorting",
-              "two_pointers",
-              "arrays"
-            ],
-            "applicability": "When retaining original indices alongside values is acceptable.",
-            "assumptions": [
-              "Sorting must preserve each original index."
-            ],
-            "key_invariants": [
-              "Increasing the left value raises the sum; decreasing the right value lowers it."
-            ],
-            "time_complexity": "O(n log n)",
-            "space_complexity": "O(n)",
-            "tradeoffs": [
-              "Avoids hashing but requires index preservation."
-            ],
-            "common_implementation_variants": [],
-            "common_failure_modes": [
-              "returning sorted positions instead of original indices"
-            ]
-          }
-        ],
-        "reference_solutions": [
-          {
-            "approach_id": "one_pass_complement_map",
-            "language": "cpp",
-            "source_code": "class Solution { public: vector<int> twoSum(vector<int> nums, int target) { unordered_map<int,int> seen; for (int i=0; i<(int)nums.size(); ++i) { int need=target-nums[i]; if (seen.count(need)) return {seen[need], i}; seen[nums[i]]=i; } return {}; } };",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "one_pass_complement_map",
-            "language": "python",
-            "source_code": "class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        for index, value in enumerate(nums):\n            need = target - value\n            if need in seen:\n                return [seen[need], index]\n            seen[value] = index\n        return []",
-            "review_status": "REVIEWED"
-          },
-          {
-            "approach_id": "one_pass_complement_map",
-            "language": "java",
-            "source_code": "class Solution { public int[] twoSum(int[] nums, int target) { java.util.Map<Integer,Integer> seen=new java.util.HashMap<>(); for(int i=0;i<nums.length;i++){ int need=target-nums[i]; if(seen.containsKey(need)) return new int[]{seen.get(need),i}; seen.put(nums[i],i); } return new int[]{}; } }",
-            "review_status": "REVIEWED"
-          }
-        ],
-        "concepts": [
-          "hash_map",
-          "arrays",
-          "time_complexity",
-          "sorting",
-          "two_pointers"
-        ],
-        "invariants": [
-          {
-            "id": "prior_indices_only",
-            "concept_keys": [
-              "hash_map"
-            ],
-            "diagnostic_goal": "The complement map represents only values seen before the current index.",
-            "counterexample_id": "same_element",
-            "approach_id": "one_pass_complement_map"
-          }
-        ],
-        "complexity_expectations": [
-          {
-            "id": "expected_linear_lookup",
-            "concept_keys": [
-              "hash_map",
-              "time_complexity"
-            ],
-            "diagnostic_goal": "Derive the expected linear scan rather than claiming a worst-case hash guarantee.",
-            "approach_id": "one_pass_complement_map"
-          }
-        ],
-        "common_misconceptions": [
-          {
-            "id": "same_value_means_same_index",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "Distinguish duplicate values from reusing one array element.",
-            "counterexample_id": "same_element"
-          },
-          {
-            "id": "hash_lookup_guaranteed",
-            "concept_keys": [
-              "hash_map"
-            ],
-            "diagnostic_goal": "Distinguish expected hash lookup time from a universal guarantee."
-          }
-        ],
-        "failure_modes": [
-          {
-            "id": "insert_before_check_reuse",
-            "concept_keys": [
-              "hash_map"
-            ],
-            "diagnostic_goal": "Avoid matching an item with itself when target is twice its value.",
-            "counterexample_id": "same_element",
-            "approach_id": "one_pass_complement_map"
-          },
-          {
-            "id": "lost_original_indices",
-            "concept_keys": [
-              "sorting"
-            ],
-            "diagnostic_goal": "Retain original indices after sorting.",
-            "approach_id": "sorted_two_pointers_with_indices"
-          }
-        ],
-        "edge_cases": [
-          {
-            "id": "duplicate_pair",
-            "concept_keys": [
-              "arrays",
-              "hash_map"
-            ],
-            "diagnostic_goal": "Use two different duplicate positions.",
-            "counterexample_id": "same_element"
-          },
-          {
-            "id": "negative_complement",
-            "concept_keys": [
-              "hash_map"
-            ],
-            "diagnostic_goal": "Handle negative values and complements."
-          }
-        ],
-        "counterexamples": [
-          {
-            "id": "same_element",
-            "input": {
-              "nums": [
-                3,
-                2,
-                4
-              ],
-              "target": 6
+        "execution": {
+          "method_name": "twoSum",
+          "arguments": [
+            {
+              "name": "nums",
+              "type": "int[]"
             },
-            "purpose": "Exposes returning the same index for 3 + 3."
-          },
-          {
-            "id": "duplicate_values",
-            "input": {
-              "nums": [
-                3,
-                3
-              ],
-              "target": 6
+            {
+              "name": "target",
+              "type": "int"
+            }
+          ],
+          "return_type": "int[]",
+          "comparator": "UNORDERED_LIST",
+          "visible_cases": [
+            {
+              "arguments": {
+                "nums": [
+                  2,
+                  7,
+                  11,
+                  15
+                ],
+                "target": 9
+              },
+              "expected_output": [
+                0,
+                1
+              ]
             },
-            "purpose": "Requires preserving two distinct positions with the same value."
-          }
-        ],
-        "constraint_mutations": [
-          {
-            "id": "multiple_valid_pairs",
-            "concept_keys": [
-              "arrays"
-            ],
-            "diagnostic_goal": "Specify a deterministic result rule if more than one pair is allowed."
-          }
-        ],
-        "probe_opportunities": [
-          {
-            "id": "prove_complement_history",
-            "concept_keys": [
-              "hash_map"
-            ],
-            "diagnostic_goal": "Defend why checking before insertion prevents self-pairing.",
-            "counterexample_id": "same_element",
-            "approach_id": "one_pass_complement_map",
-            "relevant_strategies": [
-              "PROVE",
-              "COUNTEREXAMPLE"
-            ]
+            {
+              "arguments": {
+                "nums": [
+                  3,
+                  2,
+                  4
+                ],
+                "target": 6
+              },
+              "expected_output": [
+                1,
+                2
+              ]
+            },
+            {
+              "arguments": {
+                "nums": [
+                  3,
+                  3
+                ],
+                "target": 6
+              },
+              "expected_output": [
+                0,
+                1
+              ]
+            }
+          ],
+          "custom_test_supported": true
+        },
+        "languages": {
+          "cpp": {
+            "display_signature": "vector<int> twoSum(vector<int> nums, int target)",
+            "starter_code": "class Solution {\npublic:\n    vector<int> twoSum(vector<int> nums, int target) {\n        return {};\n    }\n};"
           },
-          {
-            "id": "compare_sort_tradeoff",
-            "concept_keys": [
-              "sorting",
-              "two_pointers"
-            ],
-            "diagnostic_goal": "Compare sorting plus two pointers with the complement map.",
-            "approach_id": "sorted_two_pointers_with_indices",
-            "relevant_strategies": [
-              "TRADE_OFF",
-              "ALTERNATIVE"
-            ]
-          }
-        ],
-        "common_followups": [
-          {
-            "id": "why_check_first",
-            "target_concepts": [
-              "hash_map"
-            ],
-            "target_approach_id": "one_pass_complement_map",
-            "trigger_cues": [
-              "uses a complement map"
-            ],
-            "diagnostic_goal": "Test the prior-index invariant.",
-            "relevant_strategies": [
-              "PROVE"
-            ],
-            "expected_good_signals": [
-              "checks complement before inserting current value"
-            ],
-            "weak_or_misconception_signals": [
-              "allows the same index twice"
-            ],
-            "counterexample_id": "same_element",
-            "applicable_levels": [
-              "INTERN",
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "IMPLEMENTATION"
-            ],
-            "sample_phrasings": [
-              "What prevents this element from being paired with itself?"
-            ]
+          "python": {
+            "display_signature": "def twoSum(self, nums: list[int], target: int) -> list[int]",
+            "starter_code": "class Solution:\n    def twoSum(self, nums: list[int], target: int) -> list[int]:\n        return []"
           },
-          {
-            "id": "hash_complexity_assumption",
-            "target_concepts": [
-              "hash_map",
-              "time_complexity"
-            ],
-            "target_approach_id": "one_pass_complement_map",
-            "trigger_cues": [
-              "claims O(n)"
-            ],
-            "diagnostic_goal": "Clarify the expected-time assumption behind the complexity claim.",
-            "relevant_strategies": [
-              "ASSUMPTION_CHALLENGE",
-              "COMPLEXITY"
-            ],
-            "expected_good_signals": [
-              "qualifies hash operations as expected or average case"
-            ],
-            "weak_or_misconception_signals": [
-              "claims hash lookup is always constant"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD",
-              "EARLY_CAREER"
-            ],
-            "applicable_stages": [
-              "COMPLEXITY_EDGE_CASES"
-            ],
-            "sample_phrasings": [
-              "Which operation makes this expected linear rather than a guaranteed bound?"
-            ]
-          },
-          {
-            "id": "sort_index_tradeoff",
-            "target_concepts": [
-              "sorting",
-              "two_pointers"
-            ],
-            "target_approach_id": "sorted_two_pointers_with_indices",
-            "trigger_cues": [
-              "proposes sorting"
-            ],
-            "diagnostic_goal": "Test whether original index provenance is retained.",
-            "relevant_strategies": [
-              "TRADE_OFF",
-              "IMPLEMENTATION_CHOICE"
-            ],
-            "expected_good_signals": [
-              "sorts value-index pairs"
-            ],
-            "weak_or_misconception_signals": [
-              "returns sorted array positions"
-            ],
-            "applicable_levels": [
-              "NEW_GRAD"
-            ],
-            "applicable_stages": [
-              "APPROACH_DEFENSE"
-            ],
-            "sample_phrasings": [
-              "What information must travel with a value when you sort?"
-            ]
+          "java": {
+            "display_signature": "int[] twoSum(int[] nums, int target)",
+            "starter_code": "class Solution {\n    public int[] twoSum(int[] nums, int target) {\n        return new int[]{};\n    }\n}"
           }
-        ],
-        "level_considerations": [
-          {
-            "level": "INTERN",
-            "guidance": "Prioritize distinct-index reasoning before optimization."
-          },
-          {
-            "level": "NEW_GRAD",
-            "guidance": "Expect a defensible expected-linear complement-map solution."
-          }
-        ],
-        "reference_reasoning": "The reviewed complement-map approach is a strong baseline, but plausible unlisted correct approaches remain valid and should be evaluated from their own reasoning."
-      },
-      "review_status": "REVIEWED"
+        }
+      }
     },
-    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
-    "recent_transcript": [],
-    "candidate_statement": "I check the complement before storing this index, so I cannot reuse it; this is expected O(n).",
-    "code_snapshot": null,
-    "code_diff": null,
-    "execution_context": null,
-    "recent_claims": [],
-    "recent_delivered_prompt_intents": []
+    "interview_pack": {
+      "schema_version": "interview-pack.v1",
+      "version": "v1",
+      "review_status": "REVIEWED",
+      "expected_approaches": [
+        {
+          "approach_id": "one_pass_complement_map",
+          "summary": "Store each seen value with its index and look up the complement before inserting the current item.",
+          "concept_keys": [
+            "hash_map",
+            "arrays",
+            "time_complexity"
+          ],
+          "applicability": "An unsorted array with a unique target pair.",
+          "assumptions": [
+            "Indices, rather than values alone, are required."
+          ],
+          "key_invariants": [
+            "Before index i is inserted, the map contains only earlier indices.",
+            "A complement lookup therefore cannot reuse the current element."
+          ],
+          "time_complexity": "O(n) expected time",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Uses auxiliary memory to avoid quadratic pair enumeration."
+          ],
+          "common_implementation_variants": [
+            "insert then check while excluding the current index"
+          ],
+          "common_failure_modes": [
+            "reusing one element",
+            "overwriting a needed duplicate index"
+          ]
+        }
+      ],
+      "alternative_approaches": [
+        {
+          "approach_id": "brute_force_pairs",
+          "summary": "Enumerate every pair of distinct indices.",
+          "concept_keys": [
+            "arrays",
+            "time_complexity"
+          ],
+          "applicability": "Small inputs or as a correctness baseline.",
+          "assumptions": [],
+          "key_invariants": [
+            "The inner index is always greater than the outer index."
+          ],
+          "time_complexity": "O(n^2)",
+          "space_complexity": "O(1)",
+          "tradeoffs": [
+            "Simple but too slow for the largest inputs."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "starting the inner loop at the same index"
+          ]
+        },
+        {
+          "approach_id": "sorted_two_pointers_with_indices",
+          "summary": "Sort value-index pairs and move two pointers toward the target sum.",
+          "concept_keys": [
+            "sorting",
+            "two_pointers",
+            "arrays"
+          ],
+          "applicability": "When retaining original indices alongside values is acceptable.",
+          "assumptions": [
+            "Sorting must preserve each original index."
+          ],
+          "key_invariants": [
+            "Increasing the left value raises the sum; decreasing the right value lowers it."
+          ],
+          "time_complexity": "O(n log n)",
+          "space_complexity": "O(n)",
+          "tradeoffs": [
+            "Avoids hashing but requires index preservation."
+          ],
+          "common_implementation_variants": [],
+          "common_failure_modes": [
+            "returning sorted positions instead of original indices"
+          ]
+        }
+      ],
+      "reference_solutions": [
+        {
+          "approach_id": "one_pass_complement_map",
+          "language": "cpp",
+          "source_code": "class Solution { public: vector<int> twoSum(vector<int> nums, int target) { unordered_map<int,int> seen; for (int i=0; i<(int)nums.size(); ++i) { int need=target-nums[i]; if (seen.count(need)) return {seen[need], i}; seen[nums[i]]=i; } return {}; } };",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "one_pass_complement_map",
+          "language": "python",
+          "source_code": "class Solution:\n    def twoSum(self, nums, target):\n        seen = {}\n        for index, value in enumerate(nums):\n            need = target - value\n            if need in seen:\n                return [seen[need], index]\n            seen[value] = index\n        return []",
+          "review_status": "REVIEWED"
+        },
+        {
+          "approach_id": "one_pass_complement_map",
+          "language": "java",
+          "source_code": "class Solution { public int[] twoSum(int[] nums, int target) { java.util.Map<Integer,Integer> seen=new java.util.HashMap<>(); for(int i=0;i<nums.length;i++){ int need=target-nums[i]; if(seen.containsKey(need)) return new int[]{seen.get(need),i}; seen.put(nums[i],i); } return new int[]{}; } }",
+          "review_status": "REVIEWED"
+        }
+      ],
+      "concepts": [
+        "hash_map",
+        "arrays",
+        "time_complexity",
+        "sorting",
+        "two_pointers"
+      ],
+      "invariants": [
+        {
+          "id": "prior_indices_only",
+          "concept_keys": [
+            "hash_map"
+          ],
+          "diagnostic_goal": "The complement map represents only values seen before the current index.",
+          "counterexample_id": "same_element",
+          "approach_id": "one_pass_complement_map"
+        }
+      ],
+      "complexity_expectations": [
+        {
+          "id": "expected_linear_lookup",
+          "concept_keys": [
+            "hash_map",
+            "time_complexity"
+          ],
+          "diagnostic_goal": "Derive the expected linear scan rather than claiming a worst-case hash guarantee.",
+          "approach_id": "one_pass_complement_map"
+        }
+      ],
+      "common_misconceptions": [
+        {
+          "id": "same_value_means_same_index",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "Distinguish duplicate values from reusing one array element.",
+          "counterexample_id": "same_element"
+        },
+        {
+          "id": "hash_lookup_guaranteed",
+          "concept_keys": [
+            "hash_map"
+          ],
+          "diagnostic_goal": "Distinguish expected hash lookup time from a universal guarantee."
+        }
+      ],
+      "failure_modes": [
+        {
+          "id": "insert_before_check_reuse",
+          "concept_keys": [
+            "hash_map"
+          ],
+          "diagnostic_goal": "Avoid matching an item with itself when target is twice its value.",
+          "counterexample_id": "same_element",
+          "approach_id": "one_pass_complement_map"
+        },
+        {
+          "id": "lost_original_indices",
+          "concept_keys": [
+            "sorting"
+          ],
+          "diagnostic_goal": "Retain original indices after sorting.",
+          "approach_id": "sorted_two_pointers_with_indices"
+        }
+      ],
+      "edge_cases": [
+        {
+          "id": "duplicate_pair",
+          "concept_keys": [
+            "arrays",
+            "hash_map"
+          ],
+          "diagnostic_goal": "Use two different duplicate positions.",
+          "counterexample_id": "same_element"
+        },
+        {
+          "id": "negative_complement",
+          "concept_keys": [
+            "hash_map"
+          ],
+          "diagnostic_goal": "Handle negative values and complements."
+        }
+      ],
+      "counterexamples": [
+        {
+          "id": "same_element",
+          "input": {
+            "nums": [
+              3,
+              2,
+              4
+            ],
+            "target": 6
+          },
+          "purpose": "Exposes returning the same index for 3 + 3."
+        },
+        {
+          "id": "duplicate_values",
+          "input": {
+            "nums": [
+              3,
+              3
+            ],
+            "target": 6
+          },
+          "purpose": "Requires preserving two distinct positions with the same value."
+        }
+      ],
+      "constraint_mutations": [
+        {
+          "id": "multiple_valid_pairs",
+          "concept_keys": [
+            "arrays"
+          ],
+          "diagnostic_goal": "Specify a deterministic result rule if more than one pair is allowed."
+        }
+      ],
+      "probe_opportunities": [
+        {
+          "id": "prove_complement_history",
+          "concept_keys": [
+            "hash_map"
+          ],
+          "diagnostic_goal": "Defend why checking before insertion prevents self-pairing.",
+          "counterexample_id": "same_element",
+          "approach_id": "one_pass_complement_map",
+          "relevant_strategies": [
+            "PROVE",
+            "COUNTEREXAMPLE"
+          ]
+        },
+        {
+          "id": "compare_sort_tradeoff",
+          "concept_keys": [
+            "sorting",
+            "two_pointers"
+          ],
+          "diagnostic_goal": "Compare sorting plus two pointers with the complement map.",
+          "approach_id": "sorted_two_pointers_with_indices",
+          "relevant_strategies": [
+            "TRADE_OFF",
+            "ALTERNATIVE"
+          ]
+        }
+      ],
+      "common_followups": [
+        {
+          "id": "why_check_first",
+          "target_concepts": [
+            "hash_map"
+          ],
+          "target_approach_id": "one_pass_complement_map",
+          "trigger_cues": [
+            "uses a complement map"
+          ],
+          "diagnostic_goal": "Test the prior-index invariant.",
+          "relevant_strategies": [
+            "PROVE"
+          ],
+          "expected_good_signals": [
+            "checks complement before inserting current value"
+          ],
+          "weak_or_misconception_signals": [
+            "allows the same index twice"
+          ],
+          "counterexample_id": "same_element",
+          "applicable_levels": [
+            "INTERN",
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "IMPLEMENTATION"
+          ],
+          "sample_phrasings": [
+            "What prevents this element from being paired with itself?"
+          ]
+        },
+        {
+          "id": "hash_complexity_assumption",
+          "target_concepts": [
+            "hash_map",
+            "time_complexity"
+          ],
+          "target_approach_id": "one_pass_complement_map",
+          "trigger_cues": [
+            "claims O(n)"
+          ],
+          "diagnostic_goal": "Clarify the expected-time assumption behind the complexity claim.",
+          "relevant_strategies": [
+            "ASSUMPTION_CHALLENGE",
+            "COMPLEXITY"
+          ],
+          "expected_good_signals": [
+            "qualifies hash operations as expected or average case"
+          ],
+          "weak_or_misconception_signals": [
+            "claims hash lookup is always constant"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD",
+            "EARLY_CAREER"
+          ],
+          "applicable_stages": [
+            "COMPLEXITY_EDGE_CASES"
+          ],
+          "sample_phrasings": [
+            "Which operation makes this expected linear rather than a guaranteed bound?"
+          ]
+        },
+        {
+          "id": "sort_index_tradeoff",
+          "target_concepts": [
+            "sorting",
+            "two_pointers"
+          ],
+          "target_approach_id": "sorted_two_pointers_with_indices",
+          "trigger_cues": [
+            "proposes sorting"
+          ],
+          "diagnostic_goal": "Test whether original index provenance is retained.",
+          "relevant_strategies": [
+            "TRADE_OFF",
+            "IMPLEMENTATION_CHOICE"
+          ],
+          "expected_good_signals": [
+            "sorts value-index pairs"
+          ],
+          "weak_or_misconception_signals": [
+            "returns sorted array positions"
+          ],
+          "applicable_levels": [
+            "NEW_GRAD"
+          ],
+          "applicable_stages": [
+            "APPROACH_DEFENSE"
+          ],
+          "sample_phrasings": [
+            "What information must travel with a value when you sort?"
+          ]
+        }
+      ],
+      "level_considerations": [
+        {
+          "level": "INTERN",
+          "guidance": "Prioritize distinct-index reasoning before optimization."
+        },
+        {
+          "level": "NEW_GRAD",
+          "guidance": "Expect a defensible expected-linear complement-map solution."
+        }
+      ],
+      "reference_reasoning": "The reviewed complement-map approach is a strong baseline, but plausible unlisted correct approaches remain valid and should be evaluated from their own reasoning."
+    }
   },
   "expectations": {
     "expected_action": "WAIT",

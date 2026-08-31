@@ -26,6 +26,15 @@ class ExaminerObservationNotEligible(ExaminerContextError):
 ELIGIBLE_LIVE_EXAMINER_OBSERVATIONS = frozenset(
     {"CANDIDATE_TRANSCRIPT_FINALIZED", "CODE_MEANINGFULLY_CHANGED"}
 )
+SOURCE_FRESHNESS_SEMANTICS = (
+    "Recent means newly observed by the server, not actively being typed. "
+    "Use explicit completion, incompleteness, self-correction, or newer "
+    "context signals to estimate whether waiting has diagnostic value."
+)
+CODE_EDIT_OBSERVATION_SEMANTICS = (
+    "Source was emitted after the editor inactivity boundary, not per keystroke. "
+    "It is stable enough to reason about, but the candidate may still edit later."
+)
 
 
 @dataclass(frozen=True)
@@ -43,12 +52,12 @@ def serialize_examiner_context(
     source_observation: dict[str, object],
     source_freshness: dict[str, object],
     recent_history: list[dict[str, object]],
-    evaluation_context_extension: dict[str, object] | None = None,
+    diagnostic_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Serialize the one production Examiner context contract.
 
-    Evaluation may append a clearly named, non-durable extension; live production
-    callers never provide one.
+    Evaluation may append typed, non-durable Stage-4 diagnostic summaries; live
+    production callers do not populate them yet.
     """
     context: dict[str, object] = {
         "trusted_policy": trusted_policy,
@@ -59,8 +68,8 @@ def serialize_examiner_context(
         "source_freshness": source_freshness,
         "recent_history": recent_history,
     }
-    if evaluation_context_extension is not None:
-        context["evaluation_context_extension"] = evaluation_context_extension
+    if diagnostic_context is not None:
+        context["diagnostic_context"] = diagnostic_context
     return context
 
 
@@ -182,19 +191,13 @@ class ExaminerContextBuilder:
             and observation.code_snapshot_id is not None
             and latest_code.id == observation.code_snapshot_id
         )
-        return {
-            "source_is_current_at_watermark": True,
-            "latest_code_snapshot_id": str(latest_code.id) if latest_code else None,
-            "latest_code_snapshot_version": latest_code.version_number if latest_code else None,
-            "is_latest_code_snapshot": is_latest_code_snapshot,
-            "newer_code_snapshot_exists": newer_code_exists,
-            "newer_candidate_transcript_exists": newer_transcript_exists is not None,
-            "freshness_semantics": (
-                "Recent means newly observed by the server, not actively being typed. "
-                "Use explicit completion, incompleteness, self-correction, or newer "
-                "context signals to estimate whether waiting has diagnostic value."
-            ),
-        }
+        return serialize_source_freshness(
+            latest_code_snapshot_id=str(latest_code.id) if latest_code else None,
+            latest_code_snapshot_version=(latest_code.version_number if latest_code else None),
+            is_latest_code_snapshot=is_latest_code_snapshot,
+            newer_code_snapshot_exists=newer_code_exists,
+            newer_candidate_transcript_exists=newer_transcript_exists is not None,
+        )
 
     async def _recent_history(
         self,
@@ -229,26 +232,9 @@ def _observation_payload(
     observation: StructuredObservation,
     associated_code: CodeSnapshot | None,
 ) -> dict[str, object]:
-    payload: dict[str, object] = {
-        "kind": observation.kind,
-        "source_event_id": str(observation.source_event_id),
-        "source_event_watermark": observation.source_event_watermark,
-        "source_state_version": observation.interview_state_version,
-        "source_stage": observation.interview_stage,
-        "trigger_class": observation.trigger_class,
-        "occurred_at": observation.occurred_at.isoformat(),
-    }
-    if (
-        observation.kind == "CODE_MEANINGFULLY_CHANGED"
-        and observation.trigger_class == "CODE_EDIT_BURST"
-    ):
-        payload["observation_boundary"] = "STABLE_AFTER_EDIT_BURST"
-        payload["edit_observation_semantics"] = (
-            "Source was emitted after the editor inactivity boundary, not per keystroke. "
-            "It is stable enough to reason about, but the candidate may still edit later."
-        )
+    transcript: dict[str, object] | None = None
     if observation.transcript_segment_id is not None:
-        payload["transcript"] = {
+        transcript = {
             "transcript_segment_id": str(observation.transcript_segment_id),
             "text": observation.transcript_text,
             "associated_code_snapshot_id": (
@@ -258,8 +244,10 @@ def _observation_payload(
             ),
             "associated_code_snapshot_version": observation.associated_code_snapshot_version,
         }
+    code: dict[str, object] | None = None
+    code_context_at_watermark: dict[str, object] | None = None
     if observation.code_snapshot_id is not None:
-        payload["code"] = {
+        code = {
             "code_snapshot_id": str(observation.code_snapshot_id),
             "code_snapshot_version": observation.code_snapshot_version,
             "content_hash": observation.code_content_hash,
@@ -268,10 +256,74 @@ def _observation_payload(
             "code_diff_content": observation.code_diff_content,
         }
     elif associated_code is not None:
-        payload["code_context_at_watermark"] = {
+        code_context_at_watermark = {
             "code_snapshot_id": str(associated_code.id),
             "code_snapshot_version": associated_code.version_number,
             "content_hash": associated_code.content_hash,
             "source_code": associated_code.source_code,
         }
+    return serialize_source_observation(
+        kind=observation.kind,
+        source_event_id=str(observation.source_event_id),
+        source_event_watermark=observation.source_event_watermark,
+        source_state_version=observation.interview_state_version,
+        source_stage=observation.interview_stage,
+        trigger_class=observation.trigger_class,
+        occurred_at=observation.occurred_at.isoformat(),
+        transcript=transcript,
+        code=code,
+        code_context_at_watermark=code_context_at_watermark,
+    )
+
+
+def serialize_source_observation(
+    *,
+    kind: str,
+    source_event_id: str,
+    source_event_watermark: int,
+    source_state_version: int,
+    source_stage: str,
+    trigger_class: str,
+    occurred_at: str,
+    transcript: dict[str, object] | None = None,
+    code: dict[str, object] | None = None,
+    code_context_at_watermark: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "kind": kind,
+        "source_event_id": source_event_id,
+        "source_event_watermark": source_event_watermark,
+        "source_state_version": source_state_version,
+        "source_stage": source_stage,
+        "trigger_class": trigger_class,
+        "occurred_at": occurred_at,
+    }
+    if kind == "CODE_MEANINGFULLY_CHANGED" and trigger_class == "CODE_EDIT_BURST":
+        payload["observation_boundary"] = "STABLE_AFTER_EDIT_BURST"
+        payload["edit_observation_semantics"] = CODE_EDIT_OBSERVATION_SEMANTICS
+    if transcript is not None:
+        payload["transcript"] = transcript
+    if code is not None:
+        payload["code"] = code
+    if code_context_at_watermark is not None:
+        payload["code_context_at_watermark"] = code_context_at_watermark
     return payload
+
+
+def serialize_source_freshness(
+    *,
+    latest_code_snapshot_id: str | None,
+    latest_code_snapshot_version: int | None,
+    is_latest_code_snapshot: bool,
+    newer_code_snapshot_exists: bool,
+    newer_candidate_transcript_exists: bool,
+) -> dict[str, object]:
+    return {
+        "source_is_current_at_watermark": True,
+        "latest_code_snapshot_id": latest_code_snapshot_id,
+        "latest_code_snapshot_version": latest_code_snapshot_version,
+        "is_latest_code_snapshot": is_latest_code_snapshot,
+        "newer_code_snapshot_exists": newer_code_snapshot_exists,
+        "newer_candidate_transcript_exists": newer_candidate_transcript_exists,
+        "freshness_semantics": SOURCE_FRESHNESS_SEMANTICS,
+    }
