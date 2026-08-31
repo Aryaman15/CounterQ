@@ -34,6 +34,46 @@ ExaminerProbeStrategy = Literal[
     "FAILURE_MODE",
     "TRANSFER",
 ]
+ExaminerFactorLevel = Literal["LOW", "MEDIUM", "HIGH"]
+ExaminerVerificationReason = Literal[
+    "NONE",
+    "TRANSCRIPTION_AMBIGUITY",
+    "UNUSUAL_VALID_APPROACH",
+    "DIFFICULT_CODE_SEMANTICS",
+    "VERIFIED_PACK_DISAGREEMENT",
+    "CONSEQUENTIAL_LOW_CONFIDENCE",
+]
+
+
+class ExaminerTargetRankingOutput(StrictReasoningOutputModel):
+    """Bounded diagnostic metadata, never hidden chain-of-thought."""
+
+    technical_importance: ExaminerFactorLevel
+    interpretation_confidence: ExaminerFactorLevel
+    diagnostic_value: ExaminerFactorLevel
+    current_evidence_gap: ExaminerFactorLevel
+    candidate_commitment: ExaminerFactorLevel
+    context_relevance: ExaminerFactorLevel
+    freshness: ExaminerFactorLevel
+    self_correction_likelihood: ExaminerFactorLevel
+    interruption_cost: ExaminerFactorLevel
+    duplicate_evidence: ExaminerFactorLevel
+    time_pressure: ExaminerFactorLevel
+    probe_fatigue: ExaminerFactorLevel
+    staleness_risk: ExaminerFactorLevel
+
+
+class ExaminerVerificationOutput(StrictReasoningOutputModel):
+    required: bool
+    reason: ExaminerVerificationReason
+
+    @model_validator(mode="after")
+    def validate_reason(self) -> ExaminerVerificationOutput:
+        if self.required and self.reason == "NONE":
+            raise ValueError("Required verification needs a specific reason")
+        if not self.required and self.reason != "NONE":
+            raise ValueError("Non-required verification must use NONE")
+        return self
 
 
 class ExaminerClaimOutput(StrictReasoningOutputModel):
@@ -64,6 +104,8 @@ class ExaminerDecisionOutput(StrictReasoningOutputModel):
     confidence: float = Field(ge=0, le=1)
     priority: int = Field(ge=0, le=5)
     urgency: int = Field(ge=0, le=5)
+    target_ranking: ExaminerTargetRankingOutput
+    verification: ExaminerVerificationOutput
 
 
 class ExaminerAnalysisResult(StrictReasoningOutputModel):

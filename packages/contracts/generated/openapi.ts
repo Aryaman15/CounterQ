@@ -377,10 +377,18 @@ export interface components {
              * @enum {string}
              */
             target_kind: "NONE" | "CLAIM" | "EVENT" | "CODE_SNAPSHOT";
+            /** Target Ranking */
+            target_ranking: {
+                [key: string]: string;
+            } | null;
             /** Technical Rationale */
             technical_rationale: string;
             /** Urgency */
             urgency: number | null;
+            /** Verification */
+            verification: {
+                [key: string]: unknown;
+            } | null;
         };
         /** DevelopmentPolicyGateResult */
         DevelopmentPolicyGateResult: {

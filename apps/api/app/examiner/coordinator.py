@@ -12,11 +12,16 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_gateway.gateway import AIGateway, get_or_create_policy_version
+from app.ai_gateway.gateway import (
+    AIGateway,
+    AIGatewayResult,
+    ReasoningBudgetExceeded,
+    get_or_create_policy_version,
+)
 from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import ReasoningProvider
 from app.config.settings import Settings
-from app.examiner.analysis_schema import ExaminerAnalysisResult
+from app.examiner.analysis_schema import ExaminerAnalysisResult, ExaminerDecisionOutput
 from app.examiner.context import (
     ELIGIBLE_LIVE_EXAMINER_OBSERVATIONS,
     ExaminerContext,
@@ -26,7 +31,14 @@ from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.examiner.policy import (
     LIVE_EXAMINER_EXPIRY_POLICY,
     LIVE_EXAMINER_INSTRUCTIONS,
+    STRONG_ESCALATION_MIN_REMAINING_SECONDS,
+    ExaminerReasoningTier,
+    initial_reasoning_tier,
     live_examiner_policy_descriptor,
+    reasoning_effort_for_tier,
+    requested_strong_verification,
+    unresolved_consequential_challenge,
+    verification_reason,
 )
 from app.examiner.repository import ExaminerRepository
 from app.interviews.models import InterviewSession
@@ -38,6 +50,7 @@ LiveExaminerStatus = Literal[
     "REUSED",
     "PROPOSED",
     "STALE",
+    "SUPPRESSED",
     "CANCELLED",
     "ERROR",
 ]
@@ -84,6 +97,8 @@ class LiveExaminerDecisionDebug:
     policy_gate_outcome: str | None
     policy_gate_reason: str | None
     deadline_at: datetime | None
+    target_ranking: dict[str, str] | None = None
+    verification: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +122,8 @@ class LiveExaminerDebugResult:
     claims: list[LiveExaminerClaimDebug]
     decision: LiveExaminerDecisionDebug | None
     message: str | None = None
+    reasoning_tier: ExaminerReasoningTier | None = None
+    preliminary_ai_invocation_id: UUID | None = None
 
 
 @dataclass
@@ -232,27 +249,75 @@ class LiveExaminerCoordinator:
             sessionmaker=self._sessionmaker,
             provider=self._provider,
         )
-        try:
-            result = await gateway.reason_structured(
-                interview_session_id=interview_session_id,
-                capability="STANDARD_REASONING",
-                purpose="live_examiner",
-                policy=live_examiner_policy_descriptor(),
-                instructions=LIVE_EXAMINER_INSTRUCTIONS,
-                input_content=json.dumps(context.context_json, sort_keys=True, default=str),
-                output_model=ExaminerAnalysisResult,
-                timeout_seconds=self._settings.live_examiner_usefulness_seconds,
-                usefulness_deadline=deadline_at,
-                correlation_id=str(source_event_id),
-                metadata={
-                    "source_event_id": str(source_event_id),
-                    "source_event_watermark": context.observation.source_event_watermark,
-                },
-            )
-        except asyncio.CancelledError:
-            raise
+        tier = initial_reasoning_tier(context.context_json)
+        result = await self._reason(
+            gateway=gateway,
+            context=context,
+            deadline_at=deadline_at,
+            tier=tier,
+        )
+        preliminary_invocation_id: UUID | None = None
+        if requested_strong_verification(result.parsed):
+            preliminary_invocation_id = result.invocation_id
+            pre_escalation_status = await self._revalidate(context, deadline_at)
+            if pre_escalation_status != "PROPOSED":
+                return self._unpersisted_result(
+                    context=context,
+                    result=result,
+                    status="STALE",
+                    tier=tier,
+                    preliminary_invocation_id=preliminary_invocation_id,
+                    message="Source became stale before strong verification.",
+                )
+            remaining = (deadline_at - self._clock()).total_seconds()
+            if remaining < STRONG_ESCALATION_MIN_REMAINING_SECONDS:
+                return self._unpersisted_result(
+                    context=context,
+                    result=result,
+                    status="SUPPRESSED",
+                    tier=tier,
+                    preliminary_invocation_id=preliminary_invocation_id,
+                    message="Insufficient usefulness window for required strong verification.",
+                )
+            try:
+                result = await self._reason(
+                    gateway=gateway,
+                    context=context,
+                    deadline_at=deadline_at,
+                    tier="STRONG",
+                    preliminary_ai_invocation_id=preliminary_invocation_id,
+                    required_verification_reason=verification_reason(result.parsed),
+                )
+            except ReasoningBudgetExceeded:
+                return self._unpersisted_result(
+                    context=context,
+                    result=result,
+                    status="SUPPRESSED",
+                    tier=tier,
+                    preliminary_invocation_id=preliminary_invocation_id,
+                    message="Strong reasoning budget is unavailable; unsafe challenge suppressed.",
+                )
+            tier = "STRONG"
+            if unresolved_consequential_challenge(result.parsed):
+                return self._unpersisted_result(
+                    context=context,
+                    result=result,
+                    status="SUPPRESSED",
+                    tier=tier,
+                    preliminary_invocation_id=preliminary_invocation_id,
+                    message="Strong verification left a consequential challenge unresolved.",
+                )
 
         admitted_status = await self._revalidate(context, deadline_at)
+        if tier == "STRONG" and admitted_status != "PROPOSED":
+            return self._unpersisted_result(
+                context=context,
+                result=result,
+                status="STALE",
+                tier=tier,
+                preliminary_invocation_id=preliminary_invocation_id,
+                message="Source became stale during strong verification.",
+            )
         persisted = await self._persist_result(
             context=context,
             analysis=result.parsed,
@@ -282,6 +347,81 @@ class LiveExaminerCoordinator:
             currency=result.currency,
             claims=persisted[0],
             decision=persisted[1],
+            reasoning_tier=tier,
+            preliminary_ai_invocation_id=preliminary_invocation_id,
+        )
+
+    async def _reason(
+        self,
+        *,
+        gateway: AIGateway,
+        context: ExaminerContext,
+        deadline_at: datetime,
+        tier: ExaminerReasoningTier,
+        preliminary_ai_invocation_id: UUID | None = None,
+        required_verification_reason: str | None = None,
+    ) -> AIGatewayResult[ExaminerAnalysisResult]:
+        remaining = max(0.1, (deadline_at - self._clock()).total_seconds())
+        metadata: dict[str, object] = {
+            "source_event_id": str(context.observation.source_event_id),
+            "source_event_watermark": context.observation.source_event_watermark,
+            "reasoning_tier": tier,
+        }
+        if preliminary_ai_invocation_id is not None:
+            metadata["preliminary_ai_invocation_id"] = str(preliminary_ai_invocation_id)
+        if required_verification_reason is not None:
+            metadata["required_verification_reason"] = required_verification_reason
+        return await gateway.reason_structured(
+            interview_session_id=context.observation.interview_session_id,
+            capability="STRONG_REASONING" if tier == "STRONG" else "STANDARD_REASONING",
+            purpose=(
+                "live_examiner_strong_verification" if tier == "STRONG" else "live_examiner"
+            ),
+            policy=live_examiner_policy_descriptor(),
+            instructions=LIVE_EXAMINER_INSTRUCTIONS,
+            input_content=json.dumps(context.context_json, sort_keys=True, default=str),
+            output_model=ExaminerAnalysisResult,
+            timeout_seconds=remaining,
+            usefulness_deadline=deadline_at,
+            reasoning_effort_override=reasoning_effort_for_tier(tier),
+            correlation_id=str(context.observation.source_event_id),
+            metadata=metadata,
+        )
+
+    def _unpersisted_result(
+        self,
+        *,
+        context: ExaminerContext,
+        result: AIGatewayResult[ExaminerAnalysisResult],
+        status: LiveExaminerStatus,
+        tier: ExaminerReasoningTier,
+        preliminary_invocation_id: UUID | None,
+        message: str,
+    ) -> LiveExaminerDebugResult:
+        return LiveExaminerDebugResult(
+            status=status,
+            source_kind=context.observation.kind,
+            source_event_id=context.observation.source_event_id,
+            source_event_watermark=context.observation.source_event_watermark,
+            source_state_version=context.observation.interview_state_version,
+            code_snapshot_id=context.observation.code_snapshot_id
+            or context.observation.associated_code_snapshot_id,
+            code_snapshot_version=context.observation.code_snapshot_version
+            or context.observation.associated_code_snapshot_version,
+            ai_invocation_id=result.invocation_id,
+            provider=result.provider,
+            model=result.model,
+            latency_ms=result.latency_ms,
+            input_tokens=result.usage.input_tokens,
+            cached_input_tokens=result.usage.cached_input_tokens,
+            output_tokens=result.usage.output_tokens,
+            estimated_cost=result.estimated_cost,
+            currency=result.currency,
+            claims=[],
+            decision=None,
+            message=message,
+            reasoning_tier=tier,
+            preliminary_ai_invocation_id=preliminary_invocation_id,
         )
 
     async def _build_context(self, source_event_id: UUID) -> ExaminerContext:
@@ -338,6 +478,18 @@ class LiveExaminerCoordinator:
             if interview.state_version != context.observation.interview_state_version:
                 return "STALE"
             if source_event.interview_session_id != interview.id:
+                return "STALE"
+            newer_candidate_event = await session.scalar(
+                select(InterviewEvent.id)
+                .where(InterviewEvent.interview_session_id == interview.id)
+                .where(
+                    InterviewEvent.server_sequence
+                    > context.observation.source_event_watermark
+                )
+                .where(InterviewEvent.source.in_(["CANDIDATE_VOICE", "NATIVE_EDITOR"]))
+                .limit(1)
+            )
+            if newer_candidate_event is not None:
                 return "STALE"
             if context.observation.kind == "CODE_MEANINGFULLY_CHANGED":
                 latest = await ObservationRepository(session).latest_code_snapshot(interview.id)
@@ -426,7 +578,11 @@ class LiveExaminerCoordinator:
                 )
                 return (
                     [_claim_debug(claim) for claim in claims],
-                    _decision_debug(decision, decision_output.target_kind),
+                    _decision_debug(
+                        decision,
+                        decision_output.target_kind,
+                        decision_output,
+                    ),
                 )
 
     async def _cancel_active(
@@ -472,7 +628,11 @@ def _claim_debug(claim: CandidateClaim) -> LiveExaminerClaimDebug:
     )
 
 
-def _decision_debug(decision: ExaminerDecision, target_kind: str) -> LiveExaminerDecisionDebug:
+def _decision_debug(
+    decision: ExaminerDecision,
+    target_kind: str,
+    output: ExaminerDecisionOutput | None = None,
+) -> LiveExaminerDecisionDebug:
     return LiveExaminerDecisionDebug(
         id=decision.id,
         action=decision.action,
@@ -488,6 +648,12 @@ def _decision_debug(decision: ExaminerDecision, target_kind: str) -> LiveExamine
         policy_gate_outcome=decision.policy_gate_outcome,
         policy_gate_reason=decision.policy_gate_reason,
         deadline_at=decision.deadline_at,
+        target_ranking=(
+            cast(dict[str, str], output.target_ranking.model_dump(mode="json"))
+            if output
+            else None
+        ),
+        verification=(output.verification.model_dump(mode="json") if output else None),
     )
 
 

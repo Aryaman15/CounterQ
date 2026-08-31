@@ -120,11 +120,16 @@ class AIGateway:
         output_model: type[T],
         timeout_seconds: float | None = None,
         usefulness_deadline: datetime | None = None,
+        reasoning_effort_override: ReasoningEffort | None = None,
         correlation_id: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> AIGatewayResult[T]:
         model = self.model_for_capability(capability)
-        effort = self.effort_for_capability(capability)
+        effort = (
+            self.validate_reasoning_effort(reasoning_effort_override)
+            if reasoning_effort_override is not None
+            else self.effort_for_capability(capability)
+        )
         request_timeout = timeout_seconds or self._settings.reasoning_timeout_seconds
 
         schema = output_model.model_json_schema()
@@ -241,6 +246,9 @@ class AIGateway:
             if capability == "STANDARD_REASONING"
             else self._settings.reasoning_strong_effort
         )
+        return self.validate_reasoning_effort(effort)
+
+    def validate_reasoning_effort(self, effort: str) -> ReasoningEffort:
         if effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
             raise AIGatewayError("Configured reasoning effort is unsupported")
         return cast(ReasoningEffort, effort)

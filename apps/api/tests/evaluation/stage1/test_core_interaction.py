@@ -124,6 +124,27 @@ class FakeReasoningProvider:
         )
 
 
+def decision_metadata() -> dict[str, object]:
+    return {
+        "target_ranking": {
+            "technical_importance": "HIGH",
+            "interpretation_confidence": "HIGH",
+            "diagnostic_value": "HIGH",
+            "current_evidence_gap": "HIGH",
+            "candidate_commitment": "MEDIUM",
+            "context_relevance": "HIGH",
+            "freshness": "HIGH",
+            "self_correction_likelihood": "LOW",
+            "interruption_cost": "LOW",
+            "duplicate_evidence": "LOW",
+            "time_pressure": "LOW",
+            "probe_fatigue": "LOW",
+            "staleness_risk": "LOW",
+        },
+        "verification": {"required": False, "reason": "NONE"},
+    }
+
+
 def evaluation_settings(tmp_path: Path) -> Settings:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -220,6 +241,7 @@ def speech_probe_output() -> dict[str, Any]:
             "confidence": 0.9,
             "priority": 4,
             "urgency": 3,
+            **decision_metadata(),
         },
     }
 
@@ -236,6 +258,7 @@ def code_probe_output() -> dict[str, Any]:
             "confidence": 0.9,
             "priority": 4,
             "urgency": 3,
+            **decision_metadata(),
         },
     }
 
@@ -252,6 +275,7 @@ def observe_output() -> dict[str, Any]:
             "confidence": 0.8,
             "priority": 1,
             "urgency": 0,
+            **decision_metadata(),
         },
     }
 

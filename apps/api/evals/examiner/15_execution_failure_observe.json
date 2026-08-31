@@ -16,9 +16,15 @@
     "code_diff": null,
     "execution_context": {
       "contextual_only": true,
-      "stdout": "",
-      "outcome": "FAILED",
-      "stderr": ""
+      "matches_current_code": false,
+      "run_status": "RUNTIME_ERROR",
+      "stdout": null,
+      "stderr": null,
+      "compiler_output": null,
+      "execution_run_id": null,
+      "source_run_watermark": null,
+      "code_snapshot_id": null,
+      "code_snapshot_version": null
     },
     "recent_claims": [],
     "recent_delivered_prompt_intents": [],

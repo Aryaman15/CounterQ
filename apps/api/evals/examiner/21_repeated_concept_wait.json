@@ -18,8 +18,15 @@
     "recent_claims": [],
     "recent_delivered_prompt_intents": [
       {
-        "target_concept": "hash lookup guarantee",
-        "strategy": "ASSUMPTION_CHALLENGE"
+        "prompt_kind": "PROBE",
+        "strategy": "ASSUMPTION_CHALLENGE",
+        "target_concept_id": "hash-lookup-guarantee",
+        "target_claim_type": "COMPLEXITY",
+        "target_claim": "hash lookup is guaranteed constant time",
+        "target_code_snapshot_id": null,
+        "target_code_snapshot_version": null,
+        "candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+        "delivery_state": "DELIVERED"
       }
     ],
     "problem_context": {

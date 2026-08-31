@@ -8,10 +8,11 @@ from typing import cast
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.interviews.budget_policy import probe_budget_snapshot
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
     InterviewerPrompt,
@@ -26,6 +27,19 @@ logger = structlog.get_logger(__name__)
 
 MIN_PROMPT_GATE_CONFIDENCE = Decimal("0.75")
 IMPLEMENTATION_PROBE_MIN_CONFIDENCE = Decimal("0.80")
+CONSEQUENTIAL_CLAIM_CHALLENGE_MIN_CONFIDENCE = Decimal("0.80")
+CONSEQUENTIAL_CLAIM_CHALLENGE_STRATEGIES = frozenset(
+    {
+        "PROVE",
+        "ASSUMPTION_CHALLENGE",
+        "COUNTEREXAMPLE",
+        "COMPLEXITY",
+        "FAILURE_MODE",
+    }
+)
+CANDIDATE_VISIBLE_DELIVERY_STATES = frozenset(
+    {"STARTED", "DELIVERED", "PARTIALLY_DELIVERED", "INTERRUPTED"}
+)
 MIN_REMAINING_PROMPT_SECONDS = 8
 PROBE_ALLOWED_STAGES = {
     "PROBLEM_UNDERSTANDING",
@@ -320,6 +334,9 @@ class PromptAuthorizationService:
         )
         if decision.confidence is None or decision.confidence < min_confidence:
             return ("LOW_CONFIDENCE", "ExaminerDecision confidence is below policy threshold.")
+        claim_confidence_rejection = await self._claim_confidence_rejection(decision)
+        if claim_confidence_rejection is not None:
+            return claim_confidence_rejection
         remaining_seconds = (interview.deadline_at - now).total_seconds()
         if remaining_seconds < MIN_REMAINING_PROMPT_SECONDS:
             return ("EXPIRED", "Insufficient session time remains for a new prompt.")
@@ -344,6 +361,9 @@ class PromptAuthorizationService:
         if newer_candidate_event is not None:
             return ("SUPERSEDED", "Newer candidate behavior arrived after the source event.")
         if decision.action == "PROBE":
+            duplicate_result = await self._duplicate_probe_result(decision)
+            if duplicate_result is not None:
+                return duplicate_result
             budget_result = await self._probe_budget_result(interview.id)
             if budget_result is not None:
                 return budget_result
@@ -398,20 +418,88 @@ class PromptAuthorizationService:
         return None
 
     async def _probe_budget_result(self, session_id: UUID) -> tuple[str, str] | None:
-        budget = await self._session.scalar(
-            select(SessionBudget).where(SessionBudget.session_id == session_id).with_for_update(),
-        )
+        budget = await probe_budget_snapshot(self._session, session_id, for_update=True)
         if budget is None:
             return ("BUDGET_DENIED", "SessionBudget is unavailable.")
-        outstanding = await self._session.scalar(
-            select(func.count())
-            .select_from(InterviewerPrompt)
-            .where(InterviewerPrompt.interview_session_id == session_id)
-            .where(InterviewerPrompt.kind == "PROBE")
-            .where(InterviewerPrompt.status == "AUTHORIZED"),
-        )
-        if budget.probes_used + int(outstanding or 0) >= budget.max_probes:
+        if budget.remaining_probes == 0:
             return ("BUDGET_DENIED", "Probe budget is exhausted or already reserved.")
+        return None
+
+    async def _claim_confidence_rejection(
+        self,
+        decision: ExaminerDecision,
+    ) -> tuple[str, str] | None:
+        if (
+            decision.action != "PROBE"
+            or decision.target_claim_id is None
+            or decision.proposed_probe_strategy
+            not in CONSEQUENTIAL_CLAIM_CHALLENGE_STRATEGIES
+        ):
+            return None
+        claim = await self._session.get(CandidateClaim, decision.target_claim_id)
+        if claim is None:
+            return ("STALE", "Target CandidateClaim is unavailable.")
+        if claim.extraction_confidence < CONSEQUENTIAL_CLAIM_CHALLENGE_MIN_CONFIDENCE:
+            return (
+                "LOW_CONFIDENCE",
+                "Consequential claim challenge requires trustworthy claim extraction.",
+            )
+        return None
+
+    async def _duplicate_probe_result(
+        self,
+        decision: ExaminerDecision,
+    ) -> tuple[str, str] | None:
+        if decision.proposed_probe_strategy is None:
+            return None
+        current_claim = (
+            await self._session.get(CandidateClaim, decision.target_claim_id)
+            if decision.target_claim_id
+            else None
+        )
+        rows = (
+            await self._session.execute(
+                select(InterviewerPrompt, ExaminerDecision, CandidateClaim)
+                .join(
+                    InterviewerPromptDelivery,
+                    InterviewerPromptDelivery.interviewer_prompt_id == InterviewerPrompt.id,
+                )
+                .outerjoin(
+                    ExaminerDecision,
+                    InterviewerPrompt.examiner_decision_id == ExaminerDecision.id,
+                )
+                .outerjoin(CandidateClaim, InterviewerPrompt.target_claim_id == CandidateClaim.id)
+                .where(InterviewerPrompt.interview_session_id == decision.interview_session_id)
+                .where(InterviewerPrompt.kind == "PROBE")
+                .where(InterviewerPrompt.probe_strategy == decision.proposed_probe_strategy)
+                .where(
+                    InterviewerPromptDelivery.delivery_state.in_(
+                        CANDIDATE_VISIBLE_DELIVERY_STATES
+                    )
+                )
+            )
+        ).all()
+        for _prompt, previous_decision, previous_claim in rows:
+            same_claim = (
+                current_claim is not None
+                and previous_claim is not None
+                and current_claim.claim_type == previous_claim.claim_type
+                and _normalized_claim_identity(current_claim.normalized_claim)
+                == _normalized_claim_identity(previous_claim.normalized_claim)
+            )
+            same_code_source = (
+                decision.target_code_snapshot_id is not None
+                and previous_decision is not None
+                and previous_decision.target_code_snapshot_id
+                == decision.target_code_snapshot_id
+                and previous_decision.target_event_id == decision.target_event_id
+            )
+            if same_claim or same_code_source:
+                return (
+                    "REJECTED",
+                    "A candidate-visible probe already covered the same structured "
+                    "target and strategy.",
+                )
         return None
 
     async def _defer_reason(
@@ -572,3 +660,7 @@ def _claim_excerpt(claim: str, *, maximum_length: int = 180) -> str:
     if len(normalized) <= maximum_length:
         return normalized
     return f"{normalized[: maximum_length - 3].rstrip()}..."
+
+
+def _normalized_claim_identity(claim: str) -> str:
+    return " ".join(claim.casefold().split()).rstrip(".?! ")

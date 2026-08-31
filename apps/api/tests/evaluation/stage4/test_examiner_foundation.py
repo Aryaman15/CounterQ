@@ -27,6 +27,27 @@ from app.examiner.context import (
 from app.examiner.models import CandidateClaim, ExaminerDecision
 
 
+def decision_metadata() -> dict[str, object]:
+    return {
+        "target_ranking": {
+            "technical_importance": "MEDIUM",
+            "interpretation_confidence": "MEDIUM",
+            "diagnostic_value": "MEDIUM",
+            "current_evidence_gap": "MEDIUM",
+            "candidate_commitment": "MEDIUM",
+            "context_relevance": "HIGH",
+            "freshness": "HIGH",
+            "self_correction_likelihood": "LOW",
+            "interruption_cost": "LOW",
+            "duplicate_evidence": "LOW",
+            "time_pressure": "LOW",
+            "probe_fatigue": "LOW",
+            "staleness_risk": "LOW",
+        },
+        "verification": {"required": False, "reason": "NONE"},
+    }
+
+
 def output(action: str, strategy: str | None, target: str) -> ExaminerAnalysisResult:
     claims = []
     index = None
@@ -52,6 +73,7 @@ def output(action: str, strategy: str | None, target: str) -> ExaminerAnalysisRe
                 "confidence": 0.9,
                 "priority": 3,
                 "urgency": 1,
+                **decision_metadata(),
             },
         }
     )
@@ -161,17 +183,29 @@ def test_transcript_and_code_context_match_production_nested_shapes() -> None:
 
 def test_fixture_specific_diagnostic_context_survives_serialization() -> None:
     execution = json.loads(model_input_json(fixture("execution-failure-observe").input))
-    assert execution["diagnostic_context"]["execution_context"]["outcome"] == "FAILED"
+    assert execution["diagnostic_context"]["execution_context"]["run_status"] == (
+        "RUNTIME_ERROR"
+    )
 
     duplicate = json.loads(model_input_json(fixture("two-sum-repeated-concept-wait").input))
     assert duplicate["diagnostic_context"]["recent_delivered_prompt_intents"] == [
-        {"target_concept": "hash lookup guarantee", "strategy": "ASSUMPTION_CHALLENGE"}
+        {
+            "prompt_kind": "PROBE",
+            "strategy": "ASSUMPTION_CHALLENGE",
+            "target_concept_id": "hash-lookup-guarantee",
+            "target_claim_type": "COMPLEXITY",
+            "target_claim": "hash lookup is guaranteed constant time",
+            "candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+            "delivery_state": "DELIVERED",
+        }
     ]
 
     ambiguity = json.loads(model_input_json(fixture("transcription-ambiguity-observe").input))
     assert ambiguity["diagnostic_context"]["recent_claims"][0] == {
-        "text": "heap maybe linear?",
-        "transcription_confidence": 0.31,
+        "normalized_claim": "heap maybe linear?",
+        "claim_type": "COMPLEXITY",
+        "extraction_confidence": 0.31,
+        "source_event_watermark": 1,
     }
 
     transcript_input = fixture("transcription-ambiguity-observe").input.model_copy(

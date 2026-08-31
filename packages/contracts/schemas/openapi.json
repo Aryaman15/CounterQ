@@ -658,6 +658,20 @@
             "title": "Target Kind",
             "type": "string"
           },
+          "target_ranking": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Ranking"
+          },
           "technical_rationale": {
             "title": "Technical Rationale",
             "type": "string"
@@ -672,6 +686,18 @@
               }
             ],
             "title": "Urgency"
+          },
+          "verification": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Verification"
           }
         },
         "required": [
@@ -688,7 +714,9 @@
           "status",
           "policy_gate_outcome",
           "policy_gate_reason",
-          "deadline_at"
+          "deadline_at",
+          "target_ranking",
+          "verification"
         ],
         "title": "DevelopmentExaminerDecision",
         "type": "object"

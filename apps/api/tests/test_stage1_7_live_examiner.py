@@ -132,6 +132,34 @@ class FakeExaminerProvider:
         )
 
 
+def decision_metadata(
+    *,
+    verification_required: bool = False,
+    verification_reason: str = "NONE",
+) -> dict[str, object]:
+    return {
+        "target_ranking": {
+            "technical_importance": "HIGH",
+            "interpretation_confidence": "HIGH",
+            "diagnostic_value": "HIGH",
+            "current_evidence_gap": "HIGH",
+            "candidate_commitment": "MEDIUM",
+            "context_relevance": "HIGH",
+            "freshness": "HIGH",
+            "self_correction_likelihood": "LOW",
+            "interruption_cost": "LOW",
+            "duplicate_evidence": "LOW",
+            "time_pressure": "LOW",
+            "probe_fatigue": "LOW",
+            "staleness_risk": "LOW",
+        },
+        "verification": {
+            "required": verification_required,
+            "reason": verification_reason,
+        },
+    }
+
+
 def settings(tmp_path: Path, *, autostart: bool = False) -> Settings:
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -181,6 +209,7 @@ def transcript_probe_output() -> dict[str, Any]:
             "confidence": 0.9,
             "priority": 4,
             "urgency": 3,
+            **decision_metadata(),
         },
     }
 
@@ -204,6 +233,7 @@ def complexity_derivation_probe_output() -> dict[str, Any]:
             "confidence": 0.86,
             "priority": 3,
             "urgency": 2,
+            **decision_metadata(),
         },
     }
 
@@ -227,6 +257,7 @@ def invariant_probe_output() -> dict[str, Any]:
             "confidence": 0.87,
             "priority": 4,
             "urgency": 2,
+            **decision_metadata(),
         },
     }
 
@@ -243,6 +274,7 @@ def code_probe_output() -> dict[str, Any]:
             "confidence": 0.84,
             "priority": 4,
             "urgency": 2,
+            **decision_metadata(),
         },
     }
 
@@ -261,6 +293,7 @@ def code_invariant_prove_output() -> dict[str, Any]:
             "confidence": 0.88,
             "priority": 4,
             "urgency": 3,
+            **decision_metadata(),
         },
     }
 
@@ -277,6 +310,7 @@ def code_observe_output(reason: str) -> dict[str, Any]:
             "confidence": 0.78,
             "priority": 2,
             "urgency": 1,
+            **decision_metadata(),
         },
     }
 
@@ -293,6 +327,7 @@ def wait_output() -> dict[str, Any]:
             "confidence": 0.8,
             "priority": 1,
             "urgency": 0,
+            **decision_metadata(),
         },
     }
 
@@ -391,27 +426,25 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
             ExaminerAnalysisResult.model_validate(invalid_non_claim_target)
 
 
-def test_live_examiner_policy_v4_guides_primary_strategy_stable_code_and_targets() -> None:
+def test_live_examiner_policy_v5_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v4"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v4"
-    assert "primary diagnostic uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "not merely the technical topic" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "invalid guarantee" in LIVE_EXAMINER_INSTRUCTIONS
+    assert descriptor.version == "v5"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v5"
+    assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "not merely the topic" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "invalid absolute complexity guarantee" in LIVE_EXAMINER_INSTRUCTIONS
     assert "ASSUMPTION_CHALLENGE" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "deriving, explaining, comparing, or" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "deriving a" in LIVE_EXAMINER_INSTRUCTIONS
     assert "COMPLEXITY" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "invariant actually" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "defending an invariant" in LIVE_EXAMINER_INSTRUCTIONS
     assert "PROVE" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "Do not choose WAIT solely because a code observation was recently produced" in (
-        LIVE_EXAMINER_INSTRUCTIONS
-    )
+    assert "Populate every target_ranking factor" in LIVE_EXAMINER_INSTRUCTIONS
     assert "STABLE_AFTER_EDIT_BURST" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "stable enough to reason about" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "Do not require Run or a declared-done signal" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "target_claim_index MUST be JSON null" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "stable enough to analyze" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not require Run" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "require target_claim_index=null" in LIVE_EXAMINER_INSTRUCTIONS
     schema = ExaminerAnalysisResult.model_json_schema()
     decision_schema = schema["$defs"]["ExaminerDecisionOutput"]["properties"]
     assert "Primary diagnostic target" in decision_schema["target_kind"]["description"]

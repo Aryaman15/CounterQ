@@ -1482,11 +1482,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 4A — Examiner Evaluation Foundation + Baseline Harness
+Stage 4B — Production Examiner Quality Hardening
 
 Current Goal:
-Build a production-parity, versioned Examiner evaluation corpus and deterministic
-baseline harness before changing live Examiner behavior.
+Harden the production Live Examiner using compact diagnostic context, structured
+target ranking, duplicate/false-positive controls, candidate-level depth and
+tiered reasoning before live calibration.
 ```
 
 Update only this small section as implementation progresses.

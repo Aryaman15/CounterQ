@@ -17,8 +17,10 @@
     "execution_context": null,
     "recent_claims": [
       {
-        "transcription_confidence": 0.31,
-        "text": "heap maybe linear?"
+        "normalized_claim": "heap maybe linear?",
+        "claim_type": "COMPLEXITY",
+        "extraction_confidence": 0.31,
+        "source_event_watermark": 1
       }
     ],
     "recent_delivered_prompt_intents": [],

@@ -8,9 +8,23 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.interviews.models import InterviewConfiguration, InterviewSession
+from app.examiner.context_contract import (
+    ExaminerDiagnosticContext,
+    ExecutionContextSummary,
+    RecentClaimSummary,
+    RecentDeliveredPromptIntentSummary,
+)
+from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.execution.models import ExecutionRun
+from app.interviews.budget_policy import probe_budget_snapshot
+from app.interviews.models import (
+    InterviewConfiguration,
+    InterviewerPrompt,
+    InterviewerPromptDelivery,
+    InterviewSession,
+)
 from app.observation.engine import ObservationEngine, StructuredObservation
-from app.observation.models import CodeSnapshot, InterviewEvent
+from app.observation.models import CodeSnapshot, InterviewEvent, TranscriptSegment
 from app.observation.repository import ObservationRepository
 from app.problems.models import InterviewPackVersion, ProblemVersion
 
@@ -35,6 +49,14 @@ CODE_EDIT_OBSERVATION_SEMANTICS = (
     "Source was emitted after the editor inactivity boundary, not per keystroke. "
     "It is stable enough to reason about, but the candidate may still edit later."
 )
+RECENT_CLAIM_LIMIT = 6
+RECENT_DELIVERED_PROMPT_LIMIT = 6
+RECENT_TRANSCRIPT_LIMIT = 6
+RECENT_HISTORY_LIMIT = 8
+EXECUTION_SIGNAL_CHARACTER_LIMIT = 800
+CANDIDATE_VISIBLE_DELIVERY_STATES = frozenset(
+    {"STARTED", "DELIVERED", "PARTIALLY_DELIVERED", "INTERRUPTED"}
+)
 
 
 @dataclass(frozen=True)
@@ -56,8 +78,7 @@ def serialize_examiner_context(
 ) -> dict[str, object]:
     """Serialize the one production Examiner context contract.
 
-    Evaluation may append typed, non-durable Stage-4 diagnostic summaries; live
-    production callers do not populate them yet.
+    Evaluation and production use the same typed Stage-4 diagnostic section.
     """
     context: dict[str, object] = {
         "trusted_policy": trusted_policy,
@@ -110,6 +131,9 @@ class ExaminerContextBuilder:
             raise ExaminerContextError("Interview context is incomplete")
 
         associated_code = await self._associated_code_snapshot(observation)
+        source_event = await self._session.get(InterviewEvent, observation.source_event_id)
+        if source_event is None:
+            raise ExaminerContextError("Examiner source event was not found")
         source_freshness = await self._source_freshness(observation)
         history = await self._recent_history(
             session_id=interview.id,
@@ -117,6 +141,12 @@ class ExaminerContextBuilder:
         )
         now = datetime.now(UTC)
         remaining_seconds = max(0, int((interview.deadline_at - now).total_seconds()))
+        diagnostic_context = await self._diagnostic_context(
+            interview=interview,
+            watermark=observation.source_event_watermark,
+            source_received_at=source_event.received_at,
+            associated_code=associated_code,
+        )
 
         context_json = serialize_examiner_context(
             trusted_policy={
@@ -153,6 +183,7 @@ class ExaminerContextBuilder:
             source_observation=_observation_payload(observation, associated_code),
             source_freshness=source_freshness,
             recent_history=history,
+            diagnostic_context=diagnostic_context.model_dump(mode="json", exclude_none=True),
         )
         return ExaminerContext(observation=observation, context_json=context_json)
 
@@ -211,7 +242,7 @@ class ExaminerContextBuilder:
                 .where(InterviewEvent.interview_session_id == session_id)
                 .where(InterviewEvent.server_sequence <= watermark)
                 .order_by(InterviewEvent.server_sequence.desc())
-                .limit(8)
+                .limit(RECENT_HISTORY_LIMIT)
             )
         )
         return [
@@ -226,6 +257,172 @@ class ExaminerContextBuilder:
             }
             for event in reversed(rows)
         ]
+
+    async def _diagnostic_context(
+        self,
+        *,
+        interview: InterviewSession,
+        watermark: int,
+        source_received_at: datetime,
+        associated_code: CodeSnapshot | None,
+    ) -> ExaminerDiagnosticContext:
+        budget = await probe_budget_snapshot(self._session, interview.id)
+        return ExaminerDiagnosticContext(
+            remaining_probe_budget=budget.remaining_probes if budget else 0,
+            recent_transcript=await self._recent_transcript(interview.id, watermark),
+            execution_context=await self._execution_context(
+                interview.id,
+                watermark,
+                associated_code,
+            ),
+            recent_claims=await self._recent_claims(interview.id, watermark),
+            recent_delivered_prompt_intents=await self._recent_delivered_prompt_intents(
+                interview.id,
+                source_received_at,
+            ),
+            synthetic_prior_context=None,
+        )
+
+    async def _recent_transcript(self, session_id: UUID, watermark: int) -> list[str]:
+        rows = list(
+            await self._session.scalars(
+                select(TranscriptSegment.text)
+                .join(InterviewEvent, TranscriptSegment.interview_event_id == InterviewEvent.id)
+                .where(TranscriptSegment.interview_session_id == session_id)
+                .where(TranscriptSegment.speaker == "CANDIDATE")
+                .where(InterviewEvent.server_sequence <= watermark)
+                .order_by(InterviewEvent.server_sequence.desc())
+                .limit(RECENT_TRANSCRIPT_LIMIT)
+            )
+        )
+        return [_bounded_text(text, 500) for text in reversed(rows)]
+
+    async def _recent_claims(
+        self,
+        session_id: UUID,
+        watermark: int,
+    ) -> list[RecentClaimSummary]:
+        rows = list(
+            (
+                await self._session.execute(
+                    select(CandidateClaim, InterviewEvent.server_sequence)
+                    .join(InterviewEvent, CandidateClaim.source_event_id == InterviewEvent.id)
+                    .where(CandidateClaim.interview_session_id == session_id)
+                    .where(CandidateClaim.status == "ACCEPTED_AS_INTERPRETATION")
+                    .where(InterviewEvent.server_sequence <= watermark)
+                    .order_by(
+                        InterviewEvent.server_sequence.desc(),
+                        CandidateClaim.created_at.desc(),
+                    )
+                    .limit(RECENT_CLAIM_LIMIT)
+                )
+            ).all()
+        )
+        return [
+            RecentClaimSummary(
+                normalized_claim=_bounded_text(claim.normalized_claim, 500),
+                claim_type=claim.claim_type,
+                extraction_confidence=float(claim.extraction_confidence),
+                source_event_watermark=server_sequence,
+            )
+            for claim, server_sequence in reversed(rows)
+        ]
+
+    async def _recent_delivered_prompt_intents(
+        self,
+        session_id: UUID,
+        source_received_at: datetime,
+    ) -> list[RecentDeliveredPromptIntentSummary]:
+        rows = list(
+            (
+                await self._session.execute(
+                    select(
+                        InterviewerPrompt,
+                        InterviewerPromptDelivery,
+                        CandidateClaim,
+                        ExaminerDecision,
+                        CodeSnapshot,
+                    )
+                    .join(
+                        InterviewerPromptDelivery,
+                        InterviewerPromptDelivery.interviewer_prompt_id == InterviewerPrompt.id,
+                    )
+                    .outerjoin(
+                        CandidateClaim,
+                        InterviewerPrompt.target_claim_id == CandidateClaim.id,
+                    )
+                    .outerjoin(
+                        ExaminerDecision,
+                        InterviewerPrompt.examiner_decision_id == ExaminerDecision.id,
+                    )
+                    .outerjoin(
+                        CodeSnapshot,
+                        ExaminerDecision.target_code_snapshot_id == CodeSnapshot.id,
+                    )
+                    .where(InterviewerPrompt.interview_session_id == session_id)
+                    .where(
+                        InterviewerPromptDelivery.delivery_state.in_(
+                            CANDIDATE_VISIBLE_DELIVERY_STATES
+                        )
+                    )
+                    .where(InterviewerPromptDelivery.started_at <= source_received_at)
+                    .order_by(InterviewerPromptDelivery.started_at.desc())
+                    .limit(RECENT_DELIVERED_PROMPT_LIMIT)
+                )
+            ).all()
+        )
+        return [
+            RecentDeliveredPromptIntentSummary(
+                prompt_kind=prompt.kind,
+                strategy=cast(str | None, prompt.probe_strategy),
+                target_concept_id=(
+                    str(prompt.target_concept_id) if prompt.target_concept_id else None
+                ),
+                target_claim_type=claim.claim_type if claim else None,
+                target_claim=(
+                    _bounded_text(claim.normalized_claim, 500) if claim else None
+                ),
+                target_code_snapshot_id=(str(snapshot.id) if snapshot else None),
+                target_code_snapshot_version=(snapshot.version_number if snapshot else None),
+                candidate_safe_intent=_bounded_text(prompt.intent, 500),
+                delivery_state=cast(str, delivery.delivery_state),
+            )
+            for prompt, delivery, claim, _decision, snapshot in reversed(rows)
+        ]
+
+    async def _execution_context(
+        self,
+        session_id: UUID,
+        watermark: int,
+        associated_code: CodeSnapshot | None,
+    ) -> ExecutionContextSummary | None:
+        row = (
+            await self._session.execute(
+                select(ExecutionRun, InterviewEvent.server_sequence, CodeSnapshot.version_number)
+                .join(InterviewEvent, ExecutionRun.run_event_id == InterviewEvent.id)
+                .join(CodeSnapshot, ExecutionRun.code_snapshot_id == CodeSnapshot.id)
+                .where(ExecutionRun.interview_session_id == session_id)
+                .where(InterviewEvent.server_sequence <= watermark)
+                .order_by(InterviewEvent.server_sequence.desc())
+                .limit(1)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        run, run_watermark, snapshot_version = row
+        matches_current = associated_code is not None and run.code_snapshot_id == associated_code.id
+        return ExecutionContextSummary(
+            run_status=cast(str, run.status),
+            stdout=_bounded_optional_signal(run.stdout),
+            stderr=_bounded_optional_signal(run.stderr),
+            compiler_output=_bounded_optional_signal(run.compiler_output),
+            execution_run_id=str(run.id),
+            source_run_watermark=run_watermark,
+            code_snapshot_id=str(run.code_snapshot_id),
+            code_snapshot_version=snapshot_version,
+            matches_current_code=matches_current,
+            contextual_only=not matches_current,
+        )
 
 
 def _observation_payload(
@@ -327,3 +524,14 @@ def serialize_source_freshness(
         "newer_candidate_transcript_exists": newer_candidate_transcript_exists,
         "freshness_semantics": SOURCE_FRESHNESS_SEMANTICS,
     }
+
+
+def _bounded_text(value: str, maximum_length: int) -> str:
+    return value if len(value) <= maximum_length else value[:maximum_length]
+
+
+def _bounded_optional_signal(value: str) -> str | None:
+    stripped = value.strip()
+    if not stripped:
+        return None
+    return _bounded_text(stripped, EXECUTION_SIGNAL_CHARACTER_LIMIT)

@@ -55,6 +55,8 @@ class DevelopmentExaminerDecision(BaseModel):
     policy_gate_outcome: str | None
     policy_gate_reason: str | None
     deadline_at: str | None
+    target_ranking: dict[str, str] | None
+    verification: dict[str, object] | None
 
 
 class DevelopmentAnalyzeLatestResponse(BaseModel):
@@ -292,6 +294,8 @@ def _response_from_result(result: LiveExaminerDebugResult) -> DevelopmentAnalyze
                     if result.decision.deadline_at
                     else None
                 ),
+                target_ranking=result.decision.target_ranking,
+                verification=result.decision.verification,
             )
             if result.decision
             else None
