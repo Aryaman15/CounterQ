@@ -46,7 +46,7 @@ int probe() { std::ifstream input("/workspace/.env"); return input.good() ? 1 : 
 $longCompileSource = ((1..6000 | ForEach-Object { "int f$_() { return $_; }" }) -join "`n") + "`nint probe() { return f6000(); }"
 $cases += Invoke-SandboxCase "long-compile" $longCompileSource -CompileTimeout 1
 $cases += Invoke-SandboxCase "compiler-error" "int probe( {"
-$cases += Invoke-SandboxCase "segmentation-fault" "#include <csignal>`nint probe() { raise(SIGSEGV); return 0; }"
+$cases += Invoke-SandboxCase "segmentation-fault" "int probe() { volatile int* pointer = nullptr; return *pointer; }"
 
 $byName = @{}
 foreach ($case in $cases) { $byName[$case.Name] = $case.Result }

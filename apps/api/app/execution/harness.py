@@ -64,9 +64,7 @@ def execution_request_for_problem(
     output_limit_bytes: int,
     case_selection: CaseSelection | None = None,
 ) -> ExecutionRequest:
-    harness, cases = harness_for_problem(
-        io_schema, language, case_selection=case_selection
-    )
+    harness, cases = harness_for_problem(io_schema, language, case_selection=case_selection)
     return ExecutionRequest(
         language=language,
         source_code=source_code,
@@ -155,11 +153,9 @@ def _selected_cases(
     )
 
 
-def _cpp_harness(
-    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
-) -> str:
+def _cpp_harness(execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]) -> str:
     invocations = []
-    for index, case in enumerate(cases, start=1):
+    for case in cases:
         arguments = ", ".join(
             _cpp_literal(case.input_json[argument.name], argument.type)
             for argument in execution.arguments
@@ -167,11 +163,14 @@ def _cpp_harness(
         invocations.append(
             "    {\n"
             "        Solution solution;\n"
-            f'        cout << "COUNTERQ_CASE\\t{index}\\t" << '
-            f'counterq_json(solution.{execution.method_name}({arguments})) << "\\n";\n'
+            "        counterq_emit("
+            f"counterq_json(solution.{execution.method_name}({arguments})));\n"
             "    }"
         )
     return r"""
+#include <cerrno>
+#include <unistd.h>
+
 static string counterq_json_escape(const string& value) {
     string out = "\"";
     const char hex[] = "0123456789abcdef";
@@ -211,22 +210,40 @@ static string counterq_json(const vector<T>& values) {
     return out + "]";
 }
 
+static void counterq_emit(const string& value) {
+    const char* descriptor_text = getenv("COUNTERQ_RESULT_FD");
+    if (descriptor_text == nullptr) _Exit(70);
+    const int descriptor = static_cast<int>(strtol(descriptor_text, nullptr, 10));
+    const string frame = value + "\n";
+    size_t offset = 0;
+    while (offset < frame.size()) {
+        const ssize_t written = ::write(
+            descriptor, frame.data() + offset, frame.size() - offset
+        );
+        if (written > 0) {
+            offset += static_cast<size_t>(written);
+        } else if (written < 0 && errno == EINTR) {
+            continue;
+        } else {
+            _Exit(70);
+        }
+    }
+}
+
 int main() {
 __INVOCATIONS__
 }
 """.replace("__INVOCATIONS__", "\n".join(invocations))
 
 
-def _python_harness(
-    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
-) -> str:
+def _python_harness(execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]) -> str:
     case_values = [
-        [case.input_json[argument.name] for argument in execution.arguments]
-        for case in cases
+        [case.input_json[argument.name] for argument in execution.arguments] for case in cases
     ]
     encoded_cases = json.dumps(case_values, ensure_ascii=False, separators=(",", ":"))
     template = """
 import json as _counterq_json_module
+import os as _counterq_os_module
 
 def _counterq_valid(value, semantic_type):
     if semantic_type == "int":
@@ -249,7 +266,16 @@ for _counterq_index, _counterq_arguments in enumerate(_counterq_cases, start=1):
     _counterq_encoded = _counterq_json_module.dumps(
         _counterq_actual, ensure_ascii=False, separators=(",", ":")
     )
-    print(f"COUNTERQ_CASE\\t{_counterq_index}\\t{_counterq_encoded}")
+    _counterq_frame = (_counterq_encoded + "\\n").encode("utf-8")
+    _counterq_offset = 0
+    _counterq_result_fd = int(_counterq_os_module.environ["COUNTERQ_RESULT_FD"])
+    while _counterq_offset < len(_counterq_frame):
+        _counterq_written = _counterq_os_module.write(
+            _counterq_result_fd, _counterq_frame[_counterq_offset:]
+        )
+        if _counterq_written <= 0:
+            raise RuntimeError("trusted result channel closed")
+        _counterq_offset += _counterq_written
 """
     trusted_metadata = template.replace("__METHOD__", execution.method_name).replace(
         "__RETURN_TYPE__", json.dumps(execution.return_type)
@@ -257,11 +283,9 @@ for _counterq_index, _counterq_arguments in enumerate(_counterq_cases, start=1):
     return trusted_metadata.replace("__CASES_JSON__", repr(encoded_cases))
 
 
-def _java_harness(
-    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
-) -> str:
+def _java_harness(execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]) -> str:
     invocations = []
-    for index, case in enumerate(cases, start=1):
+    for case in cases:
         arguments = ", ".join(
             _java_literal(case.input_json[argument.name], argument.type)
             for argument in execution.arguments
@@ -269,12 +293,35 @@ def _java_harness(
         invocations.append(
             "        {\n"
             "            Solution solution = new Solution();\n"
-            f'            System.out.println("COUNTERQ_CASE\\t{index}\\t" + '
-            f'counterqJson(solution.{execution.method_name}({arguments})));\n'
+            "            counterqEmit("
+            f"counterqJson(solution.{execution.method_name}({arguments})));\n"
             "        }"
         )
     return r"""
+import java.io.FileOutputStream;
+import java.io.FileDescriptor;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
+
 public class Main {
+    private static final FileOutputStream COUNTERQ_RESULT_OUTPUT = counterqResultOutput();
+
+    private static FileOutputStream counterqResultOutput() {
+        String descriptor = System.getenv("COUNTERQ_RESULT_FD");
+        if (descriptor == null) Runtime.getRuntime().halt(70);
+        try {
+            FileDescriptor fileDescriptor = new FileDescriptor();
+            Field field = FileDescriptor.class.getDeclaredField("fd");
+            field.setAccessible(true);
+            field.setInt(fileDescriptor, Integer.parseInt(descriptor));
+            return new FileOutputStream(fileDescriptor);
+        } catch (ReflectiveOperationException | NumberFormatException error) {
+            Runtime.getRuntime().halt(70);
+            throw new AssertionError(error);
+        }
+    }
+
     private static String counterqJson(int value) { return Integer.toString(value); }
     private static String counterqJson(boolean value) { return value ? "true" : "false"; }
     private static String counterqJson(String value) {
@@ -330,6 +377,17 @@ public class Main {
         return out.append(']').toString();
     }
 
+    private static void counterqEmit(String value) {
+        byte[] frame = (value + "\n")
+            .getBytes(StandardCharsets.UTF_8);
+        try {
+            COUNTERQ_RESULT_OUTPUT.write(frame);
+            COUNTERQ_RESULT_OUTPUT.flush();
+        } catch (IOException error) {
+            Runtime.getRuntime().halt(70);
+        }
+    }
+
     public static void main(String[] args) {
 __INVOCATIONS__
     }
@@ -369,9 +427,5 @@ def _java_literal(value: object, semantic_type: str) -> str:
         }.get(semantic_type)
         if java_type is None:
             raise UnsupportedExecutionSchema(f"Unsupported semantic type {semantic_type}")
-        return (
-            f"new {java_type}{{"
-            + ", ".join(_java_literal(item, inner) for item in value)
-            + "}"
-        )
+        return f"new {java_type}{{" + ", ".join(_java_literal(item, inner) for item in value) + "}"
     raise UnsupportedExecutionSchema(f"Unsupported semantic type {semantic_type}")

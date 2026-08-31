@@ -1319,6 +1319,9 @@ pnpm run eval:stage3c:sandbox
 
 Evaluate the Stage 3C candidate custom-test sandbox gate:
 pnpm run eval:stage3c:custom-sandbox
+
+Evaluate the Stage 3D.1 execution adversarial hardening gate:
+pnpm run eval:stage3d:execution-adversarial
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1476,13 +1479,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 3C — Curated Problem + Interview Pack System
+Stage 3D.1 — Execution Protocol + Sandbox Adversarial Hardening
 
 Current Goal:
-Load reviewed, immutable curated ProblemVersions and InterviewPackVersions from
-version-controlled content, bind exact versions to sessions, expose only
-candidate-safe problem data, and provide rich server-only technical priors for
-future Examiner reasoning.
+Treat candidate source as hostile, separate candidate output from trusted result
+authority, and prove network, process, filesystem and resource containment through
+the real sandbox without beginning Stage 3D.2 or Stage 4.
 ```
 
 Update only this small section as implementation progresses.

@@ -50,6 +50,15 @@ class LocalSandboxExecutorProvider:
             raise ExecutorProviderError() from exc
         if not isinstance(data, dict) or not isinstance(data.get("status"), str):
             raise ExecutorProviderError()
+        if data["status"] not in {
+            "SUCCEEDED",
+            "COMPILE_ERROR",
+            "RUNTIME_ERROR",
+            "TIMED_OUT",
+            "OUTPUT_LIMIT_EXCEEDED",
+            "PROVIDER_ERROR",
+        }:
+            raise ExecutorProviderError()
         raw_cases = data.get("cases", [])
         if not isinstance(raw_cases, list):
             raise ExecutorProviderError()
@@ -62,11 +71,30 @@ class LocalSandboxExecutorProvider:
             if identifier not in definitions or identifier in raw_by_identifier:
                 raise ExecutorProviderError()
             raw_by_identifier[identifier] = raw_case
+        if data["status"] == "SUCCEEDED" and set(raw_by_identifier) != set(definitions):
+            raise ExecutorProviderError()
+        if data["status"] != "SUCCEEDED" and raw_by_identifier:
+            raise ExecutorProviderError()
         cases: list[ExecutionCaseOutcome] = []
         if data["status"] == "SUCCEEDED":
             for definition in request.cases:
-                raw_case = raw_by_identifier.get(definition.identifier, {})
-                actual_output = cast(str | None, raw_case.get("actual_output"))
+                raw_case = raw_by_identifier[definition.identifier]
+                actual_output_value = raw_case.get("actual_output")
+                if actual_output_value is not None and not isinstance(actual_output_value, str):
+                    raise ExecutorProviderError()
+                if (
+                    isinstance(actual_output_value, str)
+                    and len(actual_output_value.encode("utf-8")) > request.output_limit_bytes
+                ):
+                    raise ExecutorProviderError()
+                duration_value = raw_case.get("duration_ms")
+                if duration_value is not None and (
+                    not isinstance(duration_value, int)
+                    or isinstance(duration_value, bool)
+                    or duration_value < 0
+                ):
+                    raise ExecutorProviderError()
+                actual_output = cast(str | None, actual_output_value)
                 try:
                     compared = (
                         validate_output(actual_output, definition.return_type)
@@ -85,17 +113,20 @@ class LocalSandboxExecutorProvider:
                         identifier=definition.identifier,
                         actual_output=compared.actual_output,
                         status=compared.status,
-                        duration_ms=cast(int | None, raw_case.get("duration_ms")),
+                        duration_ms=cast(int | None, duration_value),
                         failure_classification=compared.failure_classification,
                     )
                 )
+        stdout = _bounded_text(data.get("stdout", ""), request.output_limit_bytes)
+        stderr = _bounded_text(data.get("stderr", ""), request.output_limit_bytes)
+        compiler_output = _bounded_text(data.get("compiler_output", ""), request.output_limit_bytes)
         return ExecutionOutcome(
             status=data["status"],
             provider_run_id=cast(str | None, data.get("provider_run_id")),
             runtime_version=cast(str | None, data.get("runtime_version")),
-            stdout=cast(str, data.get("stdout", "")),
-            stderr=cast(str, data.get("stderr", "")),
-            compiler_output=cast(str, data.get("compiler_output", "")),
+            stdout=stdout,
+            stderr=stderr,
+            compiler_output=compiler_output,
             exit_code=cast(int | None, data.get("exit_code")),
             timed_out=bool(data.get("timed_out", False)),
             output_truncated=bool(data.get("output_truncated", False)),
@@ -103,3 +134,9 @@ class LocalSandboxExecutorProvider:
             memory_bytes=cast(int | None, data.get("memory_bytes")),
             cases=tuple(cases),
         )
+
+
+def _bounded_text(value: object, byte_limit: int) -> str:
+    if not isinstance(value, str) or len(value.encode("utf-8")) > byte_limit:
+        raise ExecutorProviderError()
+    return value

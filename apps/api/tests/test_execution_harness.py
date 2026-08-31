@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 from inspect import signature
+from types import TracebackType
 
+import httpx
 import pytest
 
 from app.execution.codecs import (
@@ -24,6 +26,8 @@ from app.execution.policy import (
     DEFAULT_OUTPUT_LIMIT_BYTES,
     DEFAULT_RUN_TIMEOUT_SECONDS,
 )
+from app.execution.provider import ExecutionCase, ExecutionRequest, ExecutorProviderError
+from app.execution.sandbox_provider import LocalSandboxExecutorProvider
 from app.execution.service import ExecutionService
 
 
@@ -32,9 +36,9 @@ from app.execution.service import ExecutionService
     [
         ("int", -7),
         ("bool", True),
-        ("string", "quote: \" and slash: \\"),
+        ("string", 'quote: " and slash: \\'),
         ("int[]", []),
-        ("string[]", ["", "alpha", "escaped \"value\""]),
+        ("string[]", ["", "alpha", 'escaped "value"']),
         ("int[][]", [[1, -2], [], [3, 4]]),
         ("string[][]", [["a", "b"], [], [""]]),
     ],
@@ -54,7 +58,7 @@ def test_bounded_json_codec_round_trips_supported_semantic_types(
         ("bool", False),
         ("string", ""),
         ("int[]", []),
-        ("string[]", ["a", "escaped \"value\""]),
+        ("string[]", ["a", 'escaped "value"']),
         ("int[][]", [[1, -2], [], [3]]),
         ("string[][]", [["a"], [], ["b", "c"]]),
     ],
@@ -68,9 +72,7 @@ def test_generic_harness_supports_every_bounded_type(
             "arguments": [{"name": "value", "type": semantic_type}],
             "return_type": semantic_type,
             "comparator": "EXACT",
-            "visible_cases": [
-                {"arguments": {"value": value}, "expected_output": value}
-            ],
+            "visible_cases": [{"arguments": {"value": value}, "expected_output": value}],
             "custom_test_supported": True,
         }
     }
@@ -91,12 +93,10 @@ def test_unordered_list_ignores_only_top_level_order_and_preserves_multiplicity(
     assert compare_output("[2,1,1]", "[1,2,1]", "int[]", "UNORDERED_LIST").status == "PASSED"
     assert compare_output("[2,1]", "[1,2,1]", "int[]", "UNORDERED_LIST").status == "FAILED"
     assert (
-        compare_output('[[2,1],[3]]', '[[3],[2,1]]', "int[][]", "UNORDERED_LIST").status
-        == "PASSED"
+        compare_output("[[2,1],[3]]", "[[3],[2,1]]", "int[][]", "UNORDERED_LIST").status == "PASSED"
     )
     assert (
-        compare_output('[[1,2],[3]]', '[[3],[2,1]]', "int[][]", "UNORDERED_LIST").status
-        == "FAILED"
+        compare_output("[[1,2],[3]]", "[[3],[2,1]]", "int[][]", "UNORDERED_LIST").status == "FAILED"
     )
 
 
@@ -132,9 +132,7 @@ def test_unsupported_semantic_type_rejects_before_harness_generation() -> None:
             "method_name": "solve",
             "arguments": [{"name": "value", "type": "object"}],
             "return_type": "object",
-            "visible_cases": [
-                {"arguments": {"value": {}}, "expected_output": {}}
-            ],
+            "visible_cases": [{"arguments": {"value": {}}, "expected_output": {}}],
         }
     }
     with pytest.raises(UnsupportedExecutionSchema, match="supported execution schema"):
@@ -169,6 +167,23 @@ def test_harness_is_driven_by_method_and_argument_schema_not_problem_identity() 
         assert cases[0].comparator == "UNORDERED_LIST"
 
 
+def test_generated_candidate_harness_never_contains_authoritative_result_framing() -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": "int"}],
+            "return_type": "int",
+            "visible_cases": [{"arguments": {"value": 7}, "expected_output": 7}],
+        }
+    }
+
+    for language in ("cpp", "python", "java"):
+        harness, _ = harness_for_problem(schema, language)
+        assert "COUNTERQ_CASE" not in harness
+        assert "COUNTERQ_RESULT\\t" not in harness
+        assert "COUNTERQ_RESULT_FD" in harness
+
+
 def test_python_testcase_json_is_inserted_after_trusted_placeholder_metadata() -> None:
     values = [
         "__METHOD__",
@@ -184,9 +199,7 @@ def test_python_testcase_json_is_inserted_after_trusted_placeholder_metadata() -
             "arguments": [{"name": "value", "type": "string[]"}],
             "return_type": "string[]",
             "comparator": "EXACT",
-            "visible_cases": [
-                {"arguments": {"value": values}, "expected_output": values}
-            ],
+            "visible_cases": [{"arguments": {"value": values}, "expected_output": values}],
         }
     }
     harness, _ = harness_for_problem(schema, "python")
@@ -202,6 +215,64 @@ def test_execution_service_defaults_use_the_canonical_candidate_policy() -> None
     assert parameters["run_timeout_seconds"].default == DEFAULT_RUN_TIMEOUT_SECONDS
     assert parameters["memory_limit_mb"].default == DEFAULT_MEMORY_LIMIT_MB
     assert parameters["output_limit_bytes"].default == DEFAULT_OUTPUT_LIMIT_BYTES
+
+
+@pytest.mark.parametrize(
+    "raw_cases",
+    [
+        [],
+        [
+            {"identifier": "visible-1", "actual_output": "1"},
+            {"identifier": "visible-1", "actual_output": "1"},
+        ],
+        [{"identifier": "unknown", "actual_output": "1"}],
+        [{"identifier": "visible-1", "actual_output": {"not": "encoded-json"}}],
+    ],
+)
+async def test_provider_rejects_malformed_success_cardinality_without_crashing(
+    monkeypatch: pytest.MonkeyPatch, raw_cases: list[dict[str, object]]
+) -> None:
+    response = {
+        "status": "SUCCEEDED",
+        "provider_run_id": "malformed-provider-run",
+        "stdout": "",
+        "stderr": "",
+        "compiler_output": "",
+        "cases": raw_cases,
+    }
+
+    class StubAsyncClient:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        async def __aenter__(self) -> StubAsyncClient:
+            return self
+
+        async def __aexit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            return None
+
+        async def post(self, url: str, **_: object) -> httpx.Response:
+            return httpx.Response(200, json=response, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", StubAsyncClient)
+    request = ExecutionRequest(
+        language="python",
+        source_code="class Solution: pass",
+        harness="",
+        cases=(ExecutionCase("visible-1", {}, "1"),),
+        compile_timeout_seconds=8,
+        run_timeout_seconds=2,
+        memory_limit_mb=192,
+        output_limit_bytes=1024,
+    )
+
+    with pytest.raises(ExecutorProviderError):
+        await LocalSandboxExecutorProvider("http://sandbox.invalid").execute(request)
 
 
 @pytest.mark.parametrize(
