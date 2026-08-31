@@ -30,6 +30,8 @@
     "eval:stage3c:custom-sandbox": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3c-custom-sandbox.ps1",
     "eval:stage3d:execution-adversarial": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3d-execution-adversarial.ps1",
     "eval:stage3d:integrity": "uv run --directory apps/api pytest tests/evaluation/stage3d/integrity tests/test_execution.py -q",
+    "eval:stage4:foundation": "uv run --directory apps/api pytest tests/evaluation/stage4 -q",
+    "eval:stage4:live": "uv run --directory apps/api python -m app.evals.examiner.live",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",

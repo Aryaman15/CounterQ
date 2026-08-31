@@ -1482,12 +1482,11 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 3D.2 — Session / Request / Idempotency / Concurrency Integrity
+Stage 4A — Examiner Evaluation Foundation + Baseline Harness
 
 Current Goal:
-Prove that browser-controlled requests cannot change server-owned interview truth
-and that retries and concurrent execution requests have deterministic durable
-behavior without beginning Stage 4.
+Build a production-parity, versioned Examiner evaluation corpus and deterministic
+baseline harness before changing live Examiner behavior.
 ```
 
 Update only this small section as implementation progresses.
