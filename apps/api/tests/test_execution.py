@@ -240,11 +240,16 @@ async def test_run_rebuild_uses_its_exact_problem_version_not_session_current_ve
     )
     development.interview_session.problem_version_id = newer.id
     development.interview_session.interview_pack_version_id = newer_pack.id
+    development.configuration.language = "python"
     await db_session.flush()
 
     rebuilt = await service._request_for_run(run)
 
     assert run.problem_version_id == development.problem_version.id
+    assert run.language == rebuilt.language == "cpp"
+    assert rebuilt.source_code == (
+        "class Solution { public: int lengthOfLongestSubstring(string s) { return 3; } };"
+    )
     assert "lengthOfLongestSubstring" in rebuilt.harness
     assert "differentMethod" not in rebuilt.harness
 

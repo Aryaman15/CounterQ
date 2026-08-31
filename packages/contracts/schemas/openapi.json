@@ -1348,6 +1348,7 @@
       },
       "JsonValue": {},
       "RealtimeDevelopmentBootstrapRequest": {
+        "additionalProperties": false,
         "properties": {
           "client_instance_id": {
             "anyOf": [

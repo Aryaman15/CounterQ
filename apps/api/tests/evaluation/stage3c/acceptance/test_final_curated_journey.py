@@ -135,6 +135,22 @@ async def test_all_current_problem_language_sessions_bind_and_restore_exact_cand
                 _assert_candidate_safe(detail)
                 await db_session.commit()
 
+                rejected_pack_selection = await client.post(
+                    "/api/realtime/development-interview",
+                    json={
+                        "purpose": "interview_demo",
+                        "problem_version_id": str(version.id),
+                        "language": language,
+                        "client_instance_id": f"acceptance-{combinations}",
+                        "interview_pack_version_id": str(uuid4()),
+                    },
+                )
+                assert rejected_pack_selection.status_code == 422
+                assert any(
+                    error["loc"][-1] == "interview_pack_version_id"
+                    for error in rejected_pack_selection.json()["detail"]
+                )
+
                 created_response = await client.post(
                     "/api/realtime/development-interview",
                     json={
@@ -142,8 +158,6 @@ async def test_all_current_problem_language_sessions_bind_and_restore_exact_cand
                         "problem_version_id": str(version.id),
                         "language": language,
                         "client_instance_id": f"acceptance-{combinations}",
-                        # The server must ignore candidate attempts to select server-only packs.
-                        "interview_pack_version_id": str(uuid4()),
                     },
                 )
                 assert created_response.status_code == 200, created_response.text

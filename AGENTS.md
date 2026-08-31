@@ -1322,6 +1322,9 @@ pnpm run eval:stage3c:custom-sandbox
 
 Evaluate the Stage 3D.1 execution adversarial hardening gate:
 pnpm run eval:stage3d:execution-adversarial
+
+Evaluate the Stage 3D.2 session/request integrity gate:
+pnpm run eval:stage3d:integrity
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1479,12 +1482,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 3D.1 — Execution Protocol + Sandbox Adversarial Hardening
+Stage 3D.2 — Session / Request / Idempotency / Concurrency Integrity
 
 Current Goal:
-Treat candidate source as hostile, separate candidate output from trusted result
-authority, and prove network, process, filesystem and resource containment through
-the real sandbox without beginning Stage 3D.2 or Stage 4.
+Prove that browser-controlled requests cannot change server-owned interview truth
+and that retries and concurrent execution requests have deterministic durable
+behavior without beginning Stage 4.
 ```
 
 Update only this small section as implementation progresses.

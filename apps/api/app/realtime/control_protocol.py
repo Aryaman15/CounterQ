@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, TypeAdapter, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from app.problems.contracts import CandidateLanguage, CandidateProblemDetail
 
@@ -14,6 +14,8 @@ CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
 
 
 class RealtimeDevelopmentBootstrapRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     purpose: Literal["interview_demo", "stage1_fixture"] = "interview_demo"
     interview_session_id: UUID | None = None
     client_instance_id: str | None = Field(default=None, min_length=1, max_length=128)

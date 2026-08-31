@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from time import monotonic
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
@@ -31,7 +33,7 @@ from app.interviews.models import InterviewSession
 from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
 from app.observation.models import CodeSnapshot, InterviewEvent
 from app.realtime.control_protocol import CandidateCodeSnapshotMessage
-from app.realtime.control_service import RealtimeControlService
+from app.realtime.control_service import RealtimeControlService, normalize_source_code
 
 if TYPE_CHECKING:
     from app.problems.models import ProblemVersion
@@ -47,6 +49,10 @@ class RunCommand:
     client_sequence: int
     run_kind: Literal["VISIBLE", "CUSTOM"] = "VISIBLE"
     custom_arguments: dict[str, object] | None = None
+
+
+class ExecutionIdempotencyConflict(ValueError):
+    """A session-scoped execution key already represents another command."""
 
 
 class ExecutionService:
@@ -71,22 +77,33 @@ class ExecutionService:
 
     async def begin(self, command: RunCommand) -> tuple[ExecutionRun, ExecutionRequest, bool]:
         repository = ExecutionRepository(self._session)
-        existing = await repository.run_for_idempotency(command.session_id, command.idempotency_key)
-        if existing is not None:
-            return existing, await self._request_for_run(existing), False
         interview = await InterviewRuntime(
             self._session, clock=self._clock
         ).ensure_activity_allowed(command.session_id)
+        # The InterviewSession row is the PostgreSQL-backed serialization point for
+        # execution admission. Re-check only after acquiring it so concurrent requests
+        # cannot both observe an absent session-scoped idempotency key.
+        existing = await repository.run_for_idempotency(command.session_id, command.idempotency_key)
+        if existing is not None:
+            await self._ensure_same_semantic_command(existing, command)
+            return existing, await self._request_for_run(existing), False
         language = await self._configured_language(interview)
         selection = _selection_for_command(command)
         problem = await self._problem_version(interview.problem_version_id)
-        provider_request = self._build_request(
+        # Validate the candidate-selected case before creating any durable facts.
+        self._build_request(
             io_schema=problem.io_schema_json,
             language=language,
             source_code=command.source_code,
             case_selection=selection,
         )
         snapshot = await self._canonical_snapshot(command, language)
+        provider_request = self._build_request(
+            io_schema=problem.io_schema_json,
+            language=language,
+            source_code=snapshot.source_code,
+            case_selection=selection,
+        )
         event_payload: dict[str, object] = {
             "code_snapshot_id": str(snapshot.id),
             "code_version": snapshot.version_number,
@@ -128,7 +145,8 @@ class ExecutionService:
         return await self._provider.execute(request)
 
     async def complete(self, run_id: UUID, outcome: ExecutionOutcome) -> ExecutionRun:
-        run = await self._session.get(ExecutionRun, run_id)
+        repository = ExecutionRepository(self._session)
+        run = await repository.run(run_id, for_update=True)
         if run is None:
             raise ValueError("ExecutionRun not found")
         if run.status != "RUNNING":
@@ -186,7 +204,6 @@ class ExecutionService:
             )
         request = await self._request_for_run(run)
         outcomes = {case.identifier: case for case in outcome.cases}
-        repository = ExecutionRepository(self._session)
         for definition in request.cases:
             case = outcomes.get(definition.identifier)
             failure_classification: str | None
@@ -216,6 +233,24 @@ class ExecutionService:
             )
         return run
 
+    async def wait_for_terminal(
+        self,
+        run_id: UUID,
+        *,
+        timeout_seconds: float,
+        poll_interval_seconds: float = 0.05,
+    ) -> ExecutionRun:
+        """Let an identical concurrent HTTP retry converge without re-executing."""
+        deadline = monotonic() + timeout_seconds
+        while True:
+            async with self._session.begin():
+                run = await ExecutionRepository(self._session).run(run_id)
+            if run is None:
+                raise ValueError("ExecutionRun not found")
+            if run.status != "RUNNING" or monotonic() >= deadline:
+                return run
+            await asyncio.sleep(poll_interval_seconds)
+
     async def _canonical_snapshot(self, command: RunCommand, language: str) -> CodeSnapshot:
         result = await RealtimeControlService(
             self._session, clock=self._clock
@@ -239,20 +274,44 @@ class ExecutionService:
 
     async def _request_for_run(self, run: ExecutionRun) -> ExecutionRequest:
         snapshot = await self._session.get(CodeSnapshot, run.code_snapshot_id)
-        interview = await self._session.get(InterviewSession, run.interview_session_id)
-        if snapshot is None or interview is None:
+        if snapshot is None:
             raise ValueError("Execution provenance is incomplete")
         problem = await self._problem_version(run.problem_version_id)
-        language = await self._configured_language(interview)
-        if snapshot.language != language or run.language != language:
+        if snapshot.language != run.language:
             raise ValueError("Canonical execution language is inconsistent")
         _, selection = await self._selection_for_run(run)
         return self._build_request(
             io_schema=problem.io_schema_json,
-            language=language,
+            language=run.language,
             source_code=snapshot.source_code,
             case_selection=selection,
         )
+
+    async def _ensure_same_semantic_command(
+        self,
+        existing: ExecutionRun,
+        command: RunCommand,
+    ) -> None:
+        snapshot = await self._session.get(CodeSnapshot, existing.code_snapshot_id)
+        if snapshot is None:
+            raise ValueError("Execution provenance is incomplete")
+        existing_kind, existing_selection = await self._selection_for_run(existing)
+        requested_arguments = (
+            dict(command.custom_arguments) if command.custom_arguments is not None else None
+        )
+        existing_arguments = (
+            dict(existing_selection.arguments)
+            if isinstance(existing_selection, CustomCaseSelection)
+            else None
+        )
+        if (
+            snapshot.source_code != normalize_source_code(command.source_code)
+            or existing_kind != command.run_kind
+            or existing_arguments != requested_arguments
+        ):
+            raise ExecutionIdempotencyConflict(
+                "Idempotency key already represents a different execution request"
+            )
 
     def _build_request(
         self,

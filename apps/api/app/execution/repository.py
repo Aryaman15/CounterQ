@@ -24,6 +24,17 @@ class ExecutionRepository:
         )
         return cast(ExecutionRun | None, result)
 
+    async def run(self, run_id: UUID, *, for_update: bool = False) -> ExecutionRun | None:
+        statement = (
+            select(ExecutionRun)
+            .where(ExecutionRun.id == run_id)
+            .execution_options(populate_existing=True)
+        )
+        if for_update:
+            statement = statement.with_for_update()
+        result = await self._session.scalar(statement)
+        return cast(ExecutionRun | None, result)
+
     async def add_run(
         self,
         *,

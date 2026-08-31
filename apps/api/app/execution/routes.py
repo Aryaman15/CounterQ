@@ -19,7 +19,7 @@ from app.execution.harness import CustomTestValidationError
 from app.execution.models import ExecutionRun, TestResult
 from app.execution.provider import ExecutorProvider, ExecutorProviderError
 from app.execution.sandbox_provider import LocalSandboxExecutorProvider
-from app.execution.service import ExecutionService, RunCommand
+from app.execution.service import ExecutionIdempotencyConflict, ExecutionService, RunCommand
 from app.interviews.runtime import InterviewRuntimeError
 
 router = APIRouter(prefix="/api/execution", tags=["execution"])
@@ -138,6 +138,15 @@ async def development_run(
                 outcome = ExecutionOutcome(status="PROVIDER_ERROR", provider_run_id=None)
             async with session.begin():
                 run = await service.complete(run.id, outcome)
+        elif run.status == "RUNNING":
+            run = await service.wait_for_terminal(
+                run.id,
+                timeout_seconds=(
+                    settings.execution_compile_timeout_seconds
+                    + settings.execution_run_timeout_seconds
+                    + 2
+                ),
+            )
         hydrated = await session.scalar(
             select(ExecutionRun)
             .options(
@@ -150,6 +159,11 @@ async def development_run(
         if hydrated is None:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         run = hydrated
+    except ExecutionIdempotencyConflict as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Idempotency key already represents a different execution request",
+        ) from exc
     except InterviewRuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail="Interview is not active"
