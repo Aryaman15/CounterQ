@@ -23,7 +23,7 @@ _capacity = threading.BoundedSemaphore(2)
 class Case(BaseModel):
     identifier: str
     input_json: dict[str, object]
-    expected_output: str
+    expected_output: str | None
     visible: bool = True
 
 
@@ -186,9 +186,13 @@ def _execute(request: ExecuteRequest, adapter: LanguageAdapter) -> dict[str, obj
             {
                 "identifier": case.identifier,
                 "actual_output": actual[index],
-                "status": "PASSED" if actual[index] == case.expected_output else "FAILED",
+                "status": "PASSED"
+                if case.expected_output is None or actual[index] == case.expected_output
+                else "FAILED",
                 "duration_ms": ran["duration_ms"],
-                "failure_classification": None if actual[index] == case.expected_output else "VISIBLE_CASE_MISMATCH",
+                "failure_classification": None
+                if case.expected_output is None or actual[index] == case.expected_output
+                else "VISIBLE_CASE_MISMATCH",
             }
             for index, case in enumerate(request.cases)
         ]

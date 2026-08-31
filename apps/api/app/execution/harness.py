@@ -4,38 +4,52 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
 
 from pydantic import ValidationError
 
 from app.execution.codecs import ExecutionCodecError, encode_value
 from app.execution.provider import ExecutionCase, ExecutionRequest
-from app.problems.content import ExecutionDefinition
+from app.problems.content import ExecutionDefinition, validate_semantic_value
+
+MAX_CUSTOM_TEST_ARGUMENT_BYTES = 16_384
 
 
 class UnsupportedExecutionSchema(ValueError):
     pass
 
 
+class CustomTestValidationError(ValueError):
+    """Candidate-safe deterministic rejection of an invalid custom testcase."""
+
+
+@dataclass(frozen=True)
+class VisibleCaseSelection:
+    pass
+
+
+@dataclass(frozen=True)
+class CustomCaseSelection:
+    arguments: dict[str, object]
+
+
+type CaseSelection = VisibleCaseSelection | CustomCaseSelection
+
+
 def harness_for_problem(
-    io_schema: dict[str, object], language: str
+    io_schema: dict[str, object],
+    language: str,
+    *,
+    case_selection: CaseSelection | None = None,
 ) -> tuple[str, tuple[ExecutionCase, ...]]:
     execution = _execution_definition(io_schema)
-    cases = tuple(
-        ExecutionCase(
-            identifier=f"visible-{index}",
-            input_json=dict(case.arguments),
-            expected_output=encode_value(case.expected_output, execution.return_type),
-            return_type=execution.return_type,
-            comparator=execution.comparator,
-        )
-        for index, case in enumerate(execution.visible_cases, start=1)
-    )
+    cases = _selected_cases(execution, case_selection or VisibleCaseSelection())
     if language == "cpp":
-        return _cpp_harness(execution), cases
+        return _cpp_harness(execution, cases), cases
     if language == "python":
-        return _python_harness(execution), cases
+        return _python_harness(execution, cases), cases
     if language == "java":
-        return _java_harness(execution), cases
+        return _java_harness(execution, cases), cases
     raise UnsupportedExecutionSchema("Unsupported configured execution language")
 
 
@@ -48,8 +62,11 @@ def execution_request_for_problem(
     run_timeout_seconds: int,
     memory_limit_mb: int,
     output_limit_bytes: int,
+    case_selection: CaseSelection | None = None,
 ) -> ExecutionRequest:
-    harness, cases = harness_for_problem(io_schema, language)
+    harness, cases = harness_for_problem(
+        io_schema, language, case_selection=case_selection
+    )
     return ExecutionRequest(
         language=language,
         source_code=source_code,
@@ -82,11 +99,69 @@ def _execution_definition(io_schema: dict[str, object]) -> ExecutionDefinition:
     return execution
 
 
-def _cpp_harness(execution: ExecutionDefinition) -> str:
+def _selected_cases(
+    execution: ExecutionDefinition, selection: CaseSelection
+) -> tuple[ExecutionCase, ...]:
+    if isinstance(selection, VisibleCaseSelection):
+        return tuple(
+            ExecutionCase(
+                identifier=f"visible-{index}",
+                input_json=dict(case.arguments),
+                expected_output=encode_value(case.expected_output, execution.return_type),
+                return_type=execution.return_type,
+                comparator=execution.comparator,
+            )
+            for index, case in enumerate(execution.visible_cases, start=1)
+        )
+    if not execution.custom_test_supported:
+        raise CustomTestValidationError("Custom tests are not supported for this problem version")
+    arguments = dict(selection.arguments)
+    configured = {argument.name: argument.type for argument in execution.arguments}
+    if set(arguments) != set(configured):
+        missing = sorted(set(configured) - set(arguments))
+        extra = sorted(set(arguments) - set(configured))
+        details = []
+        if missing:
+            details.append(f"missing arguments: {', '.join(missing)}")
+        if extra:
+            details.append(f"unexpected arguments: {', '.join(extra)}")
+        raise CustomTestValidationError("Custom arguments do not match: " + "; ".join(details))
+    for name, semantic_type in configured.items():
+        if not validate_semantic_value(arguments[name], semantic_type):
+            raise CustomTestValidationError(
+                f"Custom argument {name} does not match semantic type {semantic_type}"
+            )
+    try:
+        encoded = json.dumps(
+            arguments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise CustomTestValidationError("Custom arguments are not valid structured JSON") from exc
+    if len(encoded) > MAX_CUSTOM_TEST_ARGUMENT_BYTES:
+        raise CustomTestValidationError(
+            f"Custom arguments exceed the {MAX_CUSTOM_TEST_ARGUMENT_BYTES}-byte limit"
+        )
+    return (
+        ExecutionCase(
+            identifier="custom-1",
+            input_json=arguments,
+            expected_output=None,
+            return_type=execution.return_type,
+            comparator=execution.comparator,
+        ),
+    )
+
+
+def _cpp_harness(
+    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
+) -> str:
     invocations = []
-    for index, case in enumerate(execution.visible_cases, start=1):
+    for index, case in enumerate(cases, start=1):
         arguments = ", ".join(
-            _cpp_literal(case.arguments[argument.name], argument.type)
+            _cpp_literal(case.input_json[argument.name], argument.type)
             for argument in execution.arguments
         )
         invocations.append(
@@ -142,12 +217,14 @@ __INVOCATIONS__
 """.replace("__INVOCATIONS__", "\n".join(invocations))
 
 
-def _python_harness(execution: ExecutionDefinition) -> str:
-    cases = [
-        [case.arguments[argument.name] for argument in execution.arguments]
-        for case in execution.visible_cases
+def _python_harness(
+    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
+) -> str:
+    case_values = [
+        [case.input_json[argument.name] for argument in execution.arguments]
+        for case in cases
     ]
-    encoded_cases = json.dumps(cases, ensure_ascii=False, separators=(",", ":"))
+    encoded_cases = json.dumps(case_values, ensure_ascii=False, separators=(",", ":"))
     template = """
 import json as _counterq_json_module
 
@@ -180,11 +257,13 @@ for _counterq_index, _counterq_arguments in enumerate(_counterq_cases, start=1):
     return trusted_metadata.replace("__CASES_JSON__", repr(encoded_cases))
 
 
-def _java_harness(execution: ExecutionDefinition) -> str:
+def _java_harness(
+    execution: ExecutionDefinition, cases: tuple[ExecutionCase, ...]
+) -> str:
     invocations = []
-    for index, case in enumerate(execution.visible_cases, start=1):
+    for index, case in enumerate(cases, start=1):
         arguments = ", ".join(
-            _java_literal(case.arguments[argument.name], argument.type)
+            _java_literal(case.input_json[argument.name], argument.type)
             for argument in execution.arguments
         )
         invocations.append(

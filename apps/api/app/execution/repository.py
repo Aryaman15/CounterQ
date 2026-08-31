@@ -58,7 +58,7 @@ class ExecutionRepository:
         run_id: UUID,
         identifier: str,
         input_json: dict[str, object],
-        expected_output: str,
+        expected_output: str | None,
         actual_output: str | None,
         status: str,
         duration_ms: int | None,

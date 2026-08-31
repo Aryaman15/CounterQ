@@ -6,7 +6,7 @@ from typing import cast
 
 import httpx
 
-from app.execution.codecs import ExecutionCodecError, compare_output
+from app.execution.codecs import ExecutionCodecError, compare_output, validate_output
 from app.execution.provider import (
     ExecutionCaseOutcome,
     ExecutionOutcome,
@@ -68,11 +68,15 @@ class LocalSandboxExecutorProvider:
                 raw_case = raw_by_identifier.get(definition.identifier, {})
                 actual_output = cast(str | None, raw_case.get("actual_output"))
                 try:
-                    compared = compare_output(
-                        actual_output,
-                        definition.expected_output,
-                        definition.return_type,
-                        definition.comparator,
+                    compared = (
+                        validate_output(actual_output, definition.return_type)
+                        if definition.expected_output is None
+                        else compare_output(
+                            actual_output,
+                            definition.expected_output,
+                            definition.return_type,
+                            definition.comparator,
+                        )
                     )
                 except ExecutionCodecError as exc:
                     raise ExecutorProviderError() from exc

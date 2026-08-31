@@ -490,6 +490,10 @@ export interface components {
             client_instance_id: string;
             /** Client Sequence */
             client_sequence: number;
+            /** Custom Arguments */
+            custom_arguments?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
             /** Idempotency Key */
             idempotency_key: string;
             /**
@@ -497,13 +501,19 @@ export interface components {
              * Format: uuid
              */
             interview_session_id: string;
+            /**
+             * Run Kind
+             * @default VISIBLE
+             * @enum {string}
+             */
+            run_kind: "VISIBLE" | "CUSTOM";
             /** Source Code */
             source_code: string;
         };
         /** DevelopmentRunResponse */
         DevelopmentRunResponse: {
             /** Cases */
-            cases: components["schemas"]["VisibleCaseResponse"][];
+            cases: components["schemas"]["ExecutionCaseResponse"][];
             /**
              * Code Snapshot Id
              * Format: uuid
@@ -524,6 +534,11 @@ export interface components {
             exit_code: number | null;
             /** Output Truncated */
             output_truncated: boolean;
+            /**
+             * Run Kind
+             * @enum {string}
+             */
+            run_kind: "VISIBLE" | "CUSTOM";
             /** Status */
             status: string;
             /** Stderr */
@@ -532,6 +547,32 @@ export interface components {
             stdout: string;
             /** Timed Out */
             timed_out: boolean;
+        };
+        /** ExecutionCaseResponse */
+        ExecutionCaseResponse: {
+            /** Actual Output */
+            actual_output: string | null;
+            actual_output_value: components["schemas"]["JsonValue"] | null;
+            /**
+             * Comparison Kind
+             * @enum {string}
+             */
+            comparison_kind: "EXPECTED" | "NONE";
+            /** Duration Ms */
+            duration_ms: number | null;
+            /** Expected Output */
+            expected_output: string | null;
+            expected_output_value: components["schemas"]["JsonValue"] | null;
+            /** Failure Classification */
+            failure_classification: string | null;
+            /** Identifier */
+            identifier: string;
+            /** Input Json */
+            input_json: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -550,6 +591,7 @@ export interface components {
              */
             status: "ok";
         };
+        JsonValue: unknown;
         /** RealtimeDevelopmentBootstrapRequest */
         RealtimeDevelopmentBootstrapRequest: {
             /** Client Instance Id */
@@ -729,25 +771,6 @@ export interface components {
             msg: string;
             /** Error Type */
             type: string;
-        };
-        /** VisibleCaseResponse */
-        VisibleCaseResponse: {
-            /** Actual Output */
-            actual_output: string | null;
-            /** Duration Ms */
-            duration_ms: number | null;
-            /** Expected Output */
-            expected_output: string | null;
-            /** Failure Classification */
-            failure_classification: string | null;
-            /** Identifier */
-            identifier: string;
-            /** Input Json */
-            input_json: {
-                [key: string]: unknown;
-            };
-            /** Status */
-            status: string;
         };
     };
     responses: never;

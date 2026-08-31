@@ -1,5 +1,6 @@
 "use client";
 
+import type { components } from "@counterq/contracts/openapi";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -29,6 +30,8 @@ import { RecentConversationDrawer } from "./RecentConversationDrawer";
 type InterviewRoomProps = {
   fixture: DemoInterviewRoomFixture;
 };
+
+type DevelopmentRunResponse = components["schemas"]["DevelopmentRunResponse"];
 
 export function InterviewRoom({ fixture }: InterviewRoomProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<"cpp" | "python" | "java">(
@@ -232,15 +235,12 @@ export function InterviewRoom({ fixture }: InterviewRoomProps) {
             client_event_id: `run-${idempotencyKey}`,
             client_instance_id: "interview-room-run",
             client_sequence: Date.now(),
+            run_kind: "VISIBLE",
           }),
         },
       );
       if (!response.ok) throw new Error("Code execution is temporarily unavailable.");
-      const result = await response.json() as {
-        status: string; stdout: string; stderr: string; compiler_output: string;
-        timed_out: boolean; output_truncated: boolean;
-        cases: Array<{ identifier: string; input_json: Record<string, unknown>; expected_output: string | null; actual_output: string | null; status: string }>;
-      };
+      const result = await response.json() as DevelopmentRunResponse;
       setExecutionResult({
         status: result.status,
         stdout: result.stdout,

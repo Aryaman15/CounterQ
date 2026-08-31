@@ -67,6 +67,23 @@ def compare_output(
     )
 
 
+def validate_output(actual_output: str | None, semantic_type: str) -> ComparedOutput:
+    """Validate a custom-case result without making a correctness comparison."""
+    _require_supported_type(semantic_type)
+    if actual_output is None:
+        return ComparedOutput(None, "FAILED", "MISSING_CASE_OUTPUT")
+    try:
+        actual = json.loads(actual_output)
+    except (json.JSONDecodeError, TypeError):
+        return ComparedOutput(actual_output, "FAILED", "MALFORMED_EXECUTION_OUTPUT")
+    if not validate_semantic_value(actual, semantic_type):
+        return ComparedOutput(actual_output, "FAILED", "INVALID_EXECUTION_OUTPUT_TYPE")
+    # TEST_RESULT_STATUSES has no verdict-free success state. PASSED means the
+    # custom case executed and produced the configured type; the API maps it to
+    # EXECUTED and exposes comparison_kind=NONE.
+    return ComparedOutput(actual_output, "PASSED", None)
+
+
 def _element_identity(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 

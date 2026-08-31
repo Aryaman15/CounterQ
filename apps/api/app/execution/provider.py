@@ -14,7 +14,7 @@ class ExecutorProviderError(RuntimeError):
 class ExecutionCase:
     identifier: str
     input_json: dict[str, object]
-    expected_output: str
+    expected_output: str | None
     visible: bool = True
     return_type: str = "int"
     comparator: str = "EXACT"

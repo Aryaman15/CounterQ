@@ -25,6 +25,7 @@
     "eval:stage3c:packs-a": "uv run --directory apps/api pytest tests/evaluation/stage3c/packs_a -q",
     "eval:stage3c:packs-b": "uv run --directory apps/api pytest tests/evaluation/stage3c/packs_b -q",
     "eval:stage3c:sandbox": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3c-sandbox.ps1",
+    "eval:stage3c:custom-sandbox": "powershell -ExecutionPolicy Bypass -File scripts/evaluate-stage3c-custom-sandbox.ps1",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",

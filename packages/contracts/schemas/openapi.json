@@ -1039,6 +1039,7 @@
         "type": "object"
       },
       "DevelopmentRunRequest": {
+        "additionalProperties": false,
         "properties": {
           "client_event_id": {
             "maxLength": 128,
@@ -1057,6 +1058,20 @@
             "title": "Client Sequence",
             "type": "integer"
           },
+          "custom_arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Arguments"
+          },
           "idempotency_key": {
             "maxLength": 128,
             "minLength": 1,
@@ -1066,6 +1081,15 @@
           "interview_session_id": {
             "format": "uuid",
             "title": "Interview Session Id",
+            "type": "string"
+          },
+          "run_kind": {
+            "default": "VISIBLE",
+            "enum": [
+              "VISIBLE",
+              "CUSTOM"
+            ],
+            "title": "Run Kind",
             "type": "string"
           },
           "source_code": {
@@ -1090,7 +1114,7 @@
         "properties": {
           "cases": {
             "items": {
-              "$ref": "#/components/schemas/VisibleCaseResponse"
+              "$ref": "#/components/schemas/ExecutionCaseResponse"
             },
             "title": "Cases",
             "type": "array"
@@ -1139,6 +1163,14 @@
             "title": "Output Truncated",
             "type": "boolean"
           },
+          "run_kind": {
+            "enum": [
+              "VISIBLE",
+              "CUSTOM"
+            ],
+            "title": "Run Kind",
+            "type": "string"
+          },
           "status": {
             "title": "Status",
             "type": "string"
@@ -1160,6 +1192,7 @@
           "execution_run_id",
           "code_snapshot_id",
           "code_snapshot_version",
+          "run_kind",
           "status",
           "stdout",
           "stderr",
@@ -1171,6 +1204,109 @@
           "cases"
         ],
         "title": "DevelopmentRunResponse",
+        "type": "object"
+      },
+      "ExecutionCaseResponse": {
+        "properties": {
+          "actual_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Output"
+          },
+          "actual_output_value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comparison_kind": {
+            "enum": [
+              "EXPECTED",
+              "NONE"
+            ],
+            "title": "Comparison Kind",
+            "type": "string"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "expected_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Output"
+          },
+          "expected_output_value": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "failure_classification": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Failure Classification"
+          },
+          "identifier": {
+            "title": "Identifier",
+            "type": "string"
+          },
+          "input_json": {
+            "additionalProperties": true,
+            "title": "Input Json",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "identifier",
+          "input_json",
+          "expected_output",
+          "actual_output",
+          "expected_output_value",
+          "actual_output_value",
+          "comparison_kind",
+          "status",
+          "duration_ms",
+          "failure_classification"
+        ],
+        "title": "ExecutionCaseResponse",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -1210,6 +1346,7 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "JsonValue": {},
       "RealtimeDevelopmentBootstrapRequest": {
         "properties": {
           "client_instance_id": {
@@ -1610,78 +1747,6 @@
           "type"
         ],
         "title": "ValidationError",
-        "type": "object"
-      },
-      "VisibleCaseResponse": {
-        "properties": {
-          "actual_output": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Actual Output"
-          },
-          "duration_ms": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Duration Ms"
-          },
-          "expected_output": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Expected Output"
-          },
-          "failure_classification": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Failure Classification"
-          },
-          "identifier": {
-            "title": "Identifier",
-            "type": "string"
-          },
-          "input_json": {
-            "additionalProperties": true,
-            "title": "Input Json",
-            "type": "object"
-          },
-          "status": {
-            "title": "Status",
-            "type": "string"
-          }
-        },
-        "required": [
-          "identifier",
-          "input_json",
-          "expected_output",
-          "actual_output",
-          "status",
-          "duration_ms",
-          "failure_classification"
-        ],
-        "title": "VisibleCaseResponse",
         "type": "object"
       }
     }

@@ -5,8 +5,19 @@ from inspect import signature
 
 import pytest
 
-from app.execution.codecs import ExecutionCodecError, compare_output, encode_value
-from app.execution.harness import UnsupportedExecutionSchema, harness_for_problem
+from app.execution.codecs import (
+    ExecutionCodecError,
+    compare_output,
+    encode_value,
+    validate_output,
+)
+from app.execution.harness import (
+    MAX_CUSTOM_TEST_ARGUMENT_BYTES,
+    CustomCaseSelection,
+    CustomTestValidationError,
+    UnsupportedExecutionSchema,
+    harness_for_problem,
+)
 from app.execution.policy import (
     DEFAULT_COMPILE_TIMEOUT_SECONDS,
     DEFAULT_MEMORY_LIMIT_MB,
@@ -105,6 +116,16 @@ def test_malformed_or_wrong_typed_sandbox_output_is_a_case_failure(
     assert compared.failure_classification == classification
 
 
+def test_custom_output_is_type_checked_without_a_correctness_comparison() -> None:
+    executed = validate_output("42", "int")
+    wrong_type = validate_output("true", "int")
+
+    assert executed.status == "PASSED"
+    assert executed.failure_classification is None
+    assert wrong_type.status == "FAILED"
+    assert wrong_type.failure_classification == "INVALID_EXECUTION_OUTPUT_TYPE"
+
+
 def test_unsupported_semantic_type_rejects_before_harness_generation() -> None:
     schema: dict[str, object] = {
         "execution": {
@@ -181,3 +202,129 @@ def test_execution_service_defaults_use_the_canonical_candidate_policy() -> None
     assert parameters["run_timeout_seconds"].default == DEFAULT_RUN_TIMEOUT_SECONDS
     assert parameters["memory_limit_mb"].default == DEFAULT_MEMORY_LIMIT_MB
     assert parameters["output_limit_bytes"].default == DEFAULT_OUTPUT_LIMIT_BYTES
+
+
+@pytest.mark.parametrize(
+    ("semantic_type", "value"),
+    [
+        ("int", -7),
+        ("bool", True),
+        ("string", ""),
+        ("string", 'quote: " slash: \\ newline:\n'),
+        ("int[]", []),
+        ("int[]", [1, -2, 3]),
+        ("string[]", ["", "alpha", 'escaped "value"']),
+        ("int[][]", [[1, -2], [], [3, 4]]),
+        ("string[][]", [["a", "b"], [], [""]]),
+    ],
+)
+def test_custom_case_accepts_every_bounded_semantic_shape(
+    semantic_type: str, value: object
+) -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": semantic_type}],
+            "return_type": semantic_type,
+            "visible_cases": [{"arguments": {"value": value}, "expected_output": value}],
+            "custom_test_supported": True,
+        }
+    }
+
+    for language in ("cpp", "python", "java"):
+        harness, cases = harness_for_problem(
+            schema,
+            language,
+            case_selection=CustomCaseSelection({"value": value}),
+        )
+        assert "echoValue" in harness
+        assert len(cases) == 1
+        assert cases[0].identifier == "custom-1"
+        assert cases[0].input_json == {"value": value}
+        assert cases[0].expected_output is None
+
+
+def test_custom_case_accepts_multiple_named_arguments() -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "solve",
+            "arguments": [
+                {"name": "nums", "type": "int[]"},
+                {"name": "target", "type": "int"},
+            ],
+            "return_type": "int[]",
+            "visible_cases": [
+                {"arguments": {"nums": [2, 7], "target": 9}, "expected_output": [0, 1]}
+            ],
+        }
+    }
+    _, cases = harness_for_problem(
+        schema,
+        "python",
+        case_selection=CustomCaseSelection({"target": 4, "nums": [1, 3]}),
+    )
+    assert cases[0].input_json == {"target": 4, "nums": [1, 3]}
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ({}, "missing arguments: value"),
+        ({"value": 1, "extra": 2}, "unexpected arguments: extra"),
+        ({"value": "1"}, "does not match semantic type int"),
+        ({"value": True}, "does not match semantic type int"),
+    ],
+)
+def test_invalid_custom_arguments_are_rejected_before_harness_generation(
+    arguments: dict[str, object], message: str
+) -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": "int"}],
+            "return_type": "int",
+            "visible_cases": [{"arguments": {"value": 1}, "expected_output": 1}],
+        }
+    }
+    with pytest.raises(CustomTestValidationError, match=message):
+        harness_for_problem(
+            schema,
+            "cpp",
+            case_selection=CustomCaseSelection(arguments),
+        )
+
+
+def test_custom_case_enforces_canonical_serialized_byte_bound() -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": "string"}],
+            "return_type": "string",
+            "visible_cases": [{"arguments": {"value": "ok"}, "expected_output": "ok"}],
+        }
+    }
+    oversized = "x" * MAX_CUSTOM_TEST_ARGUMENT_BYTES
+    with pytest.raises(CustomTestValidationError, match="byte limit"):
+        harness_for_problem(
+            schema,
+            "python",
+            case_selection=CustomCaseSelection({"value": oversized}),
+        )
+
+
+def test_exact_problem_version_can_disable_custom_tests() -> None:
+    schema: dict[str, object] = {
+        "execution": {
+            "method_name": "echoValue",
+            "arguments": [{"name": "value", "type": "int"}],
+            "return_type": "int",
+            "visible_cases": [{"arguments": {"value": 1}, "expected_output": 1}],
+            "custom_test_supported": False,
+        }
+    }
+    with pytest.raises(CustomTestValidationError, match="not supported"):
+        harness_for_problem(
+            schema,
+            "java",
+            case_selection=CustomCaseSelection({"value": 2}),
+        )

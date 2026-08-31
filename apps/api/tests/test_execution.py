@@ -4,11 +4,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from app.execution.harness import CustomTestValidationError
+from app.execution.models import ExecutionRun
 from app.execution.models import TestResult as ExecutionTestResult
 from app.execution.provider import ExecutionCaseOutcome, ExecutionOutcome, FakeExecutorProvider
+from app.execution.routes import DevelopmentRunRequest, _response
 from app.execution.service import ExecutionService, RunCommand
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
@@ -234,3 +239,239 @@ async def test_run_rebuild_uses_its_exact_problem_version_not_session_current_ve
     assert run.problem_version_id == development.problem_version.id
     assert "lengthOfLongestSubstring" in rebuilt.harness
     assert "differentMethod" not in rebuilt.harness
+
+
+async def test_custom_run_persists_no_verdict_and_retries_idempotently(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    exact_source = (
+        "class Solution { public: int lengthOfLongestSubstring(string s) "
+        "{ return (int)s.size(); } };"
+    )
+    outcome = ExecutionOutcome(
+        status="SUCCEEDED",
+        provider_run_id="custom-sandbox-1",
+        cases=(ExecutionCaseOutcome("custom-1", "4", "PASSED", 3),),
+    )
+    provider = FakeExecutorProvider(outcome)
+    service = ExecutionService(db_session, provider)
+    command = RunCommand(
+        session_id=development.interview_session.id,
+        source_code=exact_source,
+        idempotency_key="custom-idempotent",
+        client_event_id="custom-event",
+        client_instance_id="custom-browser",
+        client_sequence=1,
+        run_kind="CUSTOM",
+        custom_arguments={"s": 'a"\\b'},
+    )
+
+    run, request, created = await service.begin(command)
+    assert created
+    assert request.source_code == exact_source
+    assert request.cases[0].input_json == {"s": 'a"\\b'}
+    assert request.cases[0].expected_output is None
+    assert run.problem_version_id == development.problem_version.id
+    run_event = await db_session.get(InterviewEvent, run.run_event_id)
+    assert run_event is not None
+    assert run_event.payload["run_kind"] == "CUSTOM"
+    assert run_event.payload["custom_arguments"] == {"s": 'a"\\b'}
+    await service.complete(run.id, await service.execute(request))
+
+    retry, retry_request, retry_created = await service.begin(command)
+    assert retry.id == run.id
+    assert not retry_created
+    assert retry_request.source_code == exact_source
+    assert retry_request.cases == request.cases
+    assert len(provider.requests) == 1
+    results = list(
+        (
+            await db_session.scalars(
+                select(ExecutionTestResult).where(
+                    ExecutionTestResult.execution_run_id == run.id
+                )
+            )
+        ).all()
+    )
+    assert len(results) == 1
+    assert results[0].input_json == {"s": 'a"\\b'}
+    assert results[0].expected_output is None
+    assert results[0].actual_output == "4"
+    assert results[0].status == "PASSED"
+    execution_events = list(
+        (
+            await db_session.scalars(
+                select(InterviewEvent)
+                .where(InterviewEvent.interview_session_id == run.interview_session_id)
+                .where(InterviewEvent.event_type.in_(["RUN_CLICKED", "COMPILE_COMPLETED", "TEST_COMPLETED"]))
+            )
+        ).all()
+    )
+    assert len(execution_events) == 3
+    assert {event.payload["run_kind"] for event in execution_events} == {"CUSTOM"}
+
+    hydrated = await db_session.scalar(
+        select(ExecutionRun)
+        .options(
+            selectinload(ExecutionRun.code_snapshot),
+            selectinload(ExecutionRun.run_event),
+        )
+        .where(ExecutionRun.id == run.id)
+    )
+    assert hydrated is not None
+    response = _response(hydrated, results)
+    assert response.run_kind == "CUSTOM"
+    assert response.cases[0].comparison_kind == "NONE"
+    assert response.cases[0].status == "EXECUTED"
+    assert response.cases[0].actual_output_value == 4
+
+
+async def test_failed_custom_run_persists_one_not_run_result(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = ExecutionService(
+        db_session,
+        FakeExecutorProvider(ExecutionOutcome("COMPILE_ERROR", "custom-compile")),
+    )
+    run, request, _ = await service.begin(
+        RunCommand(
+            session_id=development.interview_session.id,
+            source_code="class Solution {",
+            idempotency_key="custom-compile",
+            client_event_id="custom-compile-event",
+            client_instance_id="custom-compile-browser",
+            client_sequence=1,
+            run_kind="CUSTOM",
+            custom_arguments={"s": "abc"},
+        )
+    )
+    await service.complete(run.id, await service.execute(request))
+    result = await db_session.scalar(
+        select(ExecutionTestResult).where(ExecutionTestResult.execution_run_id == run.id)
+    )
+    assert result is not None
+    assert result.status == "NOT_RUN"
+    assert result.expected_output is None
+    assert result.failure_classification == "EXECUTION_COMPILE_ERROR"
+
+
+async def test_custom_retry_rebuilds_exact_problem_version_and_arguments(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = ExecutionService(
+        db_session, FakeExecutorProvider(ExecutionOutcome("SUCCEEDED", "custom-exact"))
+    )
+    run, original, _ = await service.begin(
+        RunCommand(
+            session_id=development.interview_session.id,
+            source_code="class Solution { public: int lengthOfLongestSubstring(string s) { return 9; } };",
+            idempotency_key="custom-exact",
+            client_event_id="custom-exact-event",
+            client_instance_id="custom-exact-browser",
+            client_sequence=1,
+            run_kind="CUSTOM",
+            custom_arguments={"s": "exact"},
+        )
+    )
+    newer = await ProblemRepository(db_session).add_problem_version(
+        problem=development.problem,
+        version="v2",
+        title="No custom support",
+        statement="A newer immutable version.",
+        content_hash="sha256:custom-exact-v2",
+        schema_version="problem.v1",
+    )
+    newer.io_schema_json = {
+        "execution": {
+            "method_name": "differentMethod",
+            "arguments": [{"name": "value", "type": "int"}],
+            "return_type": "int",
+            "visible_cases": [{"arguments": {"value": 1}, "expected_output": 1}],
+            "custom_test_supported": False,
+        }
+    }
+    development.interview_session.problem_version_id = newer.id
+    await db_session.flush()
+
+    rebuilt = await service._request_for_run(run)
+    assert rebuilt.cases == original.cases
+    assert rebuilt.cases[0].input_json == {"s": "exact"}
+    assert "lengthOfLongestSubstring" in rebuilt.harness
+    assert "differentMethod" not in rebuilt.harness
+
+
+@pytest.mark.parametrize("field", ["expected_output", "comparator", "method_name"])
+def test_run_contract_rejects_server_owned_execution_fields(field: str) -> None:
+    payload = {
+        "interview_session_id": "00000000-0000-0000-0000-000000000001",
+        "source_code": "class Solution {}",
+        "idempotency_key": "custom-contract",
+        "client_event_id": "custom-contract-event",
+        "client_instance_id": "custom-contract-browser",
+        "client_sequence": 1,
+        "run_kind": "CUSTOM",
+        "custom_arguments": {"value": 1},
+        field: 1,
+    }
+    with pytest.raises(ValidationError, match=field):
+        DevelopmentRunRequest.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"run_kind": "VISIBLE", "custom_arguments": {"value": 1}},
+        {"run_kind": "CUSTOM"},
+    ],
+)
+def test_run_contract_requires_consistent_case_selection(payload: dict[str, object]) -> None:
+    base = {
+        "interview_session_id": "00000000-0000-0000-0000-000000000001",
+        "source_code": "class Solution {}",
+        "idempotency_key": "case-selection-contract",
+        "client_event_id": "case-selection-contract-event",
+        "client_instance_id": "case-selection-contract-browser",
+        "client_sequence": 1,
+    }
+    with pytest.raises(ValidationError):
+        DevelopmentRunRequest.model_validate(base | payload)
+
+
+async def test_custom_support_is_checked_before_snapshot_or_run_persistence(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    execution = development.problem_version.io_schema_json["execution"]
+    assert isinstance(execution, dict)
+    execution["custom_test_supported"] = False
+    service = ExecutionService(
+        db_session, FakeExecutorProvider(ExecutionOutcome("SUCCEEDED", "must-not-run"))
+    )
+
+    with pytest.raises(CustomTestValidationError, match="not supported"):
+        await service.begin(
+            RunCommand(
+                session_id=development.interview_session.id,
+                source_code="class Solution {};",
+                idempotency_key="unsupported-custom",
+                client_event_id="unsupported-custom-event",
+                client_instance_id="unsupported-custom-browser",
+                client_sequence=1,
+                run_kind="CUSTOM",
+                custom_arguments={"s": "abc"},
+            )
+        )
+
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(ExecutionRun)
+        .where(ExecutionRun.interview_session_id == development.interview_session.id)
+    ) == 0
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(InterviewEvent)
+        .where(InterviewEvent.interview_session_id == development.interview_session.id)
+    ) == 0

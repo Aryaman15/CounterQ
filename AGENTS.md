@@ -1310,6 +1310,9 @@ pnpm run eval:stage3c:packs-b
 
 Evaluate the Stage 3C full-catalog sandbox gate:
 pnpm run eval:stage3c:sandbox
+
+Evaluate the Stage 3C candidate custom-test sandbox gate:
+pnpm run eval:stage3c:custom-sandbox
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.

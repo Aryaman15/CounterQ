@@ -6,11 +6,18 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.execution.harness import execution_request_for_problem
+from app.execution.harness import (
+    CaseSelection,
+    CustomCaseSelection,
+    CustomTestValidationError,
+    VisibleCaseSelection,
+    execution_request_for_problem,
+)
 from app.execution.models import ExecutionRun
 from app.execution.policy import (
     DEFAULT_COMPILE_TIMEOUT_SECONDS,
@@ -22,9 +29,12 @@ from app.execution.provider import ExecutionOutcome, ExecutionRequest, ExecutorP
 from app.execution.repository import ExecutionRepository
 from app.interviews.models import InterviewSession
 from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
-from app.observation.models import CodeSnapshot
+from app.observation.models import CodeSnapshot, InterviewEvent
 from app.realtime.control_protocol import CandidateCodeSnapshotMessage
 from app.realtime.control_service import RealtimeControlService
+
+if TYPE_CHECKING:
+    from app.problems.models import ProblemVersion
 
 
 @dataclass(frozen=True)
@@ -35,6 +45,8 @@ class RunCommand:
     client_event_id: str
     client_instance_id: str
     client_sequence: int
+    run_kind: Literal["VISIBLE", "CUSTOM"] = "VISIBLE"
+    custom_arguments: dict[str, object] | None = None
 
 
 class ExecutionService:
@@ -66,7 +78,22 @@ class ExecutionService:
             self._session, clock=self._clock
         ).ensure_activity_allowed(command.session_id)
         language = await self._configured_language(interview)
+        selection = _selection_for_command(command)
+        problem = await self._problem_version(interview.problem_version_id)
+        provider_request = self._build_request(
+            io_schema=problem.io_schema_json,
+            language=language,
+            source_code=command.source_code,
+            case_selection=selection,
+        )
         snapshot = await self._canonical_snapshot(command, language)
+        event_payload: dict[str, object] = {
+            "code_snapshot_id": str(snapshot.id),
+            "code_version": snapshot.version_number,
+            "run_kind": command.run_kind,
+        }
+        if isinstance(selection, CustomCaseSelection):
+            event_payload["custom_arguments"] = selection.arguments
         run_event = await InterviewRuntime(self._session, clock=self._clock).accept_event(
             AcceptEventCommand(
                 session_id=command.session_id,
@@ -74,11 +101,11 @@ class ExecutionService:
                 source="NATIVE_RUNNER",
                 occurred_at=self._clock(),
                 idempotency_key=f"run-event:{command.idempotency_key}",
-                payload={
-                    "code_snapshot_id": str(snapshot.id),
-                    "code_version": snapshot.version_number,
+                payload=event_payload,
+                provenance={
+                    "run_idempotency_key": command.idempotency_key,
+                    "run_kind": command.run_kind,
                 },
-                provenance={"run_idempotency_key": command.idempotency_key},
                 schema_version="execution.run-clicked.v1",
                 client_instance_id=command.client_instance_id,
                 client_sequence=command.client_sequence,
@@ -95,7 +122,7 @@ class ExecutionService:
             execution_provider=self._provider.provider_name,
             idempotency_key=command.idempotency_key,
         )
-        return run, await self._request_for_run(run), True
+        return run, provider_request, True
 
     async def execute(self, request: ExecutionRequest) -> ExecutionOutcome:
         return await self._provider.execute(request)
@@ -123,6 +150,7 @@ class ExecutionService:
         run.completed_at = self._clock()
         await self._session.flush()
         runtime = InterviewRuntime(self._session, clock=self._clock)
+        run_kind, _ = await self._selection_for_run(run)
         await runtime.accept_event(
             AcceptEventCommand(
                 session_id=run.interview_session_id,
@@ -130,7 +158,11 @@ class ExecutionService:
                 source="NATIVE_RUNNER",
                 occurred_at=run.completed_at,
                 idempotency_key=f"execution-compile:{run.id}",
-                payload={"execution_run_id": str(run.id), "status": run.status},
+                payload={
+                    "execution_run_id": str(run.id),
+                    "status": run.status,
+                    "run_kind": run_kind,
+                },
                 schema_version="execution.compile.v1",
                 code_snapshot_id=run.code_snapshot_id,
             )
@@ -143,7 +175,11 @@ class ExecutionService:
                     source="NATIVE_RUNNER",
                     occurred_at=run.completed_at,
                     idempotency_key=f"execution-test:{run.id}",
-                    payload={"execution_run_id": str(run.id), "status": run.status},
+                    payload={
+                        "execution_run_id": str(run.id),
+                        "status": run.status,
+                        "run_kind": run_kind,
+                    },
                     schema_version="execution.test.v1",
                     code_snapshot_id=run.code_snapshot_id,
                 )
@@ -206,23 +242,62 @@ class ExecutionService:
         interview = await self._session.get(InterviewSession, run.interview_session_id)
         if snapshot is None or interview is None:
             raise ValueError("Execution provenance is incomplete")
-        from app.problems.models import ProblemVersion
-
-        problem = await self._session.get(ProblemVersion, run.problem_version_id)
-        if problem is None:
-            raise ValueError("Problem version was not found")
+        problem = await self._problem_version(run.problem_version_id)
         language = await self._configured_language(interview)
         if snapshot.language != language or run.language != language:
             raise ValueError("Canonical execution language is inconsistent")
-        return execution_request_for_problem(
+        _, selection = await self._selection_for_run(run)
+        return self._build_request(
             io_schema=problem.io_schema_json,
             language=language,
             source_code=snapshot.source_code,
+            case_selection=selection,
+        )
+
+    def _build_request(
+        self,
+        *,
+        io_schema: dict[str, object],
+        language: str,
+        source_code: str,
+        case_selection: CaseSelection,
+    ) -> ExecutionRequest:
+        return execution_request_for_problem(
+            io_schema=io_schema,
+            language=language,
+            source_code=source_code,
             compile_timeout_seconds=self._compile_timeout_seconds,
             run_timeout_seconds=self._run_timeout_seconds,
             memory_limit_mb=self._memory_limit_mb,
             output_limit_bytes=self._output_limit_bytes,
+            case_selection=case_selection,
         )
+
+    async def _selection_for_run(
+        self, run: ExecutionRun
+    ) -> tuple[Literal["VISIBLE", "CUSTOM"], CaseSelection]:
+        event = await self._session.get(InterviewEvent, run.run_event_id)
+        if event is None:
+            raise ValueError("Execution run event was not found")
+        run_kind = event.payload.get("run_kind", "VISIBLE")
+        if run_kind == "VISIBLE":
+            return "VISIBLE", VisibleCaseSelection()
+        if run_kind != "CUSTOM":
+            raise ValueError("Execution run has an invalid run kind")
+        arguments = event.payload.get("custom_arguments")
+        if not isinstance(arguments, dict) or not all(
+            isinstance(name, str) for name in arguments
+        ):
+            raise ValueError("Custom execution provenance is incomplete")
+        return "CUSTOM", CustomCaseSelection(dict(arguments))
+
+    async def _problem_version(self, problem_version_id: UUID) -> ProblemVersion:
+        from app.problems.models import ProblemVersion
+
+        problem = await self._session.get(ProblemVersion, problem_version_id)
+        if problem is None:
+            raise ValueError("Problem version was not found")
+        return problem
 
     async def _configured_language(self, interview: InterviewSession) -> str:
         from app.interviews.models import InterviewConfiguration
@@ -238,3 +313,19 @@ class ExecutionService:
 def _bounded(value: str, byte_limit: int) -> str:
     encoded = value.encode()[:byte_limit]
     return encoded.decode(errors="replace")
+
+
+def _selection_for_command(command: RunCommand) -> CaseSelection:
+    if command.run_kind == "VISIBLE":
+        if command.custom_arguments is not None:
+            raise CustomTestValidationError(
+                "custom_arguments must be absent for a visible run"
+            )
+        return VisibleCaseSelection()
+    if command.run_kind == "CUSTOM":
+        if command.custom_arguments is None:
+            raise CustomTestValidationError(
+                "custom_arguments are required for a custom run"
+            )
+        return CustomCaseSelection(dict(command.custom_arguments))
+    raise CustomTestValidationError("Unsupported execution run kind")
