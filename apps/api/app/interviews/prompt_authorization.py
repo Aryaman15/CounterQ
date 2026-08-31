@@ -258,9 +258,7 @@ class PromptAuthorizationService:
             if rejection is not None:
                 outcome, reason = rejection
                 prompt.status = (
-                    outcome
-                    if outcome in {"STALE", "EXPIRED", "SUPERSEDED"}
-                    else "REJECTED"
+                    outcome if outcome in {"STALE", "EXPIRED", "SUPERSEDED"} else "REJECTED"
                 )
                 await self._session.flush()
                 return PromptDeliveryPermit(
@@ -476,38 +474,14 @@ class PromptAuthorizationService:
         )
 
     async def _compose_candidate_safe_text(self, decision: ExaminerDecision) -> str:
-        if decision.action == "ASK":
-            return "Can you clarify that part of your approach?"
         claim: CandidateClaim | None = None
         if decision.target_claim_id is not None:
             claim = await self._session.get(CandidateClaim, decision.target_claim_id)
-        strategy = decision.proposed_probe_strategy
-        if strategy == "ASSUMPTION_CHALLENGE":
-            if claim is not None:
-                excerpt = _claim_excerpt(claim.normalized_claim)
-                return f"You said {excerpt}. Is that actually guaranteed?"
-            return "What makes that assumption safe?"
-        if strategy == "PROVE":
-            return "What invariant are you relying on here, and what guarantees it holds?"
-        if strategy == "COMPLEXITY":
-            return "Walk me through how you derived that complexity bound."
-        if strategy == "COUNTEREXAMPLE":
-            return "Can you think of an input where this reasoning might break?"
-        if strategy == "EDGE_CASE":
-            return "Which edge case is most likely to challenge this approach?"
-        if strategy == "TRADE_OFF":
-            return "What trade-off are you making with this choice?"
-        if strategy == "ALTERNATIVE":
-            return "What alternative approach would you compare this against?"
-        if strategy == "IMPLEMENTATION_CHOICE":
-            return "What makes this implementation choice safe for the invariant you need?"
-        if strategy == "CONSTRAINT_MUTATION":
-            return "How would your approach change if the constraint shifted?"
-        if strategy == "FAILURE_MODE":
-            return "What failure mode are you guarding against here?"
-        if strategy == "TRANSFER":
-            return "Where else would this reasoning transfer?"
-        return "Walk me through the reasoning behind that choice."
+        return compose_candidate_safe_prompt(
+            action=decision.action,
+            strategy=decision.proposed_probe_strategy,
+            normalized_claim=claim.normalized_claim if claim else None,
+        )
 
     async def _lock_decision(self, session_id: UUID, decision_id: UUID) -> ExaminerDecision:
         decision = await self._session.scalar(
@@ -540,6 +514,7 @@ class PromptAuthorizationService:
             .limit(1),
         )
         return cast(InterviewerPrompt | None, prompt)
+
     async def _prompt_for_session(self, session_id: UUID, prompt_id: UUID) -> InterviewerPrompt:
         prompt = await self._session.scalar(
             select(InterviewerPrompt)
@@ -563,6 +538,33 @@ class PromptAuthorizationService:
             .limit(1),
         )
         return active is not None
+
+
+def compose_candidate_safe_prompt(
+    *, action: str, strategy: str | None, normalized_claim: str | None
+) -> str:
+    """Pure candidate-facing rendering shared by authorization and evaluation."""
+    if action == "ASK":
+        return "Can you clarify that part of your approach?"
+    if strategy == "ASSUMPTION_CHALLENGE":
+        if normalized_claim is not None:
+            return f"You said {_claim_excerpt(normalized_claim)}. Is that actually guaranteed?"
+        return "What makes that assumption safe?"
+    prompts = {
+        "PROVE": "What invariant are you relying on here, and what guarantees it holds?",
+        "COMPLEXITY": "Walk me through how you derived that complexity bound.",
+        "COUNTEREXAMPLE": "Can you think of an input where this reasoning might break?",
+        "EDGE_CASE": "Which edge case is most likely to challenge this approach?",
+        "TRADE_OFF": "What trade-off are you making with this choice?",
+        "ALTERNATIVE": "What alternative approach would you compare this against?",
+        "IMPLEMENTATION_CHOICE": (
+            "What makes this implementation choice safe for the invariant you need?"
+        ),
+        "CONSTRAINT_MUTATION": "How would your approach change if the constraint shifted?",
+        "FAILURE_MODE": "What failure mode are you guarding against here?",
+        "TRANSFER": "Where else would this reasoning transfer?",
+    }
+    return prompts.get(strategy or "", "Walk me through the reasoning behind that choice.")
 
 
 def _claim_excerpt(claim: str, *, maximum_length: int = 180) -> str:

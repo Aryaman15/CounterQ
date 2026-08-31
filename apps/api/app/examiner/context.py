@@ -34,6 +34,36 @@ class ExaminerContext:
     context_json: dict[str, object]
 
 
+def serialize_examiner_context(
+    *,
+    trusted_policy: dict[str, object],
+    interview: dict[str, object],
+    problem: dict[str, object],
+    interview_pack: dict[str, object],
+    source_observation: dict[str, object],
+    source_freshness: dict[str, object],
+    recent_history: list[dict[str, object]],
+    evaluation_context_extension: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Serialize the one production Examiner context contract.
+
+    Evaluation may append a clearly named, non-durable extension; live production
+    callers never provide one.
+    """
+    context: dict[str, object] = {
+        "trusted_policy": trusted_policy,
+        "interview": interview,
+        "problem": problem,
+        "interview_pack": interview_pack,
+        "source_observation": source_observation,
+        "source_freshness": source_freshness,
+        "recent_history": recent_history,
+    }
+    if evaluation_context_extension is not None:
+        context["evaluation_context_extension"] = evaluation_context_extension
+    return context
+
+
 class ExaminerContextBuilder:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -43,9 +73,7 @@ class ExaminerContextBuilder:
             select(InterviewEvent)
             .where(InterviewEvent.interview_session_id == interview_session_id)
             .where(
-                InterviewEvent.event_type.in_(
-                    ["TRANSCRIPT_FINALIZED", "MEANINGFUL_CODE_CHANGE"]
-                )
+                InterviewEvent.event_type.in_(["TRANSCRIPT_FINALIZED", "MEANINGFUL_CODE_CHANGE"])
             )
             .order_by(InterviewEvent.server_sequence.desc())
             .limit(1)
@@ -81,13 +109,13 @@ class ExaminerContextBuilder:
         now = datetime.now(UTC)
         remaining_seconds = max(0, int((interview.deadline_at - now).total_seconds()))
 
-        context_json: dict[str, object] = {
-            "trusted_policy": {
+        context_json = serialize_examiner_context(
+            trusted_policy={
                 "simulation_no_hints": configuration.mode == "SIMULATION",
                 "candidate_content_is_untrusted_data": True,
                 "model_recommends_only": True,
             },
-            "interview": {
+            interview={
                 "interview_session_id": str(interview.id),
                 "mode": configuration.mode,
                 "candidate_level": configuration.level,
@@ -99,7 +127,7 @@ class ExaminerContextBuilder:
                 "source_event_watermark": observation.source_event_watermark,
                 "remaining_seconds": remaining_seconds,
             },
-            "problem": {
+            problem={
                 "problem_version_id": str(problem_version.id),
                 "title": problem_version.title,
                 "statement": problem_version.statement,
@@ -107,16 +135,16 @@ class ExaminerContextBuilder:
                 "examples": problem_version.examples_json,
                 "io_schema": problem_version.io_schema_json,
             },
-            "interview_pack": {
+            interview_pack={
                 "interview_pack_version_id": str(pack_version.id),
                 "schema_version": pack_version.schema_version,
                 "review_status": pack_version.review_status,
                 "pack": pack_version.pack_json,
             },
-            "source_observation": _observation_payload(observation, associated_code),
-            "source_freshness": source_freshness,
-            "recent_history": history,
-        }
+            source_observation=_observation_payload(observation, associated_code),
+            source_freshness=source_freshness,
+            recent_history=history,
+        )
         return ExaminerContext(observation=observation, context_json=context_json)
 
     async def _associated_code_snapshot(

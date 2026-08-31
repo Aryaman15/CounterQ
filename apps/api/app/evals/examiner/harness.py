@@ -5,25 +5,13 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from app.evals.examiner.schema import EvaluationFixture, EvaluationResult
+from app.evals.examiner.schema import EvaluationFixture, EvaluationInput, EvaluationResult
 from app.examiner.analysis_schema import ExaminerAnalysisResult
+from app.examiner.context import serialize_examiner_context
+from app.interviews.prompt_authorization import compose_candidate_safe_prompt
 
 FIXTURE_DIRECTORY = Path(__file__).resolve().parents[3] / "evals" / "examiner"
-LABEL_KEYS = frozenset(
-    {
-        "expected_action",
-        "acceptable_strategies",
-        "forbidden_strategies",
-        "acceptable_target_kinds",
-        "forbidden_target_kinds",
-        "must_not_reveal",
-        "technical_rationale_expectation",
-        "manual_review_notes",
-        "tags",
-        "expect_stale_suppression",
-        "expect_duplicate_suppression",
-    }
-)
+LABEL_KEYS = frozenset({"expectations", "review", "label_sentinel", "must_not_reveal"})
 
 
 def load_fixtures(directory: Path = FIXTURE_DIRECTORY) -> list[EvaluationFixture]:
@@ -33,51 +21,100 @@ def load_fixtures(directory: Path = FIXTURE_DIRECTORY) -> list[EvaluationFixture
     ]
 
 
-def model_input_json(fixture: EvaluationFixture) -> str:
-    """Production-shaped context; deliberately excludes every evaluator label."""
-    context: dict[str, object] = {
-        "trusted_policy": {
-            "simulation_no_hints": fixture.mode == "SIMULATION",
+def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
+    """Create the exact production context sections from evaluation-only input."""
+    source: dict[str, object] = {
+        "kind": value.source_observation_type,
+        "source_event_id": "evaluation-source-event",
+        "source_event_watermark": value.time_context.get("source_event_watermark", 1),
+        "source_state_version": value.time_context.get("source_state_version", 1),
+        "source_stage": value.state,
+        "trigger_class": "EVALUATION_FIXTURE",
+        "occurred_at": "2000-01-01T00:00:00+00:00",
+    }
+    if value.source_observation_type == "CANDIDATE_TRANSCRIPT_FINALIZED":
+        source["transcript"] = {
+            "transcript_segment_id": "evaluation-transcript",
+            "text": value.candidate_statement or "\n".join(value.recent_transcript),
+            "associated_code_snapshot_id": None,
+            "associated_code_snapshot_version": None,
+        }
+    if value.code_snapshot is not None:
+        source["code"] = {
+            "code_snapshot_id": "evaluation-code-snapshot",
+            "code_snapshot_version": 1,
+            "content_hash": "evaluation-only",
+            "source_code": value.code_snapshot,
+            "code_diff_id": "evaluation-code-diff" if value.code_diff else None,
+            "code_diff_content": value.code_diff,
+        }
+    return serialize_examiner_context(
+        trusted_policy={
+            "simulation_no_hints": value.mode == "SIMULATION",
             "candidate_content_is_untrusted_data": True,
             "model_recommends_only": True,
         },
-        "interview": {
-            "mode": fixture.mode,
-            "candidate_level": fixture.candidate_level,
-            "current_stage": fixture.state,
-            "remaining_probe_budget": fixture.remaining_probe_budget,
-            **fixture.time_context,
+        interview={
+            "interview_session_id": "evaluation-session",
+            "mode": value.mode,
+            "candidate_level": value.candidate_level,
+            "language": "cpp",
+            "current_stage": value.state,
+            "status": "ACTIVE",
+            "state_version": value.time_context.get("current_state_version", 1),
+            "source_state_version": value.time_context.get("source_state_version", 1),
+            "source_event_watermark": value.time_context.get("source_event_watermark", 1),
+            "remaining_seconds": value.time_context.get("remaining_seconds", 0),
         },
-        "problem": fixture.problem_context,
-        "interview_pack": {"review_status": "REVIEWED", "excerpt": fixture.interview_pack_excerpt},
-        "source_observation": {
-            "kind": fixture.source_observation_type,
-            "candidate_statement": fixture.candidate_statement,
-            "recent_transcript": fixture.recent_transcript,
-            "code_snapshot": fixture.code_snapshot,
-            "code_diff": fixture.code_diff,
-            "execution_context": fixture.execution_context,
+        problem=value.problem_context,
+        interview_pack={
+            "interview_pack_version_id": "evaluation-pack",
+            "schema_version": "interview-pack.v1",
+            "review_status": "REVIEWED",
+            "pack": value.interview_pack_excerpt,
         },
-        "recent_history": {
-            "recent_claims": fixture.recent_claims,
-            "recent_delivered_prompt_intents": fixture.recent_delivered_prompt_intents,
-            "existing_evaluation_context": fixture.existing_evaluation_context,
+        source_observation=source,
+        source_freshness={
+            "source_is_current_at_watermark": True,
+            "latest_code_snapshot_id": "evaluation-code-snapshot" if value.code_snapshot else None,
+            "latest_code_snapshot_version": 1 if value.code_snapshot else None,
+            "is_latest_code_snapshot": not bool(
+                value.time_context.get("newer_code_snapshot_exists")
+            ),
+            "newer_code_snapshot_exists": bool(
+                value.time_context.get("newer_code_snapshot_exists")
+            ),
+            "newer_candidate_transcript_exists": False,
+            "freshness_semantics": "Production-parity evaluation fixture.",
         },
-    }
-    return json.dumps(context, sort_keys=True, separators=(",", ":"))
+        recent_history=[
+            {
+                "event_id": "evaluation-history",
+                "server_sequence": 1,
+                "event_type": "CONTEXT",
+                "source": "SYSTEM",
+                "state_version": 1,
+                "code_snapshot_id": None,
+                "payload_keys": [],
+            }
+        ],
+        evaluation_context_extension=value.evaluation_context_extension,
+    )
 
 
-def serialized_input_has_labels(serialized: str) -> bool:
+def model_input_json(value: EvaluationInput) -> str:
+    return json.dumps(evaluation_context_json(value), sort_keys=True, separators=(",", ":"))
+
+
+def serialized_input_has_labels(serialized: str, fixture: EvaluationFixture) -> bool:
     parsed = json.loads(serialized)
+    return fixture.expectations.label_sentinel in serialized or _has_label_key(parsed)
 
-    def visit(value: object) -> bool:
-        if isinstance(value, dict):
-            return any(key in LABEL_KEYS or visit(item) for key, item in value.items())
-        if isinstance(value, list):
-            return any(visit(item) for item in value)
-        return False
 
-    return visit(parsed)
+def _has_label_key(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(key in LABEL_KEYS or _has_label_key(item) for key, item in value.items())
+    return isinstance(value, list) and any(_has_label_key(item) for item in value)
 
 
 def score_fixture(
@@ -86,36 +123,48 @@ def score_fixture(
     *,
     metadata: dict[str, Any] | None = None,
 ) -> EvaluationResult:
+    expected = fixture.expectations
     decision = output.decision
-    strategy_acceptable = (
-        decision.proposed_probe_strategy in fixture.acceptable_strategies
-        if decision.action == "PROBE"
+    claim = (
+        output.claims[decision.target_claim_index]
+        if decision.target_claim_index is not None
         else None
     )
-    target_kind_acceptable = (
-        decision.target_kind in fixture.acceptable_target_kinds
-        if fixture.acceptable_target_kinds
-        else None
+    candidate_prompt = compose_candidate_safe_prompt(
+        action=decision.action,
+        strategy=decision.proposed_probe_strategy,
+        normalized_claim=claim.normalized_claim if claim else None,
     )
-    rationale = decision.technical_rationale.lower()
-    leakage = any(item.lower() in rationale for item in fixture.must_not_reveal if item)
     values = metadata or {}
     return EvaluationResult(
         fixture_id=fixture.fixture_id,
         actual_action=decision.action,
         actual_strategy=decision.proposed_probe_strategy,
         actual_target_kind=decision.target_kind,
-        action_correct=decision.action == fixture.expected_action,
-        strategy_acceptable=strategy_acceptable,
-        forbidden_strategy_used=decision.proposed_probe_strategy in fixture.forbidden_strategies,
-        target_kind_acceptable=target_kind_acceptable,
-        unnecessary_probe=decision.action == "PROBE" and fixture.expected_action != "PROBE",
-        obvious_answer_leakage=leakage,
-        stale_behavior_violation=fixture.expect_stale_suppression and decision.action != "WAIT",
-        duplicate_probe_violation=fixture.expect_duplicate_suppression
+        action_correct=decision.action == expected.expected_action,
+        strategy_acceptable=(
+            decision.proposed_probe_strategy in expected.acceptable_strategies
+            if decision.action == "PROBE"
+            else None
+        ),
+        forbidden_strategy_used=decision.proposed_probe_strategy in expected.forbidden_strategies,
+        target_kind_acceptable=(
+            decision.target_kind in expected.acceptable_target_kinds
+            if expected.acceptable_target_kinds
+            else None
+        ),
+        forbidden_target_kind_used=decision.target_kind in expected.forbidden_target_kinds,
+        unnecessary_probe=decision.action == "PROBE" and expected.expected_action != "PROBE",
+        obvious_answer_leakage=any(
+            item.lower() in candidate_prompt.lower() for item in expected.must_not_reveal if item
+        ),
+        stale_behavior_violation=expected.expect_stale_suppression and decision.action != "WAIT",
+        duplicate_probe_violation=expected.expect_duplicate_suppression
         and decision.action == "PROBE",
-        manual_technical_review_required=True,
+        manual_technical_review_required=fixture.review.requires_manual_technical_review,
+        candidate_specificity_review_required=fixture.review.requires_candidate_specificity_review,
         technical_rationale=decision.technical_rationale,
+        candidate_facing_prompt=candidate_prompt,
         provider=values.get("provider"),
         model=values.get("model"),
         latency_ms=values.get("latency_ms"),
@@ -127,28 +176,52 @@ def score_fixture(
 
 
 def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
-    total = len(results) or 1
     actions = Counter(result.actual_action for result in results)
+
+    def metric(items: list[EvaluationResult], predicate: Any) -> dict[str, object]:
+        return {
+            "numerator": sum(predicate(item) for item in items),
+            "denominator": len(items),
+            "rate": (sum(predicate(item) for item in items) / len(items) if items else None),
+        }
+
+    probes = [item for item in results if item.actual_action == "PROBE"]
+    stale_expected = [
+        item for item in results if item.fixture_id in {"stale-code-wait", "stale-state-wait"}
+    ]
+    duplicate_expected = [
+        item
+        for item in results
+        if item.fixture_id in {"longest-substring-self-correction", "two-sum-repeated-concept-wait"}
+    ]
+    leakage = [
+        item
+        for item in results
+        if item.fixture_id
+        in {"two-sum-hash-assumption", "longest-substring-invariant-prove", "stale-code-wait"}
+    ]
     return {
         "fixtures": len(results),
-        "action_correctness": sum(item.action_correct for item in results) / total,
-        "strategy_appropriateness": sum(item.strategy_acceptable is not False for item in results)
-        / total,
-        "unnecessary_probe_rate": sum(item.unnecessary_probe for item in results) / total,
-        # Semantic false-positive adjudication is intentionally manual in 4A.
-        "false_technical_challenge_review_count": None,
-        "false_technical_challenge_rate": None,
-        "answer_leakage_rate": sum(item.obvious_answer_leakage for item in results) / total,
-        "duplicate_probe_rate": sum(item.duplicate_probe_violation for item in results) / total,
-        "stale_decision_suppression": sum(not item.stale_behavior_violation for item in results)
-        / total,
-        "manual_technical_review_count": sum(
-            item.manual_technical_review_required for item in results
+        "action_correctness": metric(results, lambda item: item.action_correct),
+        "strategy_appropriateness": metric(
+            probes,
+            lambda item: item.strategy_acceptable is not False and not item.forbidden_strategy_used,
         ),
-        "candidate_specificity_manual_review_count": sum(
-            item.manual_technical_review_required for item in results
+        "unnecessary_probe_rate": metric(results, lambda item: item.unnecessary_probe),
+        "answer_leakage": metric(leakage, lambda item: item.obvious_answer_leakage),
+        "duplicate_probe": metric(duplicate_expected, lambda item: item.duplicate_probe_violation),
+        "stale_decision_suppression": metric(
+            stale_expected, lambda item: not item.stale_behavior_violation
+        ),
+        "false_technical_challenge": {"adjudicated_count": 0, "rate": None},
+        "manual_technical_review": metric(
+            results, lambda item: item.manual_technical_review_required
+        ),
+        "candidate_specificity_review": metric(
+            results, lambda item: item.candidate_specificity_review_required
         ),
         "action_distribution": {
-            action: actions[action] / total for action in ("WAIT", "OBSERVE", "ASK", "PROBE")
+            action: actions[action] / len(results) if results else 0
+            for action in ("WAIT", "OBSERVE", "ASK", "PROBE")
         },
     }

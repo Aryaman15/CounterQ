@@ -1,1 +1,295 @@
-{"fixture_id":"longest-substring-invariant-prove","schema_version":"stage4-examiner-eval.v1","description":"A stale last-seen left assignment breaks the monotonic-left invariant.","candidate_level":"NEW_GRAD","mode":"SIMULATION","state":"IMPLEMENTATION","time_context":{"remaining_seconds":600},"remaining_probe_budget":3,"problem_context":{"title":"Longest Substring Without Repeating Characters"},"interview_pack_excerpt":{"fact":"left never moves backward; abba tests stale last-seen indices."},"source_observation_type":"CODE_MEANINGFULLY_CHANGED","code_snapshot":"if (last.count(s[r])) left = last[s[r]] + 1;","code_diff":"left = last[s[r]] + 1;","expected_action":"PROBE","acceptable_strategies":["PROVE","COUNTEREXAMPLE"],"forbidden_strategies":[],"acceptable_target_kinds":["CODE_SNAPSHOT"],"technical_rationale_expectation":"Test whether the left boundary can move backward, without naming the repair.","must_not_reveal":["max(left, last"],"manual_review_notes":"Code behavior must be reviewed against the snapshot.","tags":["invariant-bug","strategy-prove"]}
+{
+  "fixture_id": "longest-substring-invariant-prove",
+  "schema_version": "stage4-examiner-eval.v1",
+  "input": {
+    "candidate_level": "NEW_GRAD",
+    "mode": "SIMULATION",
+    "state": "IMPLEMENTATION",
+    "time_context": {
+      "remaining_seconds": 600
+    },
+    "remaining_probe_budget": 2,
+    "problem_context": {
+      "io_schema": null,
+      "statement": "Given a string s, return the length of the longest contiguous substring containing no repeated characters.",
+      "examples": [
+        {
+          "input": "s = \"abcabcbb\"",
+          "output": "3",
+          "explanation": "\"abc\" is a longest valid substring."
+        },
+        {
+          "input": "s = \"bbbbb\"",
+          "output": "1",
+          "explanation": "Every longer substring repeats \"b\"."
+        },
+        {
+          "input": "s = \"pwwkew\"",
+          "output": "3",
+          "explanation": "\"wke\" is contiguous and has unique characters."
+        }
+      ],
+      "title": "Longest Substring Without Repeating Characters",
+      "constraints": [
+        "0 <= s.length <= 50000",
+        "s contains printable ASCII characters."
+      ]
+    },
+    "interview_pack_excerpt": {
+      "schema_version": "interview-pack.v1",
+      "pack": {
+        "schema_version": "interview-pack.v1",
+        "version": "v2",
+        "review_status": "REVIEWED",
+        "expected_approaches": [
+          {
+            "approach_id": "sliding_window_last_seen",
+            "summary": "Maintain a window and the last position of each character.",
+            "concept_keys": [
+              "sliding_window_invariant",
+              "hash_table_lookup"
+            ],
+            "applicability": "General strings with repeated characters.",
+            "assumptions": [
+              "The base contract limits input to printable ASCII, so the number of stored character keys is bounded."
+            ],
+            "key_invariants": [
+              "left never moves backward",
+              "window contains no duplicate characters"
+            ],
+            "time_complexity": "O(n) expected time with hash-based last-seen storage; O(n) worst-case time with a fixed ASCII index table",
+            "space_complexity": "O(1) under the printable-ASCII contract; O(min(n, k)) for a generalized character domain of size k",
+            "tradeoffs": [],
+            "common_implementation_variants": [
+              "frequency map",
+              "last seen map"
+            ],
+            "common_failure_modes": [
+              "moving left backward for a stale last-seen index"
+            ]
+          }
+        ],
+        "alternative_approaches": [],
+        "reference_solutions": [
+          {
+            "approach_id": "sliding_window_last_seen",
+            "language": "cpp",
+            "source_code": "class Solution { public: int lengthOfLongestSubstring(string s) { unordered_map<char,int> last; int left=0, answer=0; for(int right=0; right<(int)s.size(); ++right) { if(last.count(s[right])) left=max(left,last[s[right]]+1); last[s[right]]=right; answer=max(answer,right-left+1); } return answer; } };",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "sliding_window_last_seen",
+            "language": "python",
+            "source_code": "class Solution:\n    def lengthOfLongestSubstring(self, s: str) -> int:\n        last = {}; left = answer = 0\n        for right, char in enumerate(s):\n            if char in last: left = max(left, last[char] + 1)\n            last[char] = right; answer = max(answer, right-left+1)\n        return answer",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "sliding_window_last_seen",
+            "language": "java",
+            "source_code": "class Solution { public int lengthOfLongestSubstring(String s) { java.util.Map<Character,Integer> last=new java.util.HashMap<>(); int left=0, answer=0; for(int right=0; right<s.length(); right++){ if(last.containsKey(s.charAt(right))) left=Math.max(left,last.get(s.charAt(right))+1); last.put(s.charAt(right),right); answer=Math.max(answer,right-left+1); } return answer; } }",
+            "review_status": "REVIEWED"
+          }
+        ],
+        "concepts": [
+          "sliding_window_invariant",
+          "hash_table_lookup"
+        ],
+        "invariants": [
+          {
+            "id": "left_monotonic",
+            "concept_keys": [
+              "sliding_window_invariant"
+            ],
+            "diagnostic_goal": "The left boundary never moves backward.",
+            "counterexample_id": "abba",
+            "approach_id": "sliding_window_last_seen"
+          }
+        ],
+        "complexity_expectations": [
+          {
+            "id": "linear_time",
+            "concept_keys": [
+              "hash_table_lookup"
+            ],
+            "diagnostic_goal": "Explain one forward scan, qualify hash lookup as expected for the reviewed references, and recognize that fixed ASCII indexing can give a worst-case O(n) implementation.",
+            "approach_id": "sliding_window_last_seen"
+          }
+        ],
+        "common_misconceptions": [
+          {
+            "id": "guaranteed_hash_lookup",
+            "concept_keys": [
+              "hash_table_lookup"
+            ],
+            "diagnostic_goal": "Distinguish expected hash-table lookup from guaranteed constant-time fixed ASCII indexing."
+          }
+        ],
+        "failure_modes": [
+          {
+            "id": "stale_left_index",
+            "concept_keys": [
+              "sliding_window_invariant"
+            ],
+            "diagnostic_goal": "Avoid moving left backward.",
+            "counterexample_id": "abba",
+            "approach_id": "sliding_window_last_seen"
+          }
+        ],
+        "edge_cases": [
+          {
+            "id": "empty_string",
+            "concept_keys": [
+              "sliding_window_invariant"
+            ],
+            "diagnostic_goal": "Handle an empty input."
+          }
+        ],
+        "counterexamples": [
+          {
+            "id": "abba",
+            "input": "abba",
+            "purpose": "Tests stale last-seen indices."
+          }
+        ],
+        "constraint_mutations": [
+          {
+            "id": "larger_alphabet",
+            "concept_keys": [
+              "hash_table_lookup"
+            ],
+            "diagnostic_goal": "Discuss storage for a larger alphabet."
+          }
+        ],
+        "probe_opportunities": [
+          {
+            "id": "prove_left_monotonic",
+            "concept_keys": [
+              "sliding_window_invariant"
+            ],
+            "diagnostic_goal": "Defend the monotonic left boundary.",
+            "counterexample_id": "abba",
+            "approach_id": "sliding_window_last_seen",
+            "relevant_strategies": [
+              "PROVE",
+              "COUNTEREXAMPLE"
+            ]
+          }
+        ],
+        "common_followups": [
+          {
+            "id": "why_left_boundary_monotonic",
+            "target_concepts": [
+              "sliding_window_invariant"
+            ],
+            "target_approach_id": "sliding_window_last_seen",
+            "trigger_cues": [
+              "uses last seen indices"
+            ],
+            "diagnostic_goal": "Test whether the candidate can defend a monotonic left boundary.",
+            "relevant_strategies": [
+              "PROVE",
+              "COUNTEREXAMPLE"
+            ],
+            "expected_good_signals": [
+              "uses max for left"
+            ],
+            "weak_or_misconception_signals": [
+              "cannot explain stale last-seen indices"
+            ],
+            "counterexample_id": "abba",
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "IMPLEMENTATION"
+            ],
+            "sample_phrasings": [
+              "What prevents your left boundary from moving backward?"
+            ]
+          },
+          {
+            "id": "hash_or_ascii_table_complexity",
+            "target_concepts": [
+              "hash_table_lookup"
+            ],
+            "target_approach_id": "sliding_window_last_seen",
+            "trigger_cues": [
+              "claims guaranteed linear time with a hash map"
+            ],
+            "diagnostic_goal": "Test the lookup-cost assumption and the bounded printable-ASCII alternative.",
+            "relevant_strategies": [
+              "COMPLEXITY",
+              "ASSUMPTION_CHALLENGE"
+            ],
+            "expected_good_signals": [
+              "qualifies hash lookup as expected or chooses a fixed ASCII table"
+            ],
+            "weak_or_misconception_signals": [
+              "claims arbitrary hash lookup is universally constant time"
+            ],
+            "applicable_levels": [
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "applicable_stages": [
+              "COMPLEXITY_EDGE_CASES"
+            ],
+            "sample_phrasings": [
+              "What lookup guarantee does your chosen last-seen representation provide?"
+            ]
+          }
+        ],
+        "level_considerations": [
+          {
+            "level": "NEW_GRAD",
+            "guidance": "Prefer invariant explanation over implementation trivia."
+          }
+        ],
+        "reference_reasoning": "The pack supplies reviewed priors; it is not a whitelist of valid candidate approaches."
+      },
+      "review_status": "REVIEWED"
+    },
+    "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
+    "recent_transcript": [],
+    "candidate_statement": null,
+    "code_snapshot": "if (last.count(s[r])) left = last[s[r]] + 1;",
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": []
+  },
+  "expectations": {
+    "expected_action": "PROBE",
+    "acceptable_strategies": [
+      "PROVE",
+      "COUNTEREXAMPLE"
+    ],
+    "forbidden_strategies": [],
+    "acceptable_target_kinds": [
+      "CODE_SNAPSHOT"
+    ],
+    "forbidden_target_kinds": [],
+    "technical_rationale_rubric": {
+      "false_accusation_interpretation": null,
+      "restraint_ambiguity": null,
+      "diagnostic_value": null,
+      "technical_issue": "Test whether the left boundary can move backward, without naming the repair."
+    },
+    "must_not_reveal": [
+      "max(left, last"
+    ],
+    "expect_stale_suppression": false,
+    "expect_duplicate_suppression": false,
+    "label_sentinel": "EVAL_ONLY_LONGEST_SUBSTRING_INVARIANT_PROVE"
+  },
+  "review": {
+    "description": "A stale last-seen left assignment breaks the monotonic-left invariant.",
+    "manual_review_notes": "Code behavior must be reviewed against the snapshot.",
+    "tags": [
+      "invariant-bug",
+      "strategy-prove"
+    ],
+    "requires_manual_technical_review": true,
+    "requires_candidate_specificity_review": false
+  }
+}

@@ -1,1 +1,367 @@
-{"fixture_id":"coin-change-incomplete-observe","schema_version":"stage4-examiner-eval.v1","description":"Partial dynamic-programming setup remains incomplete and ambiguous.","candidate_level":"NEW_GRAD","mode":"SIMULATION","state":"IMPLEMENTATION","time_context":{"remaining_seconds":210},"remaining_probe_budget":2,"problem_context":{"title":"Coin Change"},"interview_pack_excerpt":{"fact":"Base initialization and recurrence must be present before semantic evaluation."},"source_observation_type":"CODE_MEANINGFULLY_CHANGED","code_snapshot":"vector<int> dp(amount + 1); for (int coin : coins) {","expected_action":"OBSERVE","acceptable_strategies":[],"forbidden_strategies":["FAILURE_MODE"],"acceptable_target_kinds":["CODE_SNAPSHOT","NONE"],"technical_rationale_expectation":"Incomplete structure has positive diagnostic value from waiting.","must_not_reveal":["dp[0] = 0"],"manual_review_notes":null,"tags":["restraint"]}
+{
+  "fixture_id": "coin-change-incomplete-observe",
+  "schema_version": "stage4-examiner-eval.v1",
+  "input": {
+    "candidate_level": "NEW_GRAD",
+    "mode": "SIMULATION",
+    "state": "IMPLEMENTATION",
+    "time_context": {
+      "remaining_seconds": 600
+    },
+    "remaining_probe_budget": 2,
+    "problem_context": {
+      "io_schema": null,
+      "statement": "Given positive coin denominations coins and a non-negative amount, return the fewest coins needed to make exactly amount. Each denomination may be used any number of times. Return -1 if the amount cannot be made.",
+      "examples": [
+        {
+          "input": "coins = [1,2,5], amount = 11",
+          "output": "3",
+          "explanation": "5 + 5 + 1 uses three coins."
+        },
+        {
+          "input": "coins = [2], amount = 3",
+          "output": "-1",
+          "explanation": "No combination of 2 makes 3."
+        }
+      ],
+      "title": "Coin Change",
+      "constraints": [
+        "1 <= coins.length <= 100",
+        "1 <= coins[i] <= 100000",
+        "0 <= amount <= 10000"
+      ]
+    },
+    "interview_pack_excerpt": {
+      "schema_version": "interview-pack.v1",
+      "pack": {
+        "schema_version": "interview-pack.v1",
+        "version": "v2",
+        "review_status": "REVIEWED",
+        "expected_approaches": [
+          {
+            "approach_id": "bottom_up_amount_dp",
+            "summary": "Build the fewest-coin result for every amount from zero through target.",
+            "concept_keys": [
+              "dynamic_programming",
+              "dynamic_programming_state",
+              "arrays",
+              "time_complexity",
+              "space_complexity"
+            ],
+            "applicability": "Unbounded positive denominations with a bounded target amount.",
+            "assumptions": [
+              "Denominations are positive."
+            ],
+            "key_invariants": [
+              "dp[0] = 0 and each finite dp[x] is the minimum count for exactly x.",
+              "The amount + 1 sentinel is larger than every possible answer; adding one remains safe under the candidate amount bound."
+            ],
+            "time_complexity": "O(amount * coins.length)",
+            "space_complexity": "O(amount)",
+            "tradeoffs": [
+              "Reliable for bounded amounts; scales with amount rather than only coin count."
+            ],
+            "common_implementation_variants": [
+              "top-down memoization"
+            ],
+            "common_failure_modes": [
+              "greedy choice",
+              "wrong unreachable sentinel"
+            ]
+          }
+        ],
+        "alternative_approaches": [
+          {
+            "approach_id": "top_down_memoization",
+            "summary": "Memoize the best result for each remaining amount.",
+            "concept_keys": [
+              "dynamic_programming",
+              "dynamic_programming_state"
+            ],
+            "applicability": "Equivalent recursive formulation.",
+            "assumptions": [
+              "Denominations are positive, so every recursive transition decreases the remaining amount."
+            ],
+            "key_invariants": [
+              "Each subamount is solved once."
+            ],
+            "time_complexity": "O(amount * coins.length)",
+            "space_complexity": "O(amount) for memoization plus a recursion stack that can reach O(amount / min_coin)",
+            "tradeoffs": [
+              "Natural recurrence, but a depth up to amount / min_coin can exceed practical language recursion limits, including Python's default limit."
+            ],
+            "common_implementation_variants": [],
+            "common_failure_modes": [
+              "cycles from nonpositive coins"
+            ]
+          }
+        ],
+        "reference_solutions": [
+          {
+            "approach_id": "bottom_up_amount_dp",
+            "language": "cpp",
+            "source_code": "class Solution { public: int coinChange(vector<int> coins,int amount){vector<int> dp(amount+1,amount+1);dp[0]=0;for(int x=1;x<=amount;x++)for(int coin:coins)if(coin<=x)dp[x]=min(dp[x],dp[x-coin]+1);return dp[amount]>amount?-1:dp[amount];} };",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "bottom_up_amount_dp",
+            "language": "python",
+            "source_code": "class Solution:\n    def coinChange(self, coins, amount):\n        dp = [amount + 1] * (amount + 1)\n        dp[0] = 0\n        for value in range(1, amount + 1):\n            for coin in coins:\n                if coin <= value:\n                    dp[value] = min(dp[value], dp[value - coin] + 1)\n        return -1 if dp[amount] > amount else dp[amount]",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "bottom_up_amount_dp",
+            "language": "java",
+            "source_code": "class Solution { public int coinChange(int[] coins,int amount){int[] dp=new int[amount+1];java.util.Arrays.fill(dp,amount+1);dp[0]=0;for(int x=1;x<=amount;x++)for(int coin:coins)if(coin<=x)dp[x]=Math.min(dp[x],dp[x-coin]+1);return dp[amount]>amount?-1:dp[amount];} }",
+            "review_status": "REVIEWED"
+          }
+        ],
+        "concepts": [
+          "dynamic_programming",
+          "dynamic_programming_state",
+          "arrays",
+          "time_complexity",
+          "space_complexity"
+        ],
+        "invariants": [
+          {
+            "id": "minimum_reachable_amount",
+            "concept_keys": [
+              "dynamic_programming_state"
+            ],
+            "diagnostic_goal": "Each finite dp value is the best known exact construction for its amount.",
+            "counterexample_id": "greedy_fails",
+            "approach_id": "bottom_up_amount_dp"
+          }
+        ],
+        "complexity_expectations": [
+          {
+            "id": "amount_times_denominations",
+            "concept_keys": [
+              "time_complexity",
+              "space_complexity"
+            ],
+            "diagnostic_goal": "Scale work and storage with amount.",
+            "approach_id": "bottom_up_amount_dp"
+          }
+        ],
+        "common_misconceptions": [
+          {
+            "id": "greedy_always_optimal",
+            "concept_keys": [
+              "dynamic_programming"
+            ],
+            "diagnostic_goal": "Largest-first is not valid for arbitrary denominations.",
+            "counterexample_id": "greedy_fails"
+          }
+        ],
+        "failure_modes": [
+          {
+            "id": "unreachable_as_zero",
+            "concept_keys": [
+              "dynamic_programming_state"
+            ],
+            "diagnostic_goal": "Unreachable is distinct from the base amount zero.",
+            "counterexample_id": "impossible",
+            "approach_id": "bottom_up_amount_dp"
+          }
+        ],
+        "edge_cases": [
+          {
+            "id": "zero_amount",
+            "concept_keys": [
+              "dynamic_programming_state"
+            ],
+            "diagnostic_goal": "Zero needs zero coins."
+          }
+        ],
+        "counterexamples": [
+          {
+            "id": "greedy_fails",
+            "input": {
+              "coins": [
+                1,
+                3,
+                4
+              ],
+              "amount": 6
+            },
+            "purpose": "Greedy uses three coins while two threes are optimal."
+          },
+          {
+            "id": "impossible",
+            "input": {
+              "coins": [
+                2
+              ],
+              "amount": 3
+            },
+            "purpose": "No exact construction exists."
+          }
+        ],
+        "constraint_mutations": [
+          {
+            "id": "single_use_coins",
+            "concept_keys": [
+              "dynamic_programming_state"
+            ],
+            "diagnostic_goal": "Single-use denominations need a different iteration rule."
+          }
+        ],
+        "probe_opportunities": [
+          {
+            "id": "prove_dp_transition",
+            "concept_keys": [
+              "dynamic_programming_state"
+            ],
+            "diagnostic_goal": "Defend extending an exact smaller amount by one coin.",
+            "approach_id": "bottom_up_amount_dp",
+            "relevant_strategies": [
+              "PROVE"
+            ]
+          }
+        ],
+        "common_followups": [
+          {
+            "id": "greedy_counterexample",
+            "target_concepts": [
+              "dynamic_programming"
+            ],
+            "target_approach_id": "bottom_up_amount_dp",
+            "trigger_cues": [
+              "proposes largest-first"
+            ],
+            "diagnostic_goal": "Test greedy validity.",
+            "relevant_strategies": [
+              "COUNTEREXAMPLE"
+            ],
+            "expected_good_signals": [
+              "finds 3 plus 3"
+            ],
+            "weak_or_misconception_signals": [
+              "claims greedy is general"
+            ],
+            "counterexample_id": "greedy_fails",
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "APPROACH_DEFENSE"
+            ],
+            "sample_phrasings": [
+              "What does largest-first return for coins [1,3,4] and amount 6?"
+            ]
+          },
+          {
+            "id": "base_state",
+            "target_concepts": [
+              "dynamic_programming_state"
+            ],
+            "target_approach_id": "bottom_up_amount_dp",
+            "trigger_cues": [
+              "initializes dp"
+            ],
+            "diagnostic_goal": "Test zero and unreachable meaning.",
+            "relevant_strategies": [
+              "PROVE"
+            ],
+            "expected_good_signals": [
+              "dp zero equals zero"
+            ],
+            "weak_or_misconception_signals": [
+              "uses zero for unreachable"
+            ],
+            "applicable_levels": [
+              "INTERN",
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "IMPLEMENTATION"
+            ],
+            "sample_phrasings": [
+              "What do your initial DP values mean?"
+            ]
+          },
+          {
+            "id": "amount_scaling",
+            "target_concepts": [
+              "time_complexity"
+            ],
+            "target_approach_id": "bottom_up_amount_dp",
+            "trigger_cues": [
+              "states complexity"
+            ],
+            "diagnostic_goal": "Test amount dependence.",
+            "relevant_strategies": [
+              "COMPLEXITY"
+            ],
+            "expected_good_signals": [
+              "uses amount times coin count"
+            ],
+            "weak_or_misconception_signals": [
+              "uses only number of coins"
+            ],
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "COMPLEXITY_EDGE_CASES"
+            ],
+            "sample_phrasings": [
+              "How does a larger target amount affect this DP?"
+            ]
+          }
+        ],
+        "level_considerations": [
+          {
+            "level": "NEW_GRAD",
+            "guidance": "Focus on recurrence, sentinel semantics, and greedy counterexample."
+          }
+        ],
+        "reference_reasoning": "Bottom-up DP is a strong prior; memoized and other correct formulations remain valid."
+      },
+      "review_status": "REVIEWED"
+    },
+    "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
+    "recent_transcript": [],
+    "candidate_statement": null,
+    "code_snapshot": "vector<int> dp(amount + 1); for (int coin : coins) {",
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": []
+  },
+  "expectations": {
+    "expected_action": "OBSERVE",
+    "acceptable_strategies": [],
+    "forbidden_strategies": [
+      "FAILURE_MODE"
+    ],
+    "acceptable_target_kinds": [
+      "CODE_SNAPSHOT",
+      "NONE"
+    ],
+    "forbidden_target_kinds": [],
+    "technical_rationale_rubric": {
+      "false_accusation_interpretation": null,
+      "restraint_ambiguity": null,
+      "diagnostic_value": null,
+      "technical_issue": "Incomplete structure has positive diagnostic value from waiting."
+    },
+    "must_not_reveal": [
+      "dp[0] = 0"
+    ],
+    "expect_stale_suppression": false,
+    "expect_duplicate_suppression": false,
+    "label_sentinel": "EVAL_ONLY_COIN_CHANGE_INCOMPLETE_OBSERVE"
+  },
+  "review": {
+    "description": "Partial dynamic-programming setup remains incomplete and ambiguous.",
+    "manual_review_notes": null,
+    "tags": [
+      "restraint"
+    ],
+    "requires_manual_technical_review": false,
+    "requires_candidate_specificity_review": false
+  }
+}

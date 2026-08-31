@@ -10,11 +10,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: pnpm
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @counterq/web lint
       - run: pnpm --filter @counterq/web typecheck
@@ -62,14 +62,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: corepack enable
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
           cache: pnpm
       - uses: astral-sh/setup-uv@v5
-      - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: uv sync --directory apps/api --locked
       - run: pnpm run contracts
       - run: git diff --exit-code packages/contracts/schemas/openapi.json packages/contracts/generated/openapi.ts
-

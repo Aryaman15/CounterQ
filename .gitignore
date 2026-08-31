@@ -26,3 +26,4 @@ coverage/
 
 # Generated local artifacts
 *.log
+tmp/stage4-examiner-eval.json

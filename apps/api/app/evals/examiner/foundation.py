@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections import Counter
 
 from app.evals.examiner.harness import load_fixtures, model_input_json, serialized_input_has_labels
-from app.examiner.analysis_schema import ExaminerAnalysisResult
 
 REQUIRED_TAGS = frozenset(
     {
@@ -44,36 +43,24 @@ REQUIRED_STRATEGIES = frozenset(
 def validate_foundation() -> dict[str, object]:
     fixtures = load_fixtures()
     assert len(fixtures) >= 24
-    ids = [fixture.fixture_id for fixture in fixtures]
-    assert len(ids) == len(set(ids)), "fixture IDs must be unique"
-    tags = {tag for fixture in fixtures for tag in fixture.tags}
+    assert len({item.fixture_id for item in fixtures}) == len(fixtures)
+    tags = {tag for item in fixtures for tag in item.review.tags}
     assert REQUIRED_TAGS <= tags
-    actions = {fixture.expected_action for fixture in fixtures}
-    assert actions == {"WAIT", "OBSERVE", "ASK", "PROBE"}
-    strategies = {strategy for fixture in fixtures for strategy in fixture.acceptable_strategies}
+    assert {item.expectations.expected_action for item in fixtures} == {
+        "WAIT",
+        "OBSERVE",
+        "ASK",
+        "PROBE",
+    }
+    strategies = {
+        strategy for item in fixtures for strategy in item.expectations.acceptable_strategies
+    }
     assert REQUIRED_STRATEGIES <= strategies
-    for fixture in fixtures:
-        assert not serialized_input_has_labels(model_input_json(fixture))
-    # Proves production output schema accepts an evaluator-scored result.
-    output = ExaminerAnalysisResult.model_validate(
-        {
-            "claims": [],
-            "decision": {
-                "action": "WAIT",
-                "target_kind": "NONE",
-                "target_claim_index": None,
-                "proposed_probe_strategy": None,
-                "technical_rationale": "Continue observing current work.",
-                "confidence": 0.8,
-                "priority": 0,
-                "urgency": 0,
-            },
-        }
-    )
-    assert output.decision.action == "WAIT"
+    for item in fixtures:
+        assert not serialized_input_has_labels(model_input_json(item.input), item)
     return {
         "fixtures": len(fixtures),
-        "actions": dict(Counter(f.expected_action for f in fixtures)),
+        "actions": dict(Counter(item.expectations.expected_action for item in fixtures)),
         "strategies": len(strategies),
     }
 

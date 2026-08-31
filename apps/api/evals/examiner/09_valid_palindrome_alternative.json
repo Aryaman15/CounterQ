@@ -1,1 +1,391 @@
-{"fixture_id":"valid-palindrome-alternative","schema_version":"stage4-examiner-eval.v1","description":"A correct filtered-copy solution may be compared with an in-place scan.","candidate_level":"EARLY_CAREER","mode":"SIMULATION","state":"APPROACH_DEFENSE","time_context":{"remaining_seconds":490},"remaining_probe_budget":2,"problem_context":{"title":"Valid Palindrome"},"interview_pack_excerpt":{"fact":"A two-pointer scan avoids allocating a normalized copy."},"source_observation_type":"CANDIDATE_TRANSCRIPT_FINALIZED","candidate_statement":"I build a lowercase alphanumeric copy, reverse it, and compare.","expected_action":"PROBE","acceptable_strategies":["ALTERNATIVE","TRADE_OFF"],"forbidden_strategies":[],"acceptable_target_kinds":["CLAIM"],"technical_rationale_expectation":"Explore an alternative's space tradeoff without implying the submitted approach is wrong.","must_not_reveal":["use two pointers"],"manual_review_notes":"Alternate correct approach is not a false positive.","tags":["alternate-correct","strategy-alternative"]}
+{
+  "fixture_id": "valid-palindrome-alternative",
+  "schema_version": "stage4-examiner-eval.v1",
+  "input": {
+    "candidate_level": "NEW_GRAD",
+    "mode": "SIMULATION",
+    "state": "APPROACH_DEFENSE",
+    "time_context": {
+      "remaining_seconds": 600
+    },
+    "remaining_probe_budget": 2,
+    "problem_context": {
+      "io_schema": null,
+      "statement": "Given a string s, return true if its alphanumeric characters read the same forward and backward after ignoring case. Ignore all non-alphanumeric characters.",
+      "examples": [
+        {
+          "input": "s = \"A man, a plan, a canal: Panama\"",
+          "output": "true",
+          "explanation": "After normalization, the sequence is \"amanaplanacanalpanama\"."
+        },
+        {
+          "input": "s = \"race a car\"",
+          "output": "false",
+          "explanation": "The normalized characters do not mirror each other."
+        }
+      ],
+      "title": "Valid Palindrome",
+      "constraints": [
+        "0 <= s.length <= 200000",
+        "s contains ASCII letters, digits, punctuation, and spaces."
+      ]
+    },
+    "interview_pack_excerpt": {
+      "schema_version": "interview-pack.v1",
+      "pack": {
+        "schema_version": "interview-pack.v1",
+        "version": "v2",
+        "review_status": "REVIEWED",
+        "expected_approaches": [
+          {
+            "approach_id": "in_place_normalizing_pointers",
+            "summary": "Move pointers inward, skipping non-alphanumeric characters and comparing lowercase forms.",
+            "concept_keys": [
+              "two_pointers",
+              "two_pointer_reasoning",
+              "space_complexity"
+            ],
+            "applicability": "A string can be scanned from both ends and normalization is local.",
+            "assumptions": [
+              "The selected alphanumeric and case-normalization operations match the stated input domain."
+            ],
+            "key_invariants": [
+              "All normalized characters outside the active pointer interval have already matched their mirror."
+            ],
+            "time_complexity": "O(n)",
+            "space_complexity": "O(1)",
+            "tradeoffs": [
+              "Avoids an allocated filtered copy but requires careful pointer movement."
+            ],
+            "common_implementation_variants": [
+              "helper predicate and lowercase helper"
+            ],
+            "common_failure_modes": [
+              "advancing only one pointer after a match",
+              "comparing punctuation"
+            ]
+          }
+        ],
+        "alternative_approaches": [
+          {
+            "approach_id": "filtered_normalized_copy",
+            "summary": "Build a lowercase alphanumeric string, then compare it with its reverse or scan it from both ends.",
+            "concept_keys": [
+              "two_pointers",
+              "space_complexity"
+            ],
+            "applicability": "When clarity matters more than constant auxiliary space.",
+            "assumptions": [],
+            "key_invariants": [
+              "The filtered copy preserves exactly the relevant normalized character sequence."
+            ],
+            "time_complexity": "O(n)",
+            "space_complexity": "O(n)",
+            "tradeoffs": [
+              "Simpler normalization but allocates another string."
+            ],
+            "common_implementation_variants": [
+              "reverse comparison"
+            ],
+            "common_failure_modes": [
+              "filtering but not normalizing case"
+            ]
+          }
+        ],
+        "reference_solutions": [
+          {
+            "approach_id": "in_place_normalizing_pointers",
+            "language": "cpp",
+            "source_code": "class Solution { public: bool isPalindrome(string s){ int left=0,right=(int)s.size()-1; while(left<right){ while(left<right && !isalnum((unsigned char)s[left])) left++; while(left<right && !isalnum((unsigned char)s[right])) right--; if(tolower((unsigned char)s[left])!=tolower((unsigned char)s[right])) return false; left++; right--; } return true; } };",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "in_place_normalizing_pointers",
+            "language": "python",
+            "source_code": "class Solution:\n    def isPalindrome(self, s):\n        left, right = 0, len(s) - 1\n        while left < right:\n            while left < right and not s[left].isalnum():\n                left += 1\n            while left < right and not s[right].isalnum():\n                right -= 1\n            if s[left].lower() != s[right].lower():\n                return False\n            left += 1\n            right -= 1\n        return True",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "in_place_normalizing_pointers",
+            "language": "java",
+            "source_code": "class Solution { public boolean isPalindrome(String s){ int left=0,right=s.length()-1; while(left<right){ while(left<right&&!Character.isLetterOrDigit(s.charAt(left))) left++; while(left<right&&!Character.isLetterOrDigit(s.charAt(right))) right--; if(Character.toLowerCase(s.charAt(left))!=Character.toLowerCase(s.charAt(right))) return false; left++; right--; } return true; } }",
+            "review_status": "REVIEWED"
+          }
+        ],
+        "concepts": [
+          "two_pointers",
+          "two_pointer_reasoning",
+          "space_complexity"
+        ],
+        "invariants": [
+          {
+            "id": "matched_normalized_outer_pairs",
+            "concept_keys": [
+              "two_pointer_reasoning"
+            ],
+            "diagnostic_goal": "All already-passed relevant character pairs match after normalization.",
+            "counterexample_id": "punctuation_case",
+            "approach_id": "in_place_normalizing_pointers"
+          }
+        ],
+        "complexity_expectations": [
+          {
+            "id": "single_bidirectional_scan",
+            "concept_keys": [
+              "two_pointers",
+              "space_complexity"
+            ],
+            "diagnostic_goal": "Explain why each input position is considered at most once and no copy is required.",
+            "approach_id": "in_place_normalizing_pointers"
+          }
+        ],
+        "common_misconceptions": [
+          {
+            "id": "reverse_raw_string",
+            "concept_keys": [
+              "two_pointers"
+            ],
+            "diagnostic_goal": "Normalize before comparing rather than treating punctuation as meaningful.",
+            "counterexample_id": "punctuation_case"
+          }
+        ],
+        "failure_modes": [
+          {
+            "id": "stalled_pointer_after_match",
+            "concept_keys": [
+              "two_pointer_reasoning"
+            ],
+            "diagnostic_goal": "Advance both pointers after equal normalized characters.",
+            "approach_id": "in_place_normalizing_pointers"
+          },
+          {
+            "id": "one_sided_skip",
+            "concept_keys": [
+              "two_pointer_reasoning"
+            ],
+            "diagnostic_goal": "Skip irrelevant characters independently on either side.",
+            "approach_id": "in_place_normalizing_pointers"
+          }
+        ],
+        "edge_cases": [
+          {
+            "id": "empty_normalized_content",
+            "concept_keys": [
+              "two_pointers"
+            ],
+            "diagnostic_goal": "An empty relevant sequence is palindromic.",
+            "counterexample_id": "only_punctuation"
+          },
+          {
+            "id": "mixed_case_punctuation",
+            "concept_keys": [
+              "two_pointers"
+            ],
+            "diagnostic_goal": "Apply both normalization rules.",
+            "counterexample_id": "punctuation_case"
+          }
+        ],
+        "counterexamples": [
+          {
+            "id": "punctuation_case",
+            "input": "A man, a plan, a canal: Panama",
+            "purpose": "Requires ignoring punctuation and case."
+          },
+          {
+            "id": "only_punctuation",
+            "input": "   ",
+            "purpose": "Normalizes to an empty character sequence."
+          },
+          {
+            "id": "near_miss",
+            "input": "race a car",
+            "purpose": "Exposes comparing the wrong normalized pair."
+          }
+        ],
+        "constraint_mutations": [
+          {
+            "id": "unicode_normalization",
+            "concept_keys": [
+              "two_pointers"
+            ],
+            "diagnostic_goal": "Discuss how a broader text definition would require an explicit normalization policy."
+          }
+        ],
+        "probe_opportunities": [
+          {
+            "id": "prove_outer_match_invariant",
+            "concept_keys": [
+              "two_pointer_reasoning"
+            ],
+            "diagnostic_goal": "Defend why discarded outer characters no longer need consideration.",
+            "approach_id": "in_place_normalizing_pointers",
+            "relevant_strategies": [
+              "PROVE"
+            ]
+          },
+          {
+            "id": "copy_space_tradeoff",
+            "concept_keys": [
+              "space_complexity"
+            ],
+            "diagnostic_goal": "Compare the filtered-copy approach with in-place pointers.",
+            "approach_id": "filtered_normalized_copy",
+            "relevant_strategies": [
+              "TRADE_OFF",
+              "ALTERNATIVE"
+            ]
+          }
+        ],
+        "common_followups": [
+          {
+            "id": "skip_and_compare_order",
+            "target_concepts": [
+              "two_pointer_reasoning"
+            ],
+            "target_approach_id": "in_place_normalizing_pointers",
+            "trigger_cues": [
+              "uses left and right pointers"
+            ],
+            "diagnostic_goal": "Test why skips precede comparisons.",
+            "relevant_strategies": [
+              "PROVE",
+              "IMPLEMENTATION_CHOICE"
+            ],
+            "expected_good_signals": [
+              "both pointers first land on relevant characters"
+            ],
+            "weak_or_misconception_signals": [
+              "compares punctuation"
+            ],
+            "counterexample_id": "punctuation_case",
+            "applicable_levels": [
+              "INTERN",
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "IMPLEMENTATION"
+            ],
+            "sample_phrasings": [
+              "When do you know each pointer is positioned on a character that matters?"
+            ]
+          },
+          {
+            "id": "empty_normalized_case",
+            "target_concepts": [
+              "two_pointers"
+            ],
+            "target_approach_id": "in_place_normalizing_pointers",
+            "trigger_cues": [
+              "assumes input has letters"
+            ],
+            "diagnostic_goal": "Test the empty normalized sequence.",
+            "relevant_strategies": [
+              "EDGE_CASE",
+              "COUNTEREXAMPLE"
+            ],
+            "expected_good_signals": [
+              "returns true after pointers cross"
+            ],
+            "weak_or_misconception_signals": [
+              "indexes past an all-punctuation string"
+            ],
+            "counterexample_id": "only_punctuation",
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "TESTING_DEBUGGING"
+            ],
+            "sample_phrasings": [
+              "What should this do for a string containing only punctuation and spaces?"
+            ]
+          },
+          {
+            "id": "normalization_scope",
+            "target_concepts": [
+              "two_pointers"
+            ],
+            "target_approach_id": "in_place_normalizing_pointers",
+            "trigger_cues": [
+              "uses ASCII checks"
+            ],
+            "diagnostic_goal": "Clarify the domain assumption behind character helpers.",
+            "relevant_strategies": [
+              "ASSUMPTION_CHALLENGE",
+              "CONSTRAINT_MUTATION"
+            ],
+            "expected_good_signals": [
+              "ties implementation to specified character domain"
+            ],
+            "weak_or_misconception_signals": [
+              "claims any Unicode text is handled without a policy"
+            ],
+            "applicable_levels": [
+              "EARLY_CAREER"
+            ],
+            "applicable_stages": [
+              "CONSTRAINT_MUTATION"
+            ],
+            "sample_phrasings": [
+              "What would you need to specify before extending this to arbitrary Unicode text?"
+            ]
+          }
+        ],
+        "level_considerations": [
+          {
+            "level": "INTERN",
+            "guidance": "Focus on the normalized comparison rule."
+          },
+          {
+            "level": "NEW_GRAD",
+            "guidance": "Expect a two-pointer invariant and O(1) auxiliary-space explanation."
+          }
+        ],
+        "reference_reasoning": "The reviewed in-place scan is a strong baseline; filtered-copy and other correct normalizing approaches remain valid when their costs and semantics are clear."
+      },
+      "review_status": "REVIEWED"
+    },
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I build a lowercase alphanumeric copy, reverse it, and compare.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": []
+  },
+  "expectations": {
+    "expected_action": "PROBE",
+    "acceptable_strategies": [
+      "ALTERNATIVE",
+      "TRADE_OFF"
+    ],
+    "forbidden_strategies": [],
+    "acceptable_target_kinds": [
+      "CLAIM"
+    ],
+    "forbidden_target_kinds": [],
+    "technical_rationale_rubric": {
+      "false_accusation_interpretation": null,
+      "restraint_ambiguity": null,
+      "diagnostic_value": null,
+      "technical_issue": "Explore an alternative's space tradeoff without implying the submitted approach is wrong."
+    },
+    "must_not_reveal": [
+      "use two pointers"
+    ],
+    "expect_stale_suppression": false,
+    "expect_duplicate_suppression": false,
+    "label_sentinel": "EVAL_ONLY_VALID_PALINDROME_ALTERNATIVE"
+  },
+  "review": {
+    "description": "A correct filtered-copy solution may be compared with an in-place scan.",
+    "manual_review_notes": "Alternate correct approach is not a false positive.",
+    "tags": [
+      "alternate-correct",
+      "strategy-alternative"
+    ],
+    "requires_manual_technical_review": true,
+    "requires_candidate_specificity_review": false
+  }
+}

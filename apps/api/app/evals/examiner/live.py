@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import NoReturn
 
 from app.ai_gateway.provider import ReasoningRequest
-from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
+from app.ai_gateway.routes import build_reasoning_provider
 from app.config.settings import create_settings
 from app.evals.examiner.harness import (
     aggregate_results,
@@ -27,7 +27,7 @@ async def run_live_evaluation() -> dict[str, object]:
     if os.environ.get("COUNTERQ_STAGE4_LIVE_EVAL") != "1":
         _refuse_without_opt_in()
     settings = create_settings()
-    provider = OpenAIReasoningProvider(settings)
+    provider = build_reasoning_provider(settings)
     results = []
     for fixture in load_fixtures():
         request = ReasoningRequest(
@@ -35,7 +35,7 @@ async def run_live_evaluation() -> dict[str, object]:
             purpose="stage4_examiner_evaluation",
             policy=live_examiner_policy_descriptor(),
             instructions=LIVE_EXAMINER_INSTRUCTIONS,
-            input_content=model_input_json(fixture),
+            input_content=model_input_json(fixture.input),
             output_schema_name="ExaminerAnalysisResult",
             output_json_schema=ExaminerAnalysisResult.model_json_schema(),
             timeout_seconds=settings.reasoning_timeout_seconds,

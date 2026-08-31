@@ -1,1 +1,392 @@
-{"fixture_id":"rotated-search-duplicate-assumption-ask","schema_version":"stage4-examiner-eval.v1","description":"A missing input constraint should receive a neutral clarification.","candidate_level":"NEW_GRAD","mode":"SIMULATION","state":"PROBLEM_UNDERSTANDING","time_context":{"remaining_seconds":200},"remaining_probe_budget":3,"problem_context":{"title":"Search in Rotated Sorted Array"},"interview_pack_excerpt":{"fact":"The reviewed problem uses distinct values."},"source_observation_type":"CANDIDATE_TRANSCRIPT_FINALIZED","candidate_statement":"Can the array contain duplicates?","expected_action":"ASK","acceptable_strategies":[],"forbidden_strategies":["ASSUMPTION_CHALLENGE"],"acceptable_target_kinds":["CLAIM","EVENT"],"technical_rationale_expectation":"Answer factual clarification neutrally; no teaching or adversarial probe.","must_not_reveal":["values are distinct"],"manual_review_notes":null,"tags":["ask"]}
+{
+  "fixture_id": "rotated-search-duplicate-assumption-ask",
+  "schema_version": "stage4-examiner-eval.v1",
+  "input": {
+    "candidate_level": "NEW_GRAD",
+    "mode": "SIMULATION",
+    "state": "PROBLEM_UNDERSTANDING",
+    "time_context": {
+      "remaining_seconds": 600
+    },
+    "remaining_probe_budget": 2,
+    "problem_context": {
+      "io_schema": null,
+      "statement": "An array nums was sorted in strictly increasing order and then rotated at an unknown position. Given nums and target, return the target index or -1 if target is absent.",
+      "examples": [
+        {
+          "input": "nums = [4,5,6,7,0,1,2], target = 0",
+          "output": "4",
+          "explanation": "0 appears at index 4."
+        },
+        {
+          "input": "nums = [4,5,6,7,0,1,2], target = 3",
+          "output": "-1",
+          "explanation": "3 is not present."
+        }
+      ],
+      "title": "Search in Rotated Sorted Array",
+      "constraints": [
+        "1 <= nums.length <= 100000",
+        "-1000000000 <= nums[i], target <= 1000000000",
+        "nums contains distinct values and is a rotation of a strictly increasing array."
+      ]
+    },
+    "interview_pack_excerpt": {
+      "schema_version": "interview-pack.v1",
+      "pack": {
+        "schema_version": "interview-pack.v1",
+        "version": "v2",
+        "review_status": "REVIEWED",
+        "expected_approaches": [
+          {
+            "approach_id": "sorted_half_binary_search",
+            "summary": "At each midpoint identify the sorted half, then keep it only if its value range can contain target.",
+            "concept_keys": [
+              "binary_search",
+              "binary_search_invariant",
+              "binary_search_boundary",
+              "arrays"
+            ],
+            "applicability": "Distinct values in a rotated strictly increasing array.",
+            "assumptions": [
+              "Distinct endpoints make one sorted half distinguishable."
+            ],
+            "key_invariants": [
+              "If target exists, it remains inside the retained interval.",
+              "At least one current half is normally ordered."
+            ],
+            "time_complexity": "O(log n)",
+            "space_complexity": "O(1)",
+            "tradeoffs": [
+              "Boundary comparisons must be inclusive in the right places."
+            ],
+            "common_implementation_variants": [],
+            "common_failure_modes": [
+              "discarding the sorted half containing target",
+              "bounds that do not progress"
+            ]
+          }
+        ],
+        "alternative_approaches": [
+          {
+            "approach_id": "pivot_then_binary_search",
+            "summary": "Locate the rotation pivot and binary-search the relevant sorted segment.",
+            "concept_keys": [
+              "binary_search",
+              "arrays"
+            ],
+            "applicability": "When separating pivot logic improves clarity.",
+            "assumptions": [
+              "The same distinct-value rotation assumptions hold."
+            ],
+            "key_invariants": [
+              "The pivot partitions two sorted ranges."
+            ],
+            "time_complexity": "O(log n)",
+            "space_complexity": "O(1)",
+            "tradeoffs": [
+              "Adds a second binary-search decision."
+            ],
+            "common_implementation_variants": [],
+            "common_failure_modes": [
+              "choosing the wrong segment"
+            ]
+          }
+        ],
+        "reference_solutions": [
+          {
+            "approach_id": "sorted_half_binary_search",
+            "language": "cpp",
+            "source_code": "class Solution { public: int search(vector<int> nums,int target){int left=0,right=nums.size()-1;while(left<=right){int mid=left+(right-left)/2;if(nums[mid]==target)return mid;if(nums[left]<=nums[mid]){if(nums[left]<=target&&target<nums[mid])right=mid-1;else left=mid+1;}else{if(nums[mid]<target&&target<=nums[right])left=mid+1;else right=mid-1;}}return -1;} };",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "sorted_half_binary_search",
+            "language": "python",
+            "source_code": "class Solution:\n    def search(self, nums, target):\n        left, right = 0, len(nums) - 1\n        while left <= right:\n            middle = (left + right) // 2\n            if nums[middle] == target:\n                return middle\n            if nums[left] <= nums[middle]:\n                if nums[left] <= target < nums[middle]:\n                    right = middle - 1\n                else:\n                    left = middle + 1\n            elif nums[middle] < target <= nums[right]:\n                left = middle + 1\n            else:\n                right = middle - 1\n        return -1",
+            "review_status": "REVIEWED"
+          },
+          {
+            "approach_id": "sorted_half_binary_search",
+            "language": "java",
+            "source_code": "class Solution { public int search(int[] nums,int target){int left=0,right=nums.length-1;while(left<=right){int mid=left+(right-left)/2;if(nums[mid]==target)return mid;if(nums[left]<=nums[mid]){if(nums[left]<=target&&target<nums[mid])right=mid-1;else left=mid+1;}else if(nums[mid]<target&&target<=nums[right])left=mid+1;else right=mid-1;}return -1;} }",
+            "review_status": "REVIEWED"
+          }
+        ],
+        "concepts": [
+          "binary_search",
+          "binary_search_invariant",
+          "binary_search_boundary",
+          "arrays"
+        ],
+        "invariants": [
+          {
+            "id": "target_in_retained_interval",
+            "concept_keys": [
+              "binary_search_invariant"
+            ],
+            "diagnostic_goal": "A discarded half is proven unable to contain target.",
+            "counterexample_id": "boundary_target",
+            "approach_id": "sorted_half_binary_search"
+          }
+        ],
+        "complexity_expectations": [
+          {
+            "id": "half_discard_each_step",
+            "concept_keys": [
+              "binary_search"
+            ],
+            "diagnostic_goal": "One half is removed each iteration under distinct-value assumptions.",
+            "approach_id": "sorted_half_binary_search"
+          }
+        ],
+        "common_misconceptions": [
+          {
+            "id": "ordinary_sorted_search",
+            "concept_keys": [
+              "binary_search"
+            ],
+            "diagnostic_goal": "A globally rotated order cannot use ordinary midpoint direction logic."
+          }
+        ],
+        "failure_modes": [
+          {
+            "id": "exclusive_range_error",
+            "concept_keys": [
+              "binary_search_boundary"
+            ],
+            "diagnostic_goal": "Include endpoints when deciding whether target lies in a sorted half.",
+            "counterexample_id": "boundary_target",
+            "approach_id": "sorted_half_binary_search"
+          }
+        ],
+        "edge_cases": [
+          {
+            "id": "single_value",
+            "concept_keys": [
+              "binary_search_boundary"
+            ],
+            "diagnostic_goal": "Handle a one-element interval."
+          }
+        ],
+        "counterexamples": [
+          {
+            "id": "boundary_target",
+            "input": {
+              "nums": [
+                5,
+                1,
+                3
+              ],
+              "target": 5
+            },
+            "purpose": "The target sits on a sorted-half boundary."
+          },
+          {
+            "id": "pivot_near_end",
+            "input": {
+              "nums": [
+                2,
+                3,
+                4,
+                5,
+                1
+              ],
+              "target": 1
+            },
+            "purpose": "Tests a small rotated tail."
+          },
+          {
+            "id": "absent",
+            "input": {
+              "nums": [
+                4,
+                5,
+                6,
+                7,
+                0,
+                1,
+                2
+              ],
+              "target": 3
+            },
+            "purpose": "No retained interval contains target."
+          }
+        ],
+        "constraint_mutations": [
+          {
+            "id": "duplicates_allowed",
+            "concept_keys": [
+              "binary_search_invariant"
+            ],
+            "diagnostic_goal": "Equal boundary values can make the sorted-half decision ambiguous; discarding duplicates one at a time can degrade worst-case time to O(n), so the base O(log n) guarantee no longer holds."
+          }
+        ],
+        "probe_opportunities": [
+          {
+            "id": "prove_sorted_half_discard",
+            "concept_keys": [
+              "binary_search_invariant"
+            ],
+            "diagnostic_goal": "Defend how a sorted half and target range justify discarding the other half.",
+            "approach_id": "sorted_half_binary_search",
+            "relevant_strategies": [
+              "PROVE"
+            ]
+          },
+          {
+            "id": "duplicate_mutation",
+            "concept_keys": [
+              "binary_search_invariant"
+            ],
+            "diagnostic_goal": "Test the distinct-value assumption.",
+            "approach_id": "sorted_half_binary_search",
+            "relevant_strategies": [
+              "ASSUMPTION_CHALLENGE",
+              "CONSTRAINT_MUTATION"
+            ]
+          }
+        ],
+        "common_followups": [
+          {
+            "id": "identify_sorted_half",
+            "target_concepts": [
+              "binary_search_invariant"
+            ],
+            "target_approach_id": "sorted_half_binary_search",
+            "trigger_cues": [
+              "uses midpoint"
+            ],
+            "diagnostic_goal": "Test sorted-half identification.",
+            "relevant_strategies": [
+              "PROVE"
+            ],
+            "expected_good_signals": [
+              "compares left and midpoint values"
+            ],
+            "weak_or_misconception_signals": [
+              "assumes whole interval is sorted"
+            ],
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "APPROACH_DEFENSE"
+            ],
+            "sample_phrasings": [
+              "How do you know which side is still ordered at this midpoint?"
+            ]
+          },
+          {
+            "id": "boundary_inclusion",
+            "target_concepts": [
+              "binary_search_boundary"
+            ],
+            "target_approach_id": "sorted_half_binary_search",
+            "trigger_cues": [
+              "compares target ranges"
+            ],
+            "diagnostic_goal": "Test inclusive endpoint reasoning.",
+            "relevant_strategies": [
+              "COUNTEREXAMPLE",
+              "PROVE"
+            ],
+            "expected_good_signals": [
+              "includes left or right boundaries correctly"
+            ],
+            "weak_or_misconception_signals": [
+              "drops a boundary target"
+            ],
+            "counterexample_id": "boundary_target",
+            "applicable_levels": [
+              "NEW_GRAD"
+            ],
+            "applicable_stages": [
+              "IMPLEMENTATION"
+            ],
+            "sample_phrasings": [
+              "Which comparisons must include the boundary values here?"
+            ]
+          },
+          {
+            "id": "duplicates_mutation",
+            "target_concepts": [
+              "binary_search_invariant"
+            ],
+            "target_approach_id": "sorted_half_binary_search",
+            "trigger_cues": [
+              "relies on distinctness"
+            ],
+            "diagnostic_goal": "Test the duplicate-value mutation.",
+            "relevant_strategies": [
+              "ASSUMPTION_CHALLENGE",
+              "CONSTRAINT_MUTATION"
+            ],
+            "expected_good_signals": [
+              "recognizes ambiguous equal endpoints and possible O(n) worst-case behavior"
+            ],
+            "weak_or_misconception_signals": [
+              "claims unchanged guaranteed logarithmic time"
+            ],
+            "applicable_levels": [
+              "EARLY_CAREER"
+            ],
+            "applicable_stages": [
+              "CONSTRAINT_MUTATION"
+            ],
+            "sample_phrasings": [
+              "What becomes ambiguous if equal values are allowed?"
+            ]
+          }
+        ],
+        "level_considerations": [
+          {
+            "level": "NEW_GRAD",
+            "guidance": "Focus on interval preservation and boundaries."
+          }
+        ],
+        "reference_reasoning": "Modified binary search is the primary prior, but independently correct pivot-based implementations remain valid."
+      },
+      "review_status": "REVIEWED"
+    },
+    "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
+    "recent_transcript": [],
+    "candidate_statement": "I move toward the target half, but I have not explained how I identify it after rotation.",
+    "code_snapshot": null,
+    "code_diff": null,
+    "execution_context": null,
+    "recent_claims": [],
+    "recent_delivered_prompt_intents": []
+  },
+  "expectations": {
+    "expected_action": "ASK",
+    "acceptable_strategies": [],
+    "forbidden_strategies": [
+      "ASSUMPTION_CHALLENGE"
+    ],
+    "acceptable_target_kinds": [
+      "CLAIM",
+      "EVENT"
+    ],
+    "forbidden_target_kinds": [],
+    "technical_rationale_rubric": {
+      "false_accusation_interpretation": null,
+      "restraint_ambiguity": null,
+      "diagnostic_value": "Clarification is needed before deciding whether the reasoning is sound.",
+      "technical_issue": "The candidate has not explained how it identifies the ordered half."
+    },
+    "must_not_reveal": [],
+    "expect_stale_suppression": false,
+    "expect_duplicate_suppression": false,
+    "label_sentinel": "EVAL_ONLY_ROTATED_SEARCH_DUPLICATE_ASSUMPTION_ASK"
+  },
+  "review": {
+    "description": "A missing input constraint should receive a neutral clarification.",
+    "manual_review_notes": null,
+    "tags": [
+      "ask"
+    ],
+    "requires_manual_technical_review": false,
+    "requires_candidate_specificity_review": false
+  }
+}
