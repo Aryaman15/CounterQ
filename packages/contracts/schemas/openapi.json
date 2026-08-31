@@ -1416,11 +1416,8 @@
             "title": "Problem Version Id"
           },
           "purpose": {
+            "const": "interview_demo",
             "default": "interview_demo",
-            "enum": [
-              "interview_demo",
-              "stage1_fixture"
-            ],
             "title": "Purpose",
             "type": "string"
           }

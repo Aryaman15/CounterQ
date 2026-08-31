@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config.settings import create_settings, get_settings
-from app.db.session import get_session
+from app.db.session import build_engine, get_session
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, InterviewSession
 from app.interviews.runtime import IdempotencyConflict
@@ -98,6 +99,17 @@ async def dev_session(db_session: AsyncSession) -> InterviewSession:
     return dev.interview_session
 
 
+async def create_committed_development_interview() -> UUID:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with sessions() as session, session.begin():
+            dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+            return dev.interview_session.id
+    finally:
+        await engine.dispose()
+
+
 async def test_development_bootstrap_factory_creates_real_persisted_interview(
     db_session: AsyncSession,
 ) -> None:
@@ -123,7 +135,10 @@ async def test_development_bootstrap_endpoint_is_blocked_outside_development(
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         result = await client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(
+                problem_version_id=uuid4(),
+                language="cpp",
+            ).model_dump(mode="json"),
         )
 
     assert result.status_code == 403
@@ -146,14 +161,21 @@ async def test_development_bootstrap_endpoint_returns_persisted_interview(
     app.dependency_overrides[get_session] = override_get_session
     transport = ASGITransport(app=app)
 
+    interview = await dev_session(db_session)
+    await db_session.commit()
+
     async with AsyncClient(transport=transport, base_url="http://testserver") as client:
         result = await client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(
+                interview_session_id=interview.id,
+            ).model_dump(mode="json"),
         )
 
     assert result.status_code == 200
     payload = result.json()
+    assert payload["restoration"] == "RESTORED"
+    assert payload["interview_session_id"] == str(interview.id)
     stored = await db_session.get(InterviewSession, payload["interview_session_id"])
     assert stored is not None
     assert stored.current_stage == "IMPLEMENTATION"
@@ -166,13 +188,17 @@ def test_control_websocket_accepts_client_hello_after_server_ready(tmp_path: Pat
     settings.app_env = "local"
     app = create_app()
     app.dependency_overrides[get_settings] = lambda: settings
+    interview_session_id = asyncio.run(create_committed_development_interview())
 
     with TestClient(app) as client:
         bootstrap = client.post(
             "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
+            json=RealtimeDevelopmentBootstrapRequest(
+                interview_session_id=interview_session_id,
+            ).model_dump(mode="json"),
         )
         assert bootstrap.status_code == 200
+        assert bootstrap.json()["restoration"] == "RESTORED"
         control_path = bootstrap.json()["control_websocket_path"]
 
         with client.websocket_connect(control_path) as websocket:

@@ -40,7 +40,7 @@ from app.ai_gateway.structured_output import (
     validate_strict_reasoning_schema,
 )
 from app.config.settings import Settings, create_settings, get_settings
-from app.db.session import build_engine, dispose_engine
+from app.db.session import build_engine, dispose_engine, get_session
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
 from app.interviews.models import InterviewerPrompt, SessionBudget
@@ -671,6 +671,7 @@ async def test_openai_error_diagnostics_are_sanitized(tmp_path: Path) -> None:
 
 async def test_development_smoke_endpoint_blocks_production_and_creates_no_interpretations(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     production_settings = settings(tmp_path)
     production_settings.app_env = "production"
@@ -700,28 +701,46 @@ async def test_development_smoke_endpoint_blocks_production_and_creates_no_inter
     )
     transport = ASGITransport(app=app)
 
-    async with AsyncClient(transport=transport, base_url="http://testserver") as client:
-        bootstrap = await client.post(
-            "/api/realtime/development-interview",
-            json=RealtimeDevelopmentBootstrapRequest(purpose="stage1_fixture").model_dump(mode="json"),
-        )
-        assert bootstrap.status_code == 200
-        interview_session_id = bootstrap.json()["interview_session_id"]
-        result = await client.post(
-            "/api/ai/development-reasoning-smoke",
-            json={"interview_session_id": interview_session_id},
-        )
-
-    assert result.status_code == 200
-    body = result.json()
-    assert body["status"] == "SUCCEEDED"
-    assert body["model"] == "gpt-5.6-terra"
-    assert "OPENAI_API_KEY" not in str(body)
-
-    engine = build_engine()
+    fixture_engine = build_engine()
+    fixture_sessions = async_sessionmaker(fixture_engine, expire_on_commit=False)
     try:
-        maker = async_sessionmaker(engine, expire_on_commit=False)
-        async with maker() as session:
+        async def override_session() -> AsyncIterator[AsyncSession]:
+            async with fixture_sessions() as fixture_session:
+                yield fixture_session
+
+        app.dependency_overrides[get_session] = override_session
+        monkeypatch.setattr(
+            "app.ai_gateway.routes.get_sessionmaker",
+            lambda: fixture_sessions,
+        )
+        async with fixture_sessions() as fixture_session, fixture_session.begin():
+            development = await create_development_interview(
+                fixture_session,
+                initial_stage="IMPLEMENTATION",
+            )
+            interview_session_id = development.interview_session.id
+
+        async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+            bootstrap = await client.post(
+                "/api/realtime/development-interview",
+                json=RealtimeDevelopmentBootstrapRequest(
+                    interview_session_id=interview_session_id,
+                ).model_dump(mode="json"),
+            )
+            assert bootstrap.status_code == 200
+            assert bootstrap.json()["restoration"] == "RESTORED"
+            result = await client.post(
+                "/api/ai/development-reasoning-smoke",
+                json={"interview_session_id": str(interview_session_id)},
+            )
+
+        assert result.status_code == 200
+        body = result.json()
+        assert body["status"] == "SUCCEEDED"
+        assert body["model"] == "gpt-5.6-terra"
+        assert "OPENAI_API_KEY" not in str(body)
+
+        async with fixture_sessions() as session:
             invocation_count = await session.scalar(
                 select(func.count())
                 .select_from(AIInvocation)
@@ -746,7 +765,7 @@ async def test_development_smoke_endpoint_blocks_production_and_creates_no_inter
                 select(func.count()).select_from(AIPolicyVersion)
             )
     finally:
-        await engine.dispose()
+        await fixture_engine.dispose()
 
     assert invocation_count == 1
     assert claim_count == 0

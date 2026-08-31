@@ -23,10 +23,7 @@ from app.examiner.coordinator import (
     observation_is_live_examiner_eligible,
 )
 from app.interviews.completion import DeadlineNotReached, InterviewCompletionService
-from app.interviews.dev_factory import (
-    create_curated_development_interview,
-    create_development_interview,
-)
+from app.interviews.dev_factory import create_curated_development_interview
 from app.interviews.floor import ConversationFloor
 from app.interviews.prompt_authorization import PromptAuthorizationError
 from app.interviews.restoration import (
@@ -195,21 +192,14 @@ async def create_realtime_development_interview(
     try:
         async with session.begin():
             if request.interview_session_id is None:
-                if request.purpose == "stage1_fixture":
-                    dev = await create_development_interview(
-                        session,
-                        initial_stage="IMPLEMENTATION",
-                        language=request.language or "cpp",
-                    )
-                else:
-                    assert request.problem_version_id is not None
-                    assert request.language is not None
-                    dev = await create_curated_development_interview(
-                        session,
-                        problem_version_id=request.problem_version_id,
-                        initial_stage="IMPLEMENTATION",
-                        language=request.language,
-                    )
+                assert request.problem_version_id is not None
+                assert request.language is not None
+                dev = await create_curated_development_interview(
+                    session,
+                    problem_version_id=request.problem_version_id,
+                    initial_stage="IMPLEMENTATION",
+                    language=request.language,
+                )
                 interview_session_id = dev.interview_session.id
             else:
                 interview_session_id = request.interview_session_id

@@ -34,7 +34,7 @@ from app.interviews.dev_factory import create_development_interview
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.main import create_app
 from app.observation.models import CodeSnapshot, InterviewEvent
-from app.problems.models import Problem
+from app.problems.models import InterviewPackVersion, Problem, ProblemVersion
 from app.realtime.control_protocol import RealtimeDevelopmentBootstrapRequest
 
 SOURCE_A = "class Solution { public: int lengthOfLongestSubstring(string s) { return 3; } };"
@@ -115,6 +115,48 @@ def test_bootstrap_contract_forbids_server_owned_and_unknown_fields() -> None:
     for field in forbidden:
         with pytest.raises(ValidationError, match=field):
             RealtimeDevelopmentBootstrapRequest.model_validate(base | {field: "owned"})
+
+
+def test_bootstrap_contract_rejects_synthetic_fixture_purpose() -> None:
+    with pytest.raises(ValidationError, match="stage1_fixture"):
+        RealtimeDevelopmentBootstrapRequest.model_validate({"purpose": "stage1_fixture"})
+
+
+async def test_synthetic_fixture_purpose_creates_no_durable_rows(
+    db_session: AsyncSession,
+    tmp_path: Path,
+) -> None:
+    model_types = (InterviewSession, Problem, ProblemVersion, InterviewPackVersion)
+
+    async def row_counts() -> tuple[int, ...]:
+        counts: list[int] = []
+        for model_type in model_types:
+            count = await db_session.scalar(select(func.count()).select_from(model_type))
+            counts.append(int(count or 0))
+        return tuple(counts)
+
+    before = await row_counts()
+    settings = create_settings(env_file=tmp_path / ".env")
+    settings.app_env = "local"
+    app = create_app()
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        yield db_session
+
+    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.post(
+            "/api/realtime/development-interview",
+            json={"purpose": "stage1_fixture"},
+        )
+
+    after = await row_counts()
+    assert response.status_code == 422
+    assert any(error["loc"][-1] == "purpose" for error in response.json()["detail"])
+    assert after == before
 
 
 @pytest.mark.parametrize(

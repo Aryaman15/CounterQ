@@ -16,7 +16,7 @@ CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
 class RealtimeDevelopmentBootstrapRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    purpose: Literal["interview_demo", "stage1_fixture"] = "interview_demo"
+    purpose: Literal["interview_demo"] = "interview_demo"
     interview_session_id: UUID | None = None
     client_instance_id: str | None = Field(default=None, min_length=1, max_length=128)
     last_acknowledged_server_sequence: int | None = Field(default=None, ge=0)
@@ -25,7 +25,7 @@ class RealtimeDevelopmentBootstrapRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_creation_or_restoration(self) -> RealtimeDevelopmentBootstrapRequest:
-        if self.interview_session_id is None and self.purpose == "interview_demo":
+        if self.interview_session_id is None:
             if self.problem_version_id is None or self.language is None:
                 raise ValueError(
                     "problem_version_id and language are required to create an interview"

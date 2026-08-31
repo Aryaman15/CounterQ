@@ -1221,6 +1221,7 @@ describe("Realtime voice foundation", () => {
     });
     await firstConnect;
     expect(JSON.parse(bootstrapBody)).toMatchObject({
+      purpose: "interview_demo",
       interview_session_id: "session-1",
       client_instance_id: "client-instance",
     });
@@ -1305,6 +1306,7 @@ describe("Realtime voice foundation", () => {
     await expect(restore).resolves.toMatchObject({ restoration: "RESTORED" });
     expect(fetchFn).toHaveBeenCalledTimes(1);
     expect(JSON.parse(restoreRequestBody)).toMatchObject({
+      purpose: "interview_demo",
       interview_session_id: "session-1",
     });
   });

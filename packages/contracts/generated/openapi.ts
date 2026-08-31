@@ -607,9 +607,9 @@ export interface components {
             /**
              * Purpose
              * @default interview_demo
-             * @enum {string}
+             * @constant
              */
-            purpose: "interview_demo" | "stage1_fixture";
+            purpose: "interview_demo";
         };
         /** RealtimeDevelopmentBootstrapResponse */
         RealtimeDevelopmentBootstrapResponse: {
