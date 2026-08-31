@@ -83,4 +83,86 @@ describe("ExecutionPanel", () => {
     expect(screen.getByLabelText("Compiler diagnostics")).toHaveTextContent("candidate.cpp: error");
     expect(screen.getByText("Output truncated.")).toBeInTheDocument();
   });
+
+  it.each([
+    ["int", 42],
+    ["bool", true],
+    ["string", "quoted \"value\""],
+    ["int[]", [1, -2, 3]],
+    ["string[]", ["a", "b"]],
+    ["int[][]", [[1, 2], [], [3]]],
+    ["string[][]", [["a"], [], ["b", "c"]]],
+  ])("renders a custom %s result as JSON-safe execution truth", (_semanticType, value) => {
+    render(
+      <ExecutionPanel
+        expanded
+        hasAttemptedRun
+        onRun={vi.fn()}
+        onToggle={vi.fn()}
+        result={{
+          runKind: "CUSTOM",
+          status: "SUCCEEDED",
+          stdout: "",
+          stderr: "",
+          compilerOutput: "",
+          timedOut: false,
+          outputTruncated: false,
+          cases: [
+            {
+              identifier: "custom-1",
+              inputJson: { first: [1, 2], second: "value" },
+              expectedOutput: null,
+              actualOutput: JSON.stringify(value),
+              actualOutputValue: value,
+              comparisonKind: "NONE",
+              status: "EXECUTED",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Latest custom execution result.")).toBeInTheDocument();
+    expect(screen.getByText("Executed")).toBeInTheDocument();
+    expect(screen.getByText(`Input ${JSON.stringify({ first: [1, 2], second: "value" })}`)).toBeInTheDocument();
+    expect(screen.getByText(`Output ${JSON.stringify(value)}`)).toBeInTheDocument();
+    expect(screen.queryByText("Passed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Expected/)).not.toBeInTheDocument();
+  });
+
+  it("does not turn an unvalidated custom output into a correctness verdict", () => {
+    render(
+      <ExecutionPanel
+        expanded
+        hasAttemptedRun
+        onRun={vi.fn()}
+        onToggle={vi.fn()}
+        result={{
+          runKind: "CUSTOM",
+          status: "SUCCEEDED",
+          stdout: "",
+          stderr: "",
+          compilerOutput: "",
+          timedOut: false,
+          outputTruncated: false,
+          cases: [
+            {
+              identifier: "custom-1",
+              inputJson: { value: 1 },
+              expectedOutput: null,
+              actualOutput: "true",
+              actualOutputValue: true,
+              comparisonKind: "NONE",
+              status: "FAILED",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Execution failed")).toBeInTheDocument();
+    expect(screen.queryByText("Passed")).not.toBeInTheDocument();
+    expect(screen.queryByText("Failed")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Expected/)).not.toBeInTheDocument();
+  });
 });

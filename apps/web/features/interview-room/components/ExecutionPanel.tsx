@@ -16,6 +16,7 @@ export type ExecutionViewResult = {
     inputJson: Record<string, unknown>;
     expectedOutput: string | null;
     actualOutput: string | null;
+    expectedOutputValue?: unknown;
     actualOutputValue: unknown;
     comparisonKind: "EXPECTED" | "NONE";
     status: string;
@@ -72,7 +73,7 @@ export function ExecutionPanel({
       <div className="execution-bar">
         <div>
           <h2 id="execution-title">Execution</h2>
-          <p>{running ? "Running exact canonical source..." : hasAttemptedRun ? "Latest visible execution result." : "Collapsed until needed."}</p>
+          <p>{executionSummary({ running, hasAttemptedRun, result })}</p>
         </div>
         <div className="execution-actions">
           <button type="button" className="run-button" onClick={onRun} disabled={disabled || running}>
@@ -101,12 +102,14 @@ export function ExecutionPanel({
               {result.cases.map((testCase) => (
                 <div className="execution-case" key={testCase.identifier}>
                   <span>{result.runKind === "CUSTOM" ? "Custom test" : testCase.identifier.replace("visible-", "Visible case ")}</span>
-                  <span>{testCase.comparisonKind === "NONE" && testCase.status === "EXECUTED" ? "Executed" : testCase.status === "PASSED" ? "Passed" : "Failed"}</span>
+                  <span>{caseStatusLabel(testCase.comparisonKind, testCase.status)}</span>
                   <code>Input {JSON.stringify(testCase.inputJson)}</code>
                   {testCase.comparisonKind === "NONE" ? (
-                    <code>Output {JSON.stringify(testCase.actualOutputValue ?? testCase.actualOutput)}</code>
+                    <code>Output {formatJsonValue(testCase.actualOutputValue, testCase.actualOutput)}</code>
                   ) : (
-                    <code>Expected {testCase.expectedOutput ?? "-"} / Actual {testCase.actualOutput ?? "-"}</code>
+                    <code>
+                      Expected {formatJsonValue(testCase.expectedOutputValue, testCase.expectedOutput)} / Actual {formatJsonValue(testCase.actualOutputValue, testCase.actualOutput)}
+                    </code>
                   )}
                 </div>
               ))}
@@ -150,4 +153,37 @@ function executionStatusLabel(result: ExecutionViewResult): string {
   if (result.status === "OUTPUT_LIMIT_EXCEEDED") return "Output limit reached";
   if (result.status === "PROVIDER_ERROR") return "Execution unavailable";
   return "Completed";
+}
+
+function executionSummary({
+  running,
+  hasAttemptedRun,
+  result,
+}: {
+  running: boolean;
+  hasAttemptedRun: boolean;
+  result: ExecutionViewResult | null;
+}): string {
+  if (running) return "Running exact canonical source...";
+  if (result?.runKind === "CUSTOM") return "Latest custom execution result.";
+  if (result?.runKind === "VISIBLE") return "Latest visible execution result.";
+  return hasAttemptedRun ? "No execution result." : "Collapsed until needed.";
+}
+
+function caseStatusLabel(comparisonKind: "EXPECTED" | "NONE", status: string): string {
+  if (comparisonKind === "NONE") {
+    if (status === "EXECUTED") return "Executed";
+    if (status === "NOT_RUN") return "Not run";
+    return "Execution failed";
+  }
+  if (status === "PASSED") return "Passed";
+  if (status === "NOT_RUN") return "Not run";
+  return "Failed";
+}
+
+function formatJsonValue(value: unknown, encodedFallback: string | null): string {
+  if (value !== undefined && value !== null) {
+    return JSON.stringify(value);
+  }
+  return encodedFallback ?? "-";
 }

@@ -271,7 +271,7 @@ export function InterviewRoom({
           }),
         },
       );
-      if (!response.ok) throw new Error("Code execution is temporarily unavailable.");
+      if (!response.ok) throw new Error(await executionErrorMessage(response));
       const result = await response.json() as DevelopmentRunResponse;
       setExecutionResult({
         runKind: result.run_kind,
@@ -286,6 +286,7 @@ export function InterviewRoom({
           inputJson: testCase.input_json,
           expectedOutput: testCase.expected_output,
           actualOutput: testCase.actual_output,
+          expectedOutputValue: testCase.expected_output_value,
           actualOutputValue: testCase.actual_output_value,
           comparisonKind: testCase.comparison_kind,
           status: testCase.status,
@@ -516,6 +517,35 @@ function functionSignatureFor(language: "cpp" | "python" | "java"): string {
   if (language === "python") return "def lengthOfLongestSubstring(self, s: str) -> int";
   if (language === "java") return "int lengthOfLongestSubstring(String s)";
   return "int lengthOfLongestSubstring(string s)";
+}
+
+async function executionErrorMessage(response: Response): Promise<string> {
+  if (response.status !== 422) {
+    return "Code execution is temporarily unavailable.";
+  }
+  try {
+    const body = await response.json() as {
+      detail?: string | { message?: string };
+      message?: string;
+    };
+    if (typeof body.detail === "string" && body.detail.trim()) {
+      return body.detail;
+    }
+    if (
+      body.detail &&
+      typeof body.detail === "object" &&
+      typeof body.detail.message === "string" &&
+      body.detail.message.trim()
+    ) {
+      return body.detail.message;
+    }
+    if (typeof body.message === "string" && body.message.trim()) {
+      return body.message;
+    }
+  } catch {
+    // A malformed validation response is not candidate-safe to display.
+  }
+  return "The custom test arguments are invalid.";
 }
 
 export function codePersistenceState(

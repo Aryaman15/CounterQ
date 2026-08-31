@@ -5,6 +5,11 @@ import { ExecutionPanel } from "@/features/interview-room/components/ExecutionPa
 import { InterviewRoom } from "@/features/interview-room/components/InterviewRoom";
 import { InterviewSetup } from "@/features/interview-room/components/InterviewSetup";
 import { demoInterviewFixture } from "@/features/interview-room/fixtures/demoInterview";
+import {
+  readStoredEditorCode,
+  resolveDevelopmentEditorSource,
+  writeStoredEditorCode,
+} from "@/features/interview-room/hooks/localPersistence";
 import type { RealtimeVoiceControls } from "@/features/interview-room/realtime/useRealtimeVoice";
 import type { DevelopmentBootstrapResponse } from "@/features/interview-room/realtime/RealtimeControlClient";
 
@@ -208,6 +213,8 @@ describe("curated interview journey", () => {
       custom_arguments: { nums: [2, 7], target: 9 },
     });
     expect(await screen.findByText("Executed")).toBeInTheDocument();
+    expect(screen.getByText("Latest custom execution result.")).toBeInTheDocument();
+    expect(screen.queryByText("Latest visible execution result.")).not.toBeInTheDocument();
     expect(screen.getByText(/Output \[0,1\]/)).toBeInTheDocument();
     expect(screen.queryByText("Passed")).not.toBeInTheDocument();
     expect(screen.queryByText(/Expected/)).not.toBeInTheDocument();
@@ -225,5 +232,59 @@ describe("curated interview journey", () => {
 
     rerender(<ExecutionPanel expanded hasAttemptedRun={false} onRun={vi.fn()} onToggle={vi.fn()} customTestSupported={false} />);
     expect(screen.queryByLabelText("Custom test arguments")).not.toBeInTheDocument();
+  });
+
+  it("surfaces safe custom validation detail and keeps infrastructure failures generic", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 422,
+        json: async () => ({ detail: "missing arguments: target" }),
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ detail: "SQL connection refused at internal-host" }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <InterviewRoom
+        fixture={demoInterviewFixture}
+        allowFixturePreview={false}
+        realtimeVoiceOverride={controls()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand execution area" }));
+    fireEvent.change(screen.getByLabelText("Custom test arguments"), {
+      target: { value: '{"nums":[2,7]}' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Run custom test" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("missing arguments: target");
+
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Code execution is temporarily unavailable.",
+    );
+    expect(screen.queryByText(/SQL connection refused/i)).not.toBeInTheDocument();
+  });
+
+  it("never hydrates one session's pending source into another session", () => {
+    writeStoredEditorCode(window.localStorage, "problem A pending source", {
+      language: "python",
+      interviewSessionId: "problem-a-session",
+    });
+
+    const problemBLocalSource = readStoredEditorCode(window.localStorage, "", {
+      language: "python",
+      interviewSessionId: "problem-b-session",
+    });
+    expect(
+      resolveDevelopmentEditorSource({
+        canonicalSourceCode: null,
+        localSourceCode: problemBLocalSource,
+        starterCode: "problem B exact starter",
+      }),
+    ).toBe("problem B exact starter");
   });
 });

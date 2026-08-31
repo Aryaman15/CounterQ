@@ -1311,6 +1311,9 @@ pnpm run eval:stage3c:packs-b
 Evaluate the Stage 3C curated-session binding gate:
 pnpm run eval:stage3c:session
 
+Evaluate the final deterministic Stage 3C curated-journey acceptance gate:
+pnpm run eval:stage3c:acceptance
+
 Evaluate the Stage 3C full-catalog sandbox gate:
 pnpm run eval:stage3c:sandbox
 
