@@ -428,12 +428,13 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
             ExaminerAnalysisResult.model_validate(invalid_non_claim_target)
 
 
-def test_live_examiner_policy_v6_guides_ranking_strategies_depth_and_verification() -> None:
+def test_live_examiner_policy_v7_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v6"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v6"
+    assert descriptor.version == "v7"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v7"
+    assert descriptor.configuration["context_projection_version"] == "v2"
     assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid absolute complexity guarantee" in LIVE_EXAMINER_INSTRUCTIONS

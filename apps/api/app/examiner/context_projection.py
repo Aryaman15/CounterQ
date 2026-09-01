@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import cast
 
 LIVE_EXAMINER_CONTEXT_PROJECTION_KEY = "live_examiner_context"
-LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION = "v1"
+LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION = "v2"
 
 _APPROACH_FIELDS = (
     "approach_id",
@@ -18,6 +18,44 @@ _APPROACH_FIELDS = (
     "common_implementation_variants",
     "common_failure_modes",
 )
+_APPROACH_IDENTITY_FIELDS = (
+    "approach_id",
+    "summary",
+    "concept_keys",
+    "applicability",
+    "assumptions",
+)
+STAGE_APPROACH_FIELDS: dict[str, tuple[str, ...]] = {
+    "INTRODUCTION": _APPROACH_IDENTITY_FIELDS,
+    "PROBLEM_UNDERSTANDING": _APPROACH_IDENTITY_FIELDS,
+    "APPROACH_DISCOVERY": _APPROACH_IDENTITY_FIELDS,
+    "APPROACH_DEFENSE": _APPROACH_FIELDS,
+    "IMPLEMENTATION": (
+        *_APPROACH_IDENTITY_FIELDS,
+        "key_invariants",
+        "common_implementation_variants",
+        "common_failure_modes",
+    ),
+    "TESTING_DEBUGGING": (
+        *_APPROACH_IDENTITY_FIELDS,
+        "key_invariants",
+        "common_implementation_variants",
+        "common_failure_modes",
+    ),
+    "COMPLEXITY_EDGE_CASES": (
+        *_APPROACH_IDENTITY_FIELDS,
+        "time_complexity",
+        "space_complexity",
+        "tradeoffs",
+    ),
+    "CONSTRAINT_MUTATION": (
+        *_APPROACH_IDENTITY_FIELDS,
+        "key_invariants",
+        "tradeoffs",
+    ),
+    "FINAL_DEFENSE": _APPROACH_FIELDS,
+    "WRAP_UP": _APPROACH_IDENTITY_FIELDS,
+}
 _DIAGNOSTIC_FIELDS: dict[str, tuple[str, ...]] = {
     "invariants": (
         "id",
@@ -69,6 +107,63 @@ _DIAGNOSTIC_FIELDS: dict[str, tuple[str, ...]] = {
         "approach_id",
         "relevant_strategies",
     ),
+}
+STAGE_DIAGNOSTIC_FAMILIES: dict[str, tuple[str, ...]] = {
+    "INTRODUCTION": (),
+    "PROBLEM_UNDERSTANDING": (
+        "common_misconceptions",
+        "probe_opportunities",
+    ),
+    "APPROACH_DISCOVERY": (
+        "invariants",
+        "common_misconceptions",
+        "probe_opportunities",
+    ),
+    "APPROACH_DEFENSE": (
+        "invariants",
+        "complexity_expectations",
+        "common_misconceptions",
+        "probe_opportunities",
+    ),
+    "IMPLEMENTATION": (
+        "invariants",
+        "common_misconceptions",
+        "failure_modes",
+        "edge_cases",
+        "counterexamples",
+        "probe_opportunities",
+    ),
+    "TESTING_DEBUGGING": (
+        "invariants",
+        "common_misconceptions",
+        "failure_modes",
+        "edge_cases",
+        "counterexamples",
+        "probe_opportunities",
+    ),
+    "COMPLEXITY_EDGE_CASES": (
+        "complexity_expectations",
+        "common_misconceptions",
+        "edge_cases",
+        "counterexamples",
+        "probe_opportunities",
+    ),
+    "CONSTRAINT_MUTATION": (
+        "invariants",
+        "common_misconceptions",
+        "constraint_mutations",
+        "probe_opportunities",
+    ),
+    "FINAL_DEFENSE": (
+        "invariants",
+        "complexity_expectations",
+        "common_misconceptions",
+        "failure_modes",
+        "edge_cases",
+        "counterexamples",
+        "probe_opportunities",
+    ),
+    "WRAP_UP": (),
 }
 _FOLLOWUP_FIELDS = (
     "id",
@@ -138,13 +233,19 @@ def project_interview_pack(
     diagnostic: dict[str, object] = {}
     if "version" in pack:
         diagnostic["version"] = pack["version"]
+    approach_fields = STAGE_APPROACH_FIELDS.get(interview_stage, _APPROACH_FIELDS)
     for key in ("expected_approaches", "alternative_approaches"):
-        items = _project_items(pack.get(key), _APPROACH_FIELDS)
+        items = _project_items(pack.get(key), approach_fields)
         if items:
             diagnostic[key] = items
     if isinstance(pack.get("concepts"), list):
         diagnostic["concepts"] = pack["concepts"]
-    for key, fields in _DIAGNOSTIC_FIELDS.items():
+    diagnostic_families = STAGE_DIAGNOSTIC_FAMILIES.get(
+        interview_stage,
+        tuple(_DIAGNOSTIC_FIELDS),
+    )
+    for key in diagnostic_families:
+        fields = _DIAGNOSTIC_FIELDS[key]
         items = _project_items(pack.get(key), fields)
         if items:
             diagnostic[key] = items

@@ -404,7 +404,8 @@
   "expectations": {
     "expected_action": "PROBE",
     "acceptable_strategies": [
-      "WHY"
+      "WHY",
+      "PROVE"
     ],
     "forbidden_strategies": [],
     "acceptable_target_kinds": [

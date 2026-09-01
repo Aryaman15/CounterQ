@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -23,6 +23,7 @@ from app.examiner.analysis_schema import ExaminerAnalysisResult
 from app.examiner.context import (
     CODE_EDIT_OBSERVATION_SEMANTICS,
     SOURCE_FRESHNESS_SEMANTICS,
+    serialize_examiner_context,
 )
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 from app.examiner.models import CandidateClaim, ExaminerDecision
@@ -82,6 +83,15 @@ def output(action: str, strategy: str | None, target: str) -> ExaminerAnalysisRe
 
 def fixture(name: str) -> EvaluationFixture:
     return next(item for item in load_fixtures() if item.fixture_id == name)
+
+
+def diagnostic_pack(name: str, *, state: str | None = None) -> dict[str, Any]:
+    evaluation_input = fixture(name).input
+    if state is not None:
+        evaluation_input = evaluation_input.model_copy(update={"state": state})
+    context = evaluation_context_json(evaluation_input)
+    pack_context = cast(dict[str, object], context["interview_pack"])
+    return cast(dict[str, Any], pack_context["diagnostic_pack"])
 
 
 def test_transcript_and_code_context_match_production_nested_shapes() -> None:
@@ -271,6 +281,79 @@ def test_compact_projection_excludes_heavy_reference_and_starter_payloads() -> N
     }
 
 
+def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_families() -> None:
+    implementation = diagnostic_pack("two-sum-sort-index-choice")
+    assert {"expected_approaches", "alternative_approaches", "invariants"} <= set(
+        implementation
+    )
+    assert {"failure_modes", "edge_cases", "counterexamples"} <= set(implementation)
+    assert "complexity_expectations" not in implementation
+    assert "constraint_mutations" not in implementation
+    implementation_alternate = implementation["alternative_approaches"][0]
+    assert {"summary", "applicability", "assumptions", "key_invariants"} <= set(
+        implementation_alternate
+    )
+    assert "common_failure_modes" in implementation_alternate
+    assert "tradeoffs" not in implementation_alternate
+    assert "time_complexity" not in implementation_alternate
+
+    defense = diagnostic_pack("two-sum-sort-tradeoff")
+    assert {"expected_approaches", "alternative_approaches", "invariants"} <= set(defense)
+    assert "complexity_expectations" in defense
+    assert "failure_modes" not in defense
+    assert "edge_cases" not in defense
+    assert "constraint_mutations" not in defense
+    assert [item["id"] for item in defense["relevant_followups"]] == [
+        "sort_index_tradeoff"
+    ]
+
+    complexity = diagnostic_pack("two-sum-hash-assumption")
+    assert "complexity_expectations" in complexity
+    assert "edge_cases" in complexity
+    assert "invariants" not in complexity
+    assert "failure_modes" not in complexity
+    assert "constraint_mutations" not in complexity
+    assert "time_complexity" in complexity["alternative_approaches"][0]
+    assert "common_implementation_variants" not in complexity[
+        "alternative_approaches"
+    ][0]
+
+    mutation = diagnostic_pack(
+        "minimum-subarray-negative-mutation",
+        state="CONSTRAINT_MUTATION",
+    )
+    assert "constraint_mutations" in mutation
+    assert "complexity_expectations" not in mutation
+    assert "failure_modes" not in mutation
+
+
+def test_evaluation_and_production_use_the_exact_same_projection() -> None:
+    item = fixture("two-sum-sort-tradeoff").input
+    evaluation = evaluation_context_json(item)
+    production = serialize_examiner_context(
+        trusted_policy=cast(dict[str, object], evaluation["trusted_policy"]),
+        interview=cast(dict[str, object], evaluation["interview"]),
+        problem=item.problem_context.model_dump(mode="json"),
+        interview_pack={
+            "interview_pack_version_id": "evaluation-pack",
+            "schema_version": item.interview_pack.get("schema_version"),
+            "review_status": item.interview_pack.get("review_status"),
+            "pack": item.interview_pack,
+        },
+        source_observation=cast(dict[str, object], evaluation["source_observation"]),
+        source_freshness=cast(dict[str, object], evaluation["source_freshness"]),
+        recent_history=cast(list[dict[str, object]], evaluation["recent_history"]),
+        diagnostic_context=cast(dict[str, object], evaluation["diagnostic_context"]),
+    )
+    assert production == evaluation
+
+
+def test_v2_fixture_context_has_deterministic_size_headroom() -> None:
+    sizes = [len(model_input_json(item.input).encode("utf-8")) for item in load_fixtures()]
+    assert max(sizes) < 9_000
+    assert sum(sizes) / len(sizes) < 7_000
+
+
 def test_input_cannot_receive_expectations_or_sentinel() -> None:
     for item in load_fixtures():
         serialized = model_input_json(item.input)
@@ -321,9 +404,14 @@ def test_only_founder_approved_fixtures_allow_alternative_actions() -> None:
 
 
 def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
+    satisfied = fixture("two-sum-correct-wait")
+    assert satisfied.expectations.expected_action == "WAIT"
+    assert "before storing" in (satisfied.input.candidate_statement or "")
+    assert "cannot reuse" in (satisfied.input.candidate_statement or "")
+
     maximum = fixture("maximum-subarray-shallow-why")
     assert "max(nums[i], current + nums[i])" in (maximum.input.candidate_statement or "")
-    assert maximum.expectations.acceptable_strategies == ["WHY"]
+    assert maximum.expectations.acceptable_strategies == ["WHY", "PROVE"]
 
     longest = fixture("longest-substring-invariant-prove")
     assert "FAILURE_MODE" in longest.expectations.acceptable_strategies
@@ -332,9 +420,14 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     sort_indices = fixture("two-sum-sort-index-choice")
     assert "while (left < right)" in (sort_indices.input.code_snapshot or "")
     assert "return {left, right}" in (sort_indices.input.code_snapshot or "")
+    assert sort_indices.expectations.acceptable_strategies == [
+        "IMPLEMENTATION_CHOICE",
+        "FAILURE_MODE",
+    ]
 
     mutation = fixture("minimum-subarray-negative-mutation")
     assert "positive-only base problem" in (mutation.input.candidate_statement or "")
+    assert "negative" not in (mutation.input.candidate_statement or "").casefold()
     assert mutation.expectations.acceptable_strategies == ["CONSTRAINT_MUTATION"]
 
     course = fixture("course-schedule-cycle-failure")
@@ -343,12 +436,69 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     assert course.expectations.acceptable_strategies == ["FAILURE_MODE"]
 
     islands = fixture("number-islands-transfer")
-    assert "That completes my base approach" in (islands.input.candidate_statement or "")
+    assert islands.input.candidate_level == "EARLY_CAREER"
+    assert "entire orthogonally connected component" in (
+        islands.input.candidate_statement or ""
+    )
+    assert "can start another count" in (islands.input.candidate_statement or "")
     assert islands.expectations.acceptable_strategies == ["TRANSFER"]
 
     tradeoff = fixture("two-sum-sort-tradeoff")
     assert "keeps its original index" in (tradeoff.input.candidate_statement or "")
+    assert "only a larger value can raise it" in (tradeoff.input.candidate_statement or "")
+    assert "O(n log n)" in (tradeoff.input.candidate_statement or "")
     assert tradeoff.expectations.acceptable_strategies == ["TRADE_OFF", "ALTERNATIVE"]
+
+    palindrome = fixture("valid-palindrome-alternative")
+    assert "exactly the alphanumeric characters" in (
+        palindrome.input.candidate_statement or ""
+    )
+    assert "O(n) auxiliary space" in (palindrome.input.candidate_statement or "")
+
+    merge = fixture("merge-intervals-touching-edge")
+    assert merge.expectations.acceptable_strategies == ["EDGE_CASE", "FAILURE_MODE"]
+
+
+def test_only_founder_approved_strategy_alternatives_are_present() -> None:
+    alternatives = {
+        item.fixture_id: item.expectations.acceptable_strategies
+        for item in load_fixtures()
+        if len(item.expectations.acceptable_strategies) > 1
+    }
+    assert alternatives == {
+        "two-sum-hash-assumption": ["ASSUMPTION_CHALLENGE", "COMPLEXITY"],
+        "maximum-subarray-shallow-why": ["WHY", "PROVE"],
+        "longest-substring-invariant-prove": [
+            "PROVE",
+            "COUNTEREXAMPLE",
+            "FAILURE_MODE",
+        ],
+        "merge-intervals-touching-edge": ["EDGE_CASE", "FAILURE_MODE"],
+        "two-sum-sort-tradeoff": ["TRADE_OFF", "ALTERNATIVE"],
+        "valid-palindrome-alternative": ["ALTERNATIVE", "TRADE_OFF"],
+        "two-sum-sort-index-choice": ["IMPLEMENTATION_CHOICE", "FAILURE_MODE"],
+    }
+
+
+def test_v7_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
+    for name in (
+        "prior-context-neutral-ask",
+        "container-water-ask-objective",
+        "rotated-search-duplicate-assumption-ask",
+    ):
+        item = fixture(name)
+        assert item.input.source_observation_type == "CANDIDATE_TRANSCRIPT_FINALIZED"
+        assert "have not" in (item.input.candidate_statement or "")
+        assert item.expectations.expected_action == "ASK"
+
+    continuing = fixture("weak-candidate-restraint")
+    assert "still trying" in (continuing.input.candidate_statement or "")
+    assert continuing.expectations.expected_action == "WAIT"
+
+    correcting = fixture("longest-substring-self-correction")
+    assert correcting.input.candidate_statement is not None
+    assert correcting.input.candidate_statement.startswith("Wait,")
+    assert correcting.expectations.expected_action == "WAIT"
 
 
 def test_negative_scorer_cases_and_candidate_facing_leakage() -> None:

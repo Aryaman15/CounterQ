@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "I build a lowercase alphanumeric copy, reverse it, and compare.",
+    "candidate_statement": "I build a sequence containing exactly the alphanumeric characters in lowercase. Equality with its reverse therefore matches the required case-insensitive palindrome definition. This takes O(n) time and O(n) auxiliary space.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

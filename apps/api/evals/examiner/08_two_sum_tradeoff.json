@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "I would sort value-index pairs so each value keeps its original index, then use two pointers.",
+    "candidate_statement": "I would sort value-index pairs so each value keeps its original index, then use two pointers. If the sum is too small, moving left rightward is safe because only a larger value can raise it; if the sum is too large, moving right leftward is safe because only a smaller value can lower it. Sorting takes O(n log n), the scan takes O(n), and the paired indices use O(n) auxiliary space.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

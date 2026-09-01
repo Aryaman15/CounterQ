@@ -480,7 +480,8 @@
   "expectations": {
     "expected_action": "PROBE",
     "acceptable_strategies": [
-      "IMPLEMENTATION_CHOICE"
+      "IMPLEMENTATION_CHOICE",
+      "FAILURE_MODE"
     ],
     "forbidden_strategies": [],
     "acceptable_target_kinds": [

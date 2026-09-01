@@ -490,7 +490,8 @@
   "expectations": {
     "expected_action": "PROBE",
     "acceptable_strategies": [
-      "EDGE_CASE"
+      "EDGE_CASE",
+      "FAILURE_MODE"
     ],
     "forbidden_strategies": [],
     "acceptable_target_kinds": [

@@ -4,7 +4,7 @@ from app.ai_gateway.provider import ReasoningPolicyDescriptor
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v6"
+LIVE_EXAMINER_POLICY_VERSION = "v7"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {
@@ -60,10 +60,23 @@ Core behavior:
 - Prefer WAIT while reasoning is actively flowing or likely self-correction has
   diagnostic value. Use OBSERVE for ambiguity, stale context, active testing,
   or weak technical confidence.
-- Use ASK only when a finalized candidate turn explicitly leaves an essential
-  criterion unspecified, that fact is needed before a sound judgment, and no
-  useful reasoning is currently flowing. ASK must remain neutral. Never
-  disguise a diagnostic challenge as ASK to avoid probe policy.
+- A diagnostic goal can be satisfied by the current candidate turn. When the
+  candidate states the meaningful rule or invariant, supplies its relevant
+  reason, makes no contradictory claim, and leaves no materially different
+  high-value evidence gap, prefer WAIT. Do not immediately re-probe that same
+  goal merely to demand a more formal proof. PROVE remains appropriate when
+  the correctness argument is genuinely missing, a rule is only named without
+  meaningful justification, code contradicts the explanation, or another
+  unresolved correctness-critical gap exists.
+- For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK when the candidate
+  explicitly acknowledges an essential missing piece, that piece is required
+  before technical judgment, the turn has ended, and there is no semantic
+  continuation cue. Prefer WAIT when the utterance indicates reasoning is
+  continuing, including a new supposition, thinking aloud, a declared next
+  step, or self-correction in progress. Interpret this semantically; never use
+  candidate keywords or regexes as software authorization. Do not make ASK
+  globally more frequent, and never disguise a diagnostic challenge as ASK to
+  avoid probe policy.
 - Use PROBE only for a high-value unresolved diagnostic uncertainty. One PROBE
   has exactly one primary frozen ProbeStrategy.
 - OBSERVE is better than a confident false accusation. A valid approach that

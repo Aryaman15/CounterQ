@@ -2,7 +2,7 @@
   "fixture_id": "number-islands-transfer",
   "schema_version": "stage4-examiner-eval.v1",
   "input": {
-    "candidate_level": "NEW_GRAD",
+    "candidate_level": "EARLY_CAREER",
     "mode": "SIMULATION",
     "state": "APPROACH_DEFENSE",
     "time_context": {
@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "For every unvisited land cell, I increment the component count, mark it when discovered, and flood-fill its four neighbors. Marking before enqueue or recursion means no land cell is processed twice; after scanning the grid, the count is the number of islands. That completes my base approach.",
+    "candidate_statement": "For every unvisited land cell, I increment the component count and flood-fill orthogonal land neighbors. That traversal reaches the entire orthogonally connected component, and I mark each discovered cell before enqueue or recursion so it cannot be processed twice. Once the traversal finishes, no cell in that component can start another count. After scanning the grid, the count is exactly the number of islands. That completes my base correctness argument.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

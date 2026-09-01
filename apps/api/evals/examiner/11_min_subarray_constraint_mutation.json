@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "For the positive-only base problem, expanding right can only increase the sum and shrinking left can only decrease it, so I shrink left whenever the sum reaches target to minimize the window. Now suppose the array may include negative numbers.",
+    "candidate_statement": "For the positive-only base problem, expanding right can only increase the sum and shrinking left can only decrease it, so I shrink left whenever the sum reaches target to minimize the window. That establishes why the sliding window is valid for the stated positive-only constraints.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

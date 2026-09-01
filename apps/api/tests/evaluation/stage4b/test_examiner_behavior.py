@@ -694,7 +694,7 @@ async def test_fast_medium_and_single_strong_escalation_preserve_provenance(
         medium_input = json.loads(medium.calls[0][0].input_content)
         assert medium_input["context_projection"] == {
             "key": "live_examiner_context",
-            "version": "v1",
+            "version": "v2",
         }
         assert "reference_solutions" not in json.dumps(medium_input)
         assert "starter_code" not in json.dumps(medium_input)
@@ -861,17 +861,26 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
 
 
 def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
-    assert LIVE_EXAMINER_POLICY_VERSION == "v6"
+    assert LIVE_EXAMINER_POLICY_VERSION == "v7"
     assert len(PROBE_STRATEGY_POLICY) == 12
     assert set(CANDIDATE_LEVEL_DEPTH_POLICY) == {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
     assert "evidence" not in Base.metadata.tables
     assert "breakpoints" not in Base.metadata.tables
 
 
-def test_v6_policy_calibrates_ask_wait_stable_code_and_strategy_boundaries() -> None:
-    assert "a finalized candidate turn explicitly leaves an essential" in (
+def test_v7_policy_calibrates_satisfied_goals_ask_wait_and_strategy_boundaries() -> None:
+    assert "A diagnostic goal can be satisfied by the current candidate turn" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
+    assert "Do not immediately re-probe that same" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "PROVE remains appropriate when" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
+    assert "there is no semantic" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "continuation cue" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "never use" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "keywords or regexes as software authorization" in LIVE_EXAMINER_INSTRUCTIONS
     assert "reasoning is actively flowing" in LIVE_EXAMINER_INSTRUCTIONS
     assert "incomplete surrounding implementation does not by itself require OBSERVE" in (
         LIVE_EXAMINER_INSTRUCTIONS
