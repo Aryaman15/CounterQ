@@ -37,7 +37,12 @@ InterviewStage = Literal[
 ]
 SourceObservationType = Literal["CANDIDATE_TRANSCRIPT_FINALIZED", "CODE_MEANINGFULLY_CHANGED"]
 EvaluationActualAction = Literal["WAIT", "OBSERVE", "ASK", "PROBE", "SUPPRESSED"]
-EvaluationCallStatus = Literal["COMPLETED", "TIMED_OUT", "COMPLETED_AFTER_DEADLINE"]
+EvaluationCallStatus = Literal[
+    "COMPLETED",
+    "TIMED_OUT",
+    "COMPLETED_AFTER_DEADLINE",
+    "INVALID_OUTPUT",
+]
 EvaluationDeadlineOutcome = Literal[
     "NONE",
     "INITIAL_TIMEOUT",
@@ -193,7 +198,12 @@ class EvaluationResult(BaseModel):
     preliminary_strategy: ExaminerProbeStrategy | None = None
     final_action: ExaminerAction | None
     final_strategy: ExaminerProbeStrategy | None
-    final_status: Literal["COMPLETED", "SUPPRESSED", "DEADLINE_EXPIRED"] = "COMPLETED"
+    final_status: Literal[
+        "COMPLETED",
+        "SUPPRESSED",
+        "DEADLINE_EXPIRED",
+        "INVALID_OUTPUT",
+    ] = "COMPLETED"
     deadline_outcome: EvaluationDeadlineOutcome = "NONE"
     preferred_action_correct: bool
     action_correct: bool

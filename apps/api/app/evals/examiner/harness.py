@@ -315,6 +315,77 @@ def score_non_delivery(
     )
 
 
+def score_invalid_output(
+    fixture: EvaluationFixture,
+    *,
+    metadata: dict[str, Any],
+) -> EvaluationResult:
+    """Record invalid model output as an operational fixture result."""
+    expected = fixture.expectations
+    return EvaluationResult(
+        fixture_id=fixture.fixture_id,
+        expected_action=expected.expected_action,
+        acceptable_alternative_actions=list(expected.acceptable_alternative_actions),
+        actual_action="SUPPRESSED",
+        expected_strategies=list(expected.acceptable_strategies),
+        actual_strategy=None,
+        actual_target_kind="NONE",
+        initial_reasoning_tier=metadata.get("initial_reasoning_tier"),
+        strong_escalation_occurred=metadata.get("strong_escalation_occurred", False),
+        verification_reason=metadata.get("verification_reason", "NONE"),
+        preliminary_action=metadata.get("preliminary_action"),
+        preliminary_strategy=metadata.get("preliminary_strategy"),
+        final_action=None,
+        final_strategy=None,
+        final_status="INVALID_OUTPUT",
+        deadline_outcome="NONE",
+        preferred_action_correct=False,
+        action_correct=False,
+        strategy_acceptable=False if expected.expected_action == "PROBE" else None,
+        forbidden_strategy_used=False,
+        target_kind_acceptable=(
+            "NONE" in expected.acceptable_target_kinds
+            if expected.acceptable_target_kinds
+            else None
+        ),
+        forbidden_target_kind_used="NONE" in expected.forbidden_target_kinds,
+        unnecessary_probe=False,
+        obvious_answer_leakage=False,
+        stale_behavior_violation=False,
+        duplicate_probe_violation=False,
+        strategy_applicable=expected.expected_action == "PROBE",
+        answer_leakage_applicable=bool(expected.must_not_reveal),
+        stale_suppression_applicable=expected.expect_stale_suppression,
+        duplicate_suppression_applicable=expected.expect_duplicate_suppression,
+        manual_technical_review_required=fixture.review.requires_manual_technical_review,
+        candidate_specificity_review_required=(
+            fixture.review.requires_candidate_specificity_review
+        ),
+        technical_rationale=(
+            "The reasoning provider returned invalid structured output, so no "
+            "candidate-visible recommendation was scored or delivered."
+        ),
+        candidate_facing_prompt="",
+        usefulness_deadline_seconds=metadata.get("usefulness_deadline_seconds"),
+        elapsed_reasoning_ms=metadata.get("elapsed_reasoning_ms"),
+        remaining_usefulness_ms_at_completion=metadata.get(
+            "remaining_usefulness_ms_at_completion"
+        ),
+        context_json_characters=metadata.get("context_json_characters"),
+        context_json_bytes=metadata.get("context_json_bytes"),
+        provider=metadata.get("provider"),
+        model=metadata.get("model"),
+        provider_model_version=metadata.get("provider_model_version"),
+        calls=metadata.get("calls", []),
+        total_latency_ms=metadata.get("total_latency_ms"),
+        input_tokens=metadata.get("input_tokens"),
+        cached_input_tokens=metadata.get("cached_input_tokens"),
+        output_tokens=metadata.get("output_tokens"),
+        estimated_cost=metadata.get("estimated_cost"),
+        currency=metadata.get("currency"),
+    )
+
+
 def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
     actions = Counter(result.actual_action for result in results)
     initial_tiers = Counter(result.initial_reasoning_tier for result in results)
@@ -349,6 +420,9 @@ def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
             lambda item: item.strategy_acceptable is not False and not item.forbidden_strategy_used,
         ),
         "unnecessary_probe_rate": metric(results, lambda item: item.unnecessary_probe),
+        "structured_output_invalid": metric(
+            results, lambda item: item.final_status == "INVALID_OUTPUT"
+        ),
         "answer_leakage": metric(leakage, lambda item: item.obvious_answer_leakage),
         "duplicate_probe": metric(duplicate_expected, lambda item: item.duplicate_probe_violation),
         "stale_decision_suppression": metric(

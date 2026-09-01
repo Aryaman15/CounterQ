@@ -545,6 +545,11 @@ def test_aggregate_denominators_are_applicable() -> None:
         for item in load_fixtures()
     ]
     aggregate = aggregate_results(results)
+    assert cast(dict[str, object], aggregate["structured_output_invalid"]) == {
+        "numerator": 0,
+        "denominator": 24,
+        "rate": 0.0,
+    }
     assert cast(dict[str, object], aggregate["strategy_appropriateness"])["denominator"] == 12
     assert cast(dict[str, object], aggregate["stale_decision_suppression"])["denominator"] == 2
     assert cast(dict[str, object], aggregate["duplicate_probe"])["denominator"] == 2

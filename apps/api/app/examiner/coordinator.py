@@ -16,10 +16,11 @@ from app.ai_gateway.gateway import (
     AIGateway,
     AIGatewayResult,
     ReasoningBudgetExceeded,
+    StructuredOutputValidationFailure,
     get_or_create_policy_version,
 )
 from app.ai_gateway.models import AIInvocation
-from app.ai_gateway.provider import ReasoningProvider
+from app.ai_gateway.provider import ReasoningProvider, ReasoningProviderError
 from app.config.settings import Settings
 from app.examiner.analysis_schema import (
     ExaminerAnalysisResult,
@@ -256,12 +257,19 @@ class LiveExaminerCoordinator:
             provider=self._provider,
         )
         tier = initial_reasoning_tier(context.context_json)
-        result = await self._reason(
-            gateway=gateway,
-            context=context,
-            deadline_at=deadline_at,
-            tier=tier,
-        )
+        try:
+            result = await self._reason(
+                gateway=gateway,
+                context=context,
+                deadline_at=deadline_at,
+                tier=tier,
+            )
+        except StructuredOutputValidationFailure:
+            return self._structured_output_error_result(context=context, tier=tier)
+        except ReasoningProviderError as exc:
+            if exc.category != "STRUCTURED_OUTPUT_INVALID":
+                raise
+            return self._structured_output_error_result(context=context, tier=tier)
         preliminary_invocation_id: UUID | None = None
         required_verification_reason = next_strong_verification_reason(tier, result.parsed)
         if required_verification_reason is not None:
@@ -295,6 +303,20 @@ class LiveExaminerCoordinator:
                     preliminary_ai_invocation_id=preliminary_invocation_id,
                     required_verification_reason=required_verification_reason,
                     preliminary_analysis=result.parsed,
+                )
+            except StructuredOutputValidationFailure:
+                return self._structured_output_error_result(
+                    context=context,
+                    tier="STRONG",
+                    preliminary_invocation_id=preliminary_invocation_id,
+                )
+            except ReasoningProviderError as exc:
+                if exc.category != "STRUCTURED_OUTPUT_INVALID":
+                    raise
+                return self._structured_output_error_result(
+                    context=context,
+                    tier="STRONG",
+                    preliminary_invocation_id=preliminary_invocation_id,
                 )
             except ReasoningBudgetExceeded:
                 return self._unpersisted_result(
@@ -438,6 +460,42 @@ class LiveExaminerCoordinator:
             claims=[],
             decision=None,
             message=message,
+            reasoning_tier=tier,
+            preliminary_ai_invocation_id=preliminary_invocation_id,
+        )
+
+    def _structured_output_error_result(
+        self,
+        *,
+        context: ExaminerContext,
+        tier: ExaminerReasoningTier,
+        preliminary_invocation_id: UUID | None = None,
+    ) -> LiveExaminerDebugResult:
+        return LiveExaminerDebugResult(
+            status="ERROR",
+            source_kind=context.observation.kind,
+            source_event_id=context.observation.source_event_id,
+            source_event_watermark=context.observation.source_event_watermark,
+            source_state_version=context.observation.interview_state_version,
+            code_snapshot_id=context.observation.code_snapshot_id
+            or context.observation.associated_code_snapshot_id,
+            code_snapshot_version=context.observation.code_snapshot_version
+            or context.observation.associated_code_snapshot_version,
+            ai_invocation_id=None,
+            provider=None,
+            model=None,
+            latency_ms=None,
+            input_tokens=None,
+            cached_input_tokens=None,
+            output_tokens=None,
+            estimated_cost=None,
+            currency=None,
+            claims=[],
+            decision=None,
+            message=(
+                "Live Examiner returned invalid structured output; no recommendation "
+                "was persisted."
+            ),
             reasoning_tier=tier,
             preliminary_ai_invocation_id=preliminary_invocation_id,
         )

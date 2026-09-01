@@ -20,7 +20,6 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_gateway.gateway import StructuredOutputValidationFailure
 from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
@@ -673,18 +672,14 @@ async def test_invalid_structured_output_is_isolated_and_following_analysis_can_
             sequence=1,
             text="unordered_map lookup is always guaranteed O(1).",
         )
-        invalid = code_probe_output()
-        invalid["decision"]["target_claim_index"] = 0
-        with pytest.raises(
-            StructuredOutputValidationFailure,
-            match="Reasoning provider output failed schema validation",
-        ):
-            await analyze(
-                maker,
-                development_interview.interview_session.id,
-                FakeReasoningProvider(invalid),
-                evaluation_settings(tmp_path),
-            )
+        invalid = speech_probe_output()
+        invalid["decision"]["action"] = "WAIT"
+        failed = await analyze(
+            maker,
+            development_interview.interview_session.id,
+            FakeReasoningProvider(invalid),
+            evaluation_settings(tmp_path),
+        )
         recovered = await analyze(
             maker,
             development_interview.interview_session.id,
@@ -707,6 +702,17 @@ async def test_invalid_structured_output_is_isolated_and_following_analysis_can_
                     AIInvocation.interview_session_id == development_interview.interview_session.id
                 )
             )
+            decisions = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(
+                    ExaminerDecision.interview_session_id
+                    == development_interview.interview_session.id
+                )
+            )
+        assert failed.status == "ERROR"
+        assert failed.claims == [] and failed.decision is None
         assert recovered.status == "PROPOSED"
         assert claims == 1
+        assert decisions == 1
         assert invocations == 2

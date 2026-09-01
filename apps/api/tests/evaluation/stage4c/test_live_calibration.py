@@ -6,12 +6,14 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 
+import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
     ReasoningEffort,
+    ReasoningProviderError,
     ReasoningRequest,
     ReasoningUsage,
 )
@@ -28,7 +30,7 @@ class FakeCalibrationProvider:
 
     def __init__(
         self,
-        outputs: list[dict[str, Any]],
+        outputs: list[dict[str, Any] | ReasoningProviderError],
         *,
         after_call: Callable[[int], None] | None = None,
     ) -> None:
@@ -49,8 +51,11 @@ class FakeCalibrationProvider:
         self.calls.append((request, model, reasoning_effort))
         if self.after_call is not None:
             self.after_call(call_number)
+        output = self.outputs[call_number - 1]
+        if isinstance(output, ReasoningProviderError):
+            raise output
         return ProviderReasoningResult(
-            output_data=self.outputs[call_number - 1],
+            output_data=output,
             provider=self.provider_name,
             model=model,
             provider_model_version=f"{model}-2026-09-01",
@@ -270,6 +275,110 @@ async def test_strong_escalation_scores_final_result_and_retains_preliminary_cal
             },
         },
     }
+
+
+async def test_initial_invalid_output_is_reported_and_batch_continues(
+    tmp_path: Path,
+) -> None:
+    invalid = _output("PROBE", strategy="WHY", target_kind="CLAIM")
+    invalid["decision"]["action"] = "WAIT"
+    fixtures = load_fixtures()
+    provider = FakeCalibrationProvider(
+        [invalid, *[_output("WAIT") for _ in range(len(fixtures) - 1)]]
+    )
+    output_path = tmp_path / "stage4-invalid-output-report.json"
+
+    report = await run_calibration_batch(
+        fixtures=fixtures,
+        provider=provider,
+        settings=_settings(tmp_path),
+        output_path=output_path,
+    )
+
+    results = cast(list[dict[str, Any]], report["results"])
+    invalid_result, completed_result = results[:2]
+    assert len(provider.calls) == 24
+    assert len(results) == 24
+    assert output_path.exists()
+    assert invalid_result["actual_action"] == "SUPPRESSED"
+    assert invalid_result["final_status"] == "INVALID_OUTPUT"
+    assert invalid_result["candidate_facing_prompt"] == ""
+    assert invalid_result["action_correct"] is False
+    assert invalid_result["calls"][0]["status"] == "INVALID_OUTPUT"
+    assert invalid_result["estimated_cost"] == "0.01"
+    assert completed_result["final_status"] == "COMPLETED"
+    aggregate = cast(dict[str, Any], report["aggregate"])
+    assert aggregate["structured_output_invalid"] == {
+        "numerator": 1,
+        "denominator": 24,
+        "rate": pytest.approx(1 / 24),
+    }
+
+
+async def test_provider_invalid_output_is_reported_but_other_errors_propagate(
+    tmp_path: Path,
+) -> None:
+    invalid_provider = FakeCalibrationProvider(
+        [ReasoningProviderError("STRUCTURED_OUTPUT_INVALID", "Invalid provider output")]
+    )
+    result = await evaluate_fixture(
+        _fixture("maximum-subarray-shallow-why"),
+        provider=invalid_provider,
+        settings=_settings(tmp_path),
+        clock=MutableClock(),
+    )
+
+    assert result.final_status == "INVALID_OUTPUT"
+    assert result.actual_action == "SUPPRESSED"
+    assert result.calls[0].status == "INVALID_OUTPUT"
+    assert result.estimated_cost is None
+    assert len(invalid_provider.calls) == 1
+
+    authentication_failure = FakeCalibrationProvider(
+        [ReasoningProviderError("AUTHENTICATION", "Authentication failed")]
+    )
+    with pytest.raises(ReasoningProviderError, match="Authentication failed"):
+        await evaluate_fixture(
+            _fixture("maximum-subarray-shallow-why"),
+            provider=authentication_failure,
+            settings=_settings(tmp_path),
+            clock=MutableClock(),
+        )
+    assert len(authentication_failure.calls) == 1
+
+
+async def test_invalid_strong_output_suppresses_preliminary_probe_without_retry(
+    tmp_path: Path,
+) -> None:
+    preliminary = _output(
+        "PROBE",
+        strategy="WHY",
+        target_kind="CLAIM",
+        verification_required=True,
+        verification_reason="DIFFICULT_CODE_SEMANTICS",
+    )
+    invalid_strong = _output("PROBE", strategy="PROVE", target_kind="CLAIM")
+    invalid_strong["decision"]["action"] = "OBSERVE"
+    provider = FakeCalibrationProvider([preliminary, invalid_strong])
+
+    result = await evaluate_fixture(
+        _fixture("maximum-subarray-shallow-why"),
+        provider=provider,
+        settings=_settings(tmp_path),
+        clock=MutableClock(),
+    )
+
+    assert len(provider.calls) == 2
+    assert result.strong_escalation_occurred
+    assert result.preliminary_action == "PROBE"
+    assert result.preliminary_strategy == "WHY"
+    assert result.final_action is None and result.final_strategy is None
+    assert result.final_status == "INVALID_OUTPUT"
+    assert result.actual_action == "SUPPRESSED"
+    assert result.candidate_facing_prompt == ""
+    assert not result.action_correct
+    assert [call.status for call in result.calls] == ["COMPLETED", "INVALID_OUTPUT"]
+    assert result.estimated_cost == "0.02"
 
 
 async def test_unresolved_strong_probe_is_suppressed_after_one_escalation(
@@ -531,8 +640,8 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
     }
     aggregate = cast(dict[str, Any], report["aggregate"])
     metadata = cast(dict[str, Any], report["metadata"])
-    assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v2"
-    assert metadata["runner_version"] == "stage4c-live-runner.v2"
+    assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v3"
+    assert metadata["runner_version"] == "stage4c-live-runner.v3"
     assert metadata["policy_key"] == "live_examiner"
     assert metadata["policy_version"] == "v7"
     assert metadata["context_projection_version"] == "v2"
@@ -547,6 +656,11 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
         "MEDIUM": {"count": 1, "rate": 0.5},
     }
     assert aggregate["strong_escalation"] == {
+        "numerator": 0,
+        "denominator": 2,
+        "rate": 0.0,
+    }
+    assert aggregate["structured_output_invalid"] == {
         "numerator": 0,
         "denominator": 2,
         "rate": 0.0,

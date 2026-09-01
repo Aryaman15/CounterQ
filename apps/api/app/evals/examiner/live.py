@@ -13,9 +13,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Literal, NoReturn, cast
 
+from pydantic import ValidationError
+
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
     ReasoningProvider,
+    ReasoningProviderError,
     ReasoningRequest,
 )
 from app.ai_gateway.provider_factory import build_reasoning_provider
@@ -25,6 +28,7 @@ from app.evals.examiner.harness import (
     evaluation_context_json,
     load_fixtures,
     score_fixture,
+    score_invalid_output,
     score_non_delivery,
 )
 from app.evals.examiner.schema import (
@@ -51,8 +55,8 @@ from app.examiner.reasoning_pipeline import (
 )
 
 LIVE_EVALUATION_OUTPUT = REPOSITORY_ROOT / "tmp" / "stage4-examiner-eval.json"
-LIVE_EVALUATION_REPORT_SCHEMA_VERSION = "stage4-examiner-calibration-report.v2"
-LIVE_EVALUATION_RUNNER_VERSION = "stage4c-live-runner.v2"
+LIVE_EVALUATION_REPORT_SCHEMA_VERSION = "stage4-examiner-calibration-report.v3"
+LIVE_EVALUATION_RUNNER_VERSION = "stage4c-live-runner.v3"
 ProviderWaiter = Callable[
     [Awaitable[ProviderReasoningResult], float], Awaitable[ProviderReasoningResult]
 ]
@@ -70,6 +74,12 @@ class _CompletedCall:
 class _ReasoningDeadlineExceeded(TimeoutError):
     def __init__(self, metrics: EvaluationCallMetrics) -> None:
         super().__init__("Live Examiner calibration usefulness deadline expired")
+        self.metrics = metrics
+
+
+class _StructuredOutputInvalid(RuntimeError):
+    def __init__(self, metrics: EvaluationCallMetrics) -> None:
+        super().__init__("Live Examiner calibration returned invalid structured output")
         self.metrics = metrics
 
 
@@ -125,6 +135,19 @@ async def evaluate_fixture(
                 "window, so no candidate-visible recommendation is safe."
             ),
         )
+    except _StructuredOutputInvalid as exc:
+        metadata = _evaluation_metadata(
+            initial_tier=initial_tier,
+            calls=[exc.metrics],
+            started_at=started_at,
+            usefulness_deadline=usefulness_deadline,
+            clock=clock,
+            settings=settings,
+            context_characters=context_characters,
+            context_bytes=context_bytes,
+            final_status="INVALID_OUTPUT",
+        )
+        return score_invalid_output(fixture, metadata=metadata)
     calls = [preliminary]
     final = preliminary
     verification_reason = next_strong_verification_reason(initial_tier, preliminary.parsed)
@@ -187,6 +210,22 @@ async def evaluate_fixture(
                 metadata=metadata,
                 suppressed=True,
             )
+        except _StructuredOutputInvalid as exc:
+            metadata = _evaluation_metadata(
+                initial_tier=initial_tier,
+                calls=[_call_metrics(preliminary), exc.metrics],
+                started_at=started_at,
+                usefulness_deadline=usefulness_deadline,
+                clock=clock,
+                settings=settings,
+                context_characters=context_characters,
+                context_bytes=context_bytes,
+                verification_reason=verification_reason,
+                preliminary=preliminary,
+                strong_escalation_occurred=True,
+                final_status="INVALID_OUTPUT",
+            )
+            return score_invalid_output(fixture, metadata=metadata)
 
     suppressed = len(calls) == 2 and unresolved_consequential_challenge(final.parsed)
     metrics = [_call_metrics(item) for item in calls]
@@ -321,6 +360,18 @@ async def _reason_once(
             ),
             timeout_seconds,
         )
+    except ReasoningProviderError as exc:
+        if exc.category != "STRUCTURED_OUTPUT_INVALID":
+            raise
+        elapsed_ms = max(0, int((clock() - call_started_at) * 1000))
+        raise _StructuredOutputInvalid(
+            _invalid_provider_metrics(
+                tier=tier,
+                provider=provider,
+                model=model,
+                latency_ms=elapsed_ms,
+            )
+        ) from exc
     except TimeoutError as exc:
         elapsed_ms = max(0, int((clock() - call_started_at) * 1000))
         raise _ReasoningDeadlineExceeded(
@@ -331,9 +382,19 @@ async def _reason_once(
                 latency_ms=elapsed_ms,
             )
         ) from exc
+    try:
+        parsed = ExaminerAnalysisResult.model_validate(provider_result.output_data)
+    except ValidationError as exc:
+        raise _StructuredOutputInvalid(
+            _provider_result_metrics(
+                tier=tier,
+                result=provider_result,
+                status="INVALID_OUTPUT",
+            )
+        ) from exc
     completed = _CompletedCall(
         tier=tier,
-        parsed=ExaminerAnalysisResult.model_validate(provider_result.output_data),
+        parsed=parsed,
         provider_result=provider_result,
         input_characters=len(input_content),
         input_bytes=len(input_content.encode("utf-8")),
@@ -350,9 +411,17 @@ def _call_metrics(
     *,
     status: Literal["COMPLETED", "COMPLETED_AFTER_DEADLINE"] = "COMPLETED",
 ) -> EvaluationCallMetrics:
-    result = call.provider_result
+    return _provider_result_metrics(tier=call.tier, result=call.provider_result, status=status)
+
+
+def _provider_result_metrics(
+    *,
+    tier: ExaminerReasoningTier,
+    result: ProviderReasoningResult,
+    status: Literal["COMPLETED", "COMPLETED_AFTER_DEADLINE", "INVALID_OUTPUT"],
+) -> EvaluationCallMetrics:
     return EvaluationCallMetrics(
-        reasoning_tier=call.tier,
+        reasoning_tier=tier,
         status=status,
         provider=result.provider,
         model=result.model,
@@ -363,6 +432,28 @@ def _call_metrics(
         output_tokens=result.usage.output_tokens,
         estimated_cost=str(result.estimated_cost) if result.estimated_cost is not None else None,
         currency=result.currency,
+    )
+
+
+def _invalid_provider_metrics(
+    *,
+    tier: ExaminerReasoningTier,
+    provider: ReasoningProvider,
+    model: str,
+    latency_ms: int,
+) -> EvaluationCallMetrics:
+    return EvaluationCallMetrics(
+        reasoning_tier=tier,
+        status="INVALID_OUTPUT",
+        provider=provider.provider_name,
+        model=model,
+        provider_model_version=None,
+        latency_ms=latency_ms,
+        input_tokens=None,
+        cached_input_tokens=None,
+        output_tokens=None,
+        estimated_cost=None,
+        currency=None,
     )
 
 

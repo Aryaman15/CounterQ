@@ -19,6 +19,7 @@ from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
     ReasoningEffort,
+    ReasoningProviderError,
     ReasoningRequest,
     ReasoningUsage,
 )
@@ -99,9 +100,13 @@ class FakeExaminerProvider:
         *,
         output_data: dict[str, Any] | None = None,
         delay_seconds: float = 0,
+        provider_error: ReasoningProviderError | None = None,
+        output_sequence: list[dict[str, Any] | ReasoningProviderError] | None = None,
     ) -> None:
         self.output_data = output_data or transcript_probe_output()
         self.delay_seconds = delay_seconds
+        self.provider_error = provider_error
+        self.output_sequence = output_sequence
         self.calls = 0
         self.requests: list[ReasoningRequest] = []
         self.called_event = asyncio.Event()
@@ -118,8 +123,15 @@ class FakeExaminerProvider:
         self.called_event.set()
         if self.delay_seconds:
             await asyncio.sleep(self.delay_seconds)
+        if self.provider_error is not None:
+            raise self.provider_error
+        output: dict[str, Any] | ReasoningProviderError = self.output_data
+        if self.output_sequence is not None:
+            output = self.output_sequence[self.calls - 1]
+        if isinstance(output, ReasoningProviderError):
+            raise output
         return ProviderReasoningResult(
-            output_data=self.output_data,
+            output_data=output,
             provider="fake",
             model=model,
             provider_model_version=f"{model}-fixture",
@@ -1250,8 +1262,8 @@ async def test_live_examiner_invalid_structured_output_returns_safe_failure_and_
 ) -> None:
     async with dev_context() as (maker, dev):
         await add_transcript(maker, dev.interview_session.id)
-        invalid_output = code_probe_output()
-        invalid_output["decision"]["target_claim_index"] = 0
+        invalid_output = transcript_probe_output()
+        invalid_output["decision"]["action"] = "WAIT"
         fake_provider = FakeExaminerProvider(output_data=invalid_output)
         local_settings = settings(tmp_path)
         app = create_app()
@@ -1293,6 +1305,12 @@ async def test_live_examiner_invalid_structured_output_returns_safe_failure_and_
                 .select_from(ExaminerDecision)
                 .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
             )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
             invocations = list(
                 await session.scalars(
                     select(AIInvocation)
@@ -1301,18 +1319,137 @@ async def test_live_examiner_invalid_structured_output_returns_safe_failure_and_
                 )
             )
 
-        assert failed.status_code == 502
-        assert failed.json()["detail"] == {
-            "category": "STRUCTURED_OUTPUT_INVALID",
-            "message": (
-                "Examiner returned an invalid structured decision. No decision was persisted."
-            ),
-            "retryable": False,
-        }
+        assert failed.status_code == 200
+        failed_body = failed.json()
+        assert failed_body["status"] == "ERROR"
+        assert failed_body["source_event_id"] is not None
+        assert failed_body["claims"] == []
+        assert failed_body["decision"] is None
+        assert failed_body["ai_invocation_id"] is None
+        assert failed_body["message"] == (
+            "Live Examiner returned invalid structured output; no recommendation "
+            "was persisted."
+        )
         assert recovered.status_code == 200
         assert recovered.json()["status"] == "PROPOSED"
         assert claim_count == 1
         assert decision_count == 1
+        assert prompt_count == 0
+        assert budget is not None and budget.probes_used == 0
         assert [invocation.status for invocation in invocations] == ["FAILED", "SUCCEEDED"]
         assert invocations[0].error_class == "STRUCTURED_OUTPUT_INVALID"
         assert fake_provider.calls == 2
+
+
+async def test_live_examiner_provider_invalid_output_is_safe_and_not_retried(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        fake_provider = FakeExaminerProvider(
+            provider_error=ReasoningProviderError(
+                "STRUCTURED_OUTPUT_INVALID",
+                "Provider rejected its structured output",
+            )
+        )
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=fake_provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
+            )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocation = await session.scalar(
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert result.status == "ERROR"
+        assert result.reasoning_tier == "MEDIUM"
+        assert result.source_event_id is not None
+        assert result.claims == [] and result.decision is None
+        assert fake_provider.calls == 1
+        assert claim_count == 0 and decision_count == 0 and prompt_count == 0
+        assert budget is not None and budget.probes_used == 0
+        assert invocation is not None and invocation.status == "FAILED"
+        assert invocation.error_class == "STRUCTURED_OUTPUT_INVALID"
+
+
+async def test_live_examiner_invalid_strong_output_suppresses_preliminary_probe(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        preliminary = transcript_probe_output()
+        preliminary["decision"]["verification"] = {
+            "required": True,
+            "reason": "DIFFICULT_CODE_SEMANTICS",
+        }
+        invalid_strong = transcript_probe_output()
+        invalid_strong["decision"]["action"] = "WAIT"
+        fake_provider = FakeExaminerProvider(
+            output_sequence=[preliminary, invalid_strong]
+        )
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=fake_provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
+            )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.interview_session_id == dev.interview_session.id)
+                    .order_by(AIInvocation.started_at.asc())
+                )
+            )
+
+        assert result.status == "ERROR"
+        assert result.reasoning_tier == "STRONG"
+        assert result.preliminary_ai_invocation_id == invocations[0].id
+        assert result.claims == [] and result.decision is None
+        assert fake_provider.calls == 2
+        assert claim_count == 0 and decision_count == 0 and prompt_count == 0
+        assert budget is not None and budget.probes_used == 0
+        assert [item.status for item in invocations] == ["SUCCEEDED", "FAILED"]
+        assert invocations[1].error_class == "STRUCTURED_OUTPUT_INVALID"
