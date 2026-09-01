@@ -1,29 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal, cast
-
-from app.ai_gateway.provider import ReasoningEffort, ReasoningPolicyDescriptor
-from app.examiner.analysis_schema import ExaminerAnalysisResult, ExaminerVerificationReason
+from app.ai_gateway.provider import ReasoningPolicyDescriptor
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
 LIVE_EXAMINER_POLICY_VERSION = "v5"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
-
-ExaminerReasoningTier = Literal["FAST", "MEDIUM", "STRONG"]
-FAST_REASONING_EFFORT: ReasoningEffort = "low"
-STRONG_ESCALATION_MIN_REMAINING_SECONDS = 2.0
-ALLOWED_STRONG_VERIFICATION_REASONS = frozenset(
-    {
-        "TRANSCRIPTION_AMBIGUITY",
-        "UNUSUAL_VALID_APPROACH",
-        "DIFFICULT_CODE_SEMANTICS",
-        "VERIFIED_PACK_DISAGREEMENT",
-        "CONSEQUENTIAL_LOW_CONFIDENCE",
-    }
-)
-CONSEQUENTIAL_PROBE_STRATEGIES = frozenset(
-    {"PROVE", "ASSUMPTION_CHALLENGE", "COUNTEREXAMPLE", "COMPLEXITY", "FAILURE_MODE"}
-)
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {
     "WHY": "test the candidate's reasoning or rationale for a meaningful choice",
@@ -167,40 +148,3 @@ def live_examiner_policy_descriptor() -> ReasoningPolicyDescriptor:
             "spontaneous_delivery_allowed": False,
         },
     )
-
-
-def initial_reasoning_tier(context_json: dict[str, object]) -> ExaminerReasoningTier:
-    interview = cast(dict[str, object], context_json["interview"])
-    source = cast(dict[str, object], context_json["source_observation"])
-    diagnostic = cast(dict[str, object], context_json.get("diagnostic_context", {}))
-    straightforward_stage = interview.get("current_stage") in {
-        "INTRODUCTION",
-        "PROBLEM_UNDERSTANDING",
-        "APPROACH_DISCOVERY",
-    }
-    transcript_only = (
-        source.get("kind") == "CANDIDATE_TRANSCRIPT_FINALIZED"
-        and "code_context_at_watermark" not in source
-        and source.get("code") is None
-    )
-    if straightforward_stage and transcript_only and diagnostic.get("execution_context") is None:
-        return "FAST"
-    return "MEDIUM"
-
-
-def reasoning_effort_for_tier(tier: ExaminerReasoningTier) -> ReasoningEffort | None:
-    return FAST_REASONING_EFFORT if tier == "FAST" else None
-
-
-def requested_strong_verification(result: ExaminerAnalysisResult) -> bool:
-    verification = result.decision.verification
-    return verification.required and verification.reason in ALLOWED_STRONG_VERIFICATION_REASONS
-
-
-def unresolved_consequential_challenge(result: ExaminerAnalysisResult) -> bool:
-    decision = result.decision
-    return decision.action == "PROBE" and decision.verification.required
-
-
-def verification_reason(result: ExaminerAnalysisResult) -> ExaminerVerificationReason:
-    return result.decision.verification.reason

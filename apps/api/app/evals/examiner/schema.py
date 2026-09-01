@@ -5,7 +5,12 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from app.db.constants import INTERVIEW_LEVELS, INTERVIEW_STAGES
-from app.examiner.analysis_schema import ExaminerAction, ExaminerProbeStrategy, ExaminerTargetKind
+from app.examiner.analysis_schema import (
+    ExaminerAction,
+    ExaminerProbeStrategy,
+    ExaminerTargetKind,
+    ExaminerVerificationReason,
+)
 from app.examiner.context import ELIGIBLE_LIVE_EXAMINER_OBSERVATIONS
 from app.examiner.context_contract import (
     ExecutionContextSummary,
@@ -13,6 +18,7 @@ from app.examiner.context_contract import (
     RecentDeliveredPromptIntentSummary,
     SyntheticPriorContext,
 )
+from app.examiner.reasoning_pipeline import ExaminerReasoningTier
 
 CandidateLevel = Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]
 InterviewStage = Literal[
@@ -30,6 +36,7 @@ InterviewStage = Literal[
     "COMPLETED",
 ]
 SourceObservationType = Literal["CANDIDATE_TRANSCRIPT_FINALIZED", "CODE_MEANINGFULLY_CHANGED"]
+EvaluationActualAction = Literal["WAIT", "OBSERVE", "ASK", "PROBE", "SUPPRESSED"]
 
 
 class EvaluationTimeContext(BaseModel):
@@ -141,12 +148,36 @@ class EvaluationFixture(BaseModel):
     review: EvaluationReviewMetadata
 
 
+class EvaluationCallMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reasoning_tier: ExaminerReasoningTier
+    provider: str
+    model: str
+    provider_model_version: str | None
+    latency_ms: int
+    input_tokens: int | None
+    cached_input_tokens: int | None
+    output_tokens: int | None
+    estimated_cost: str | None
+    currency: str | None
+
+
 class EvaluationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     fixture_id: str
-    actual_action: ExaminerAction
+    expected_action: ExaminerAction
+    actual_action: EvaluationActualAction
+    expected_strategies: list[ExaminerProbeStrategy]
     actual_strategy: ExaminerProbeStrategy | None
     actual_target_kind: ExaminerTargetKind
+    initial_reasoning_tier: ExaminerReasoningTier | None = None
+    strong_escalation_occurred: bool = False
+    verification_reason: ExaminerVerificationReason = "NONE"
+    preliminary_action: ExaminerAction | None = None
+    preliminary_strategy: ExaminerProbeStrategy | None = None
+    final_action: ExaminerAction
+    final_strategy: ExaminerProbeStrategy | None
+    final_status: Literal["COMPLETED", "SUPPRESSED"] = "COMPLETED"
     action_correct: bool
     strategy_acceptable: bool | None
     forbidden_strategy_used: bool
@@ -162,12 +193,17 @@ class EvaluationResult(BaseModel):
     duplicate_suppression_applicable: bool
     manual_technical_review_required: bool
     candidate_specificity_review_required: bool
+    false_technical_challenge: bool | None = None
+    candidate_specificity_acceptable: bool | None = None
     technical_rationale: str
     candidate_facing_prompt: str
     provider: str | None = None
     model: str | None = None
-    latency_ms: int | None = None
+    provider_model_version: str | None = None
+    calls: list[EvaluationCallMetrics] = Field(default_factory=list)
+    total_latency_ms: int | None = None
     input_tokens: int | None = None
+    cached_input_tokens: int | None = None
     output_tokens: int | None = None
     estimated_cost: str | None = None
     currency: str | None = None

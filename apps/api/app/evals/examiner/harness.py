@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from collections.abc import Callable
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.evals.examiner.schema import EvaluationFixture, EvaluationInput, EvaluationResult
 from app.examiner.analysis_schema import ExaminerAnalysisResult
@@ -145,6 +147,7 @@ def score_fixture(
     output: ExaminerAnalysisResult,
     *,
     metadata: dict[str, Any] | None = None,
+    suppressed: bool = False,
 ) -> EvaluationResult:
     expected = fixture.expectations
     decision = output.decision
@@ -153,21 +156,37 @@ def score_fixture(
         if decision.target_claim_index is not None
         else None
     )
-    candidate_prompt = compose_candidate_safe_prompt(
-        action=decision.action,
-        strategy=decision.proposed_probe_strategy,
-        normalized_claim=claim.normalized_claim if claim else None,
+    actual_action = "SUPPRESSED" if suppressed else decision.action
+    actual_strategy = None if suppressed else decision.proposed_probe_strategy
+    candidate_prompt = (
+        ""
+        if suppressed
+        else compose_candidate_safe_prompt(
+            action=decision.action,
+            strategy=decision.proposed_probe_strategy,
+            normalized_claim=claim.normalized_claim if claim else None,
+        )
     )
     values = metadata or {}
     return EvaluationResult(
         fixture_id=fixture.fixture_id,
-        actual_action=decision.action,
-        actual_strategy=decision.proposed_probe_strategy,
+        expected_action=expected.expected_action,
+        actual_action=actual_action,
+        expected_strategies=list(expected.acceptable_strategies),
+        actual_strategy=actual_strategy,
         actual_target_kind=decision.target_kind,
-        action_correct=decision.action == expected.expected_action,
+        initial_reasoning_tier=values.get("initial_reasoning_tier"),
+        strong_escalation_occurred=values.get("strong_escalation_occurred", False),
+        verification_reason=values.get("verification_reason", "NONE"),
+        preliminary_action=values.get("preliminary_action"),
+        preliminary_strategy=values.get("preliminary_strategy"),
+        final_action=decision.action,
+        final_strategy=decision.proposed_probe_strategy,
+        final_status="SUPPRESSED" if suppressed else "COMPLETED",
+        action_correct=actual_action == expected.expected_action,
         strategy_acceptable=(
-            decision.proposed_probe_strategy in expected.acceptable_strategies
-            if decision.action == "PROBE"
+            actual_strategy in expected.acceptable_strategies
+            if expected.expected_action == "PROBE"
             else None
         ),
         forbidden_strategy_used=decision.proposed_probe_strategy in expected.forbidden_strategies,
@@ -177,25 +196,31 @@ def score_fixture(
             else None
         ),
         forbidden_target_kind_used=decision.target_kind in expected.forbidden_target_kinds,
-        unnecessary_probe=decision.action == "PROBE" and expected.expected_action != "PROBE",
+        unnecessary_probe=actual_action == "PROBE" and expected.expected_action != "PROBE",
         obvious_answer_leakage=any(
             item.lower() in candidate_prompt.lower() for item in expected.must_not_reveal if item
         ),
-        stale_behavior_violation=expected.expect_stale_suppression and decision.action != "WAIT",
+        stale_behavior_violation=expected.expect_stale_suppression
+        and actual_action not in {"WAIT", "SUPPRESSED"},
         duplicate_probe_violation=expected.expect_duplicate_suppression
-        and decision.action == "PROBE",
+        and actual_action == "PROBE",
         strategy_applicable=expected.expected_action == "PROBE",
         answer_leakage_applicable=bool(expected.must_not_reveal),
         stale_suppression_applicable=expected.expect_stale_suppression,
         duplicate_suppression_applicable=expected.expect_duplicate_suppression,
         manual_technical_review_required=fixture.review.requires_manual_technical_review,
         candidate_specificity_review_required=fixture.review.requires_candidate_specificity_review,
+        false_technical_challenge=None,
+        candidate_specificity_acceptable=None,
         technical_rationale=decision.technical_rationale,
         candidate_facing_prompt=candidate_prompt,
         provider=values.get("provider"),
         model=values.get("model"),
-        latency_ms=values.get("latency_ms"),
+        provider_model_version=values.get("provider_model_version"),
+        calls=values.get("calls", []),
+        total_latency_ms=values.get("total_latency_ms"),
         input_tokens=values.get("input_tokens"),
+        cached_input_tokens=values.get("cached_input_tokens"),
         output_tokens=values.get("output_tokens"),
         estimated_cost=values.get("estimated_cost"),
         currency=values.get("currency"),
@@ -204,6 +229,7 @@ def score_fixture(
 
 def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
     actions = Counter(result.actual_action for result in results)
+    initial_tiers = Counter(result.initial_reasoning_tier for result in results)
 
     def metric(
         items: list[EvaluationResult], predicate: Callable[[EvaluationResult], bool]
@@ -219,6 +245,11 @@ def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
     stale_expected = [item for item in results if item.stale_suppression_applicable]
     duplicate_expected = [item for item in results if item.duplicate_suppression_applicable]
     leakage = [item for item in results if item.answer_leakage_applicable]
+    total_latencies = [
+        item.total_latency_ms for item in results if item.total_latency_ms is not None
+    ]
+    currencies = {item.currency for item in results if item.currency is not None}
+    costs = [Decimal(item.estimated_cost) for item in results if item.estimated_cost is not None]
     return {
         "fixtures": len(results),
         "action_correctness": metric(results, lambda item: item.action_correct),
@@ -240,7 +271,57 @@ def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
             results, lambda item: item.candidate_specificity_review_required
         ),
         "action_distribution": {
-            action: actions[action] / len(results) if results else 0
-            for action in ("WAIT", "OBSERVE", "ASK", "PROBE")
+            action: {
+                "count": actions[action],
+                "rate": actions[action] / len(results) if results else None,
+            }
+            for action in ("WAIT", "OBSERVE", "ASK", "PROBE", "SUPPRESSED")
         },
+        "initial_reasoning_tiers": {
+            tier: {
+                "count": initial_tiers[tier],
+                "rate": initial_tiers[tier] / len(results) if results else None,
+            }
+            for tier in ("FAST", "MEDIUM")
+        },
+        "strong_escalation": metric(
+            results, lambda item: item.strong_escalation_occurred
+        ),
+        "average_total_latency_ms": (
+            sum(total_latencies) / len(total_latencies) if total_latencies else None
+        ),
+        "p95_total_latency_ms": _nearest_rank_percentile(total_latencies, 0.95),
+        "latency_fixture_count": len(total_latencies),
+        "total_tokens": {
+            "input_tokens": _complete_optional_sum(results, "input_tokens"),
+            "cached_input_tokens": _complete_optional_sum(results, "cached_input_tokens"),
+            "output_tokens": _complete_optional_sum(results, "output_tokens"),
+        },
+        "total_estimated_cost": str(sum(costs, Decimal("0")))
+        if results and len(costs) == len(results)
+        else None,
+        "costed_fixture_count": len(costs),
+        "currency": next(iter(currencies)) if len(currencies) == 1 else None,
     }
+
+
+def _nearest_rank_percentile(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[math.ceil(percentile * len(ordered)) - 1]
+
+
+def _complete_optional_sum(
+    results: list[EvaluationResult],
+    field_name: Literal["input_tokens", "cached_input_tokens", "output_tokens"],
+) -> int | None:
+    if field_name == "input_tokens":
+        values = [result.input_tokens for result in results]
+    elif field_name == "cached_input_tokens":
+        values = [result.cached_input_tokens for result in results]
+    else:
+        values = [result.output_tokens for result in results]
+    if not values or any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)

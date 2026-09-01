@@ -1482,12 +1482,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 4B — Production Examiner Quality Hardening
+Stage 4C — Live Examiner Calibration + Stage 4 Acceptance
 
 Current Goal:
-Harden the production Live Examiner using compact diagnostic context, structured
-target ranking, duplicate/false-positive controls, candidate-level depth and
-tiered reasoning before live calibration.
+Measure the founder-closed Stage-4B production Examiner against the frozen
+24-fixture corpus using production-equivalent tiering and strong verification,
+then calibrate only from observed failures.
 ```
 
 Update only this small section as implementation progresses.
