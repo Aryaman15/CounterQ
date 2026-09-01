@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "I would sort value-index pairs and use two pointers.",
+    "candidate_statement": "I would sort value-index pairs so each value keeps its original index, then use two pointers.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

@@ -12,7 +12,7 @@
     "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
     "recent_transcript": [],
     "candidate_statement": null,
-    "code_snapshot": "if (visited[node]) return false; visited[node] = true;",
+    "code_snapshot": "vector<bool> visited(numCourses, false);\nbool dfs(int node) {\n    if (visited[node]) return false;\n    visited[node] = true;\n    for (int next : graph[node]) {\n        if (!dfs(next)) return false;\n    }\n    return true;\n}\nfor (int course = 0; course < numCourses; ++course) {\n    if (!dfs(course)) return false;\n}\nreturn true;",
     "code_diff": null,
     "execution_context": null,
     "recent_claims": [],

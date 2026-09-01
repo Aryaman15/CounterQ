@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -631,9 +632,13 @@ def compose_candidate_safe_prompt(
     """Pure candidate-facing rendering shared by authorization and evaluation."""
     if action == "ASK":
         return "Can you clarify that part of your approach?"
+    if action != "PROBE":
+        return ""
     if strategy == "ASSUMPTION_CHALLENGE":
         if normalized_claim is not None:
-            return f"You said {_claim_excerpt(normalized_claim)}. Is that actually guaranteed?"
+            claim = _candidate_safe_claim(normalized_claim)
+            if claim:
+                return f"You said {_claim_excerpt(claim)}. Is that actually guaranteed?"
         return "What makes that assumption safe?"
     prompts = {
         "PROVE": "What invariant are you relying on here, and what guarantees it holds?",
@@ -646,10 +651,30 @@ def compose_candidate_safe_prompt(
             "What makes this implementation choice safe for the invariant you need?"
         ),
         "CONSTRAINT_MUTATION": "How would your approach change if the constraint shifted?",
-        "FAILURE_MODE": "What failure mode are you guarding against here?",
+        "FAILURE_MODE": "How could this implementation fail on a valid input?",
         "TRANSFER": "Where else would this reasoning transfer?",
     }
     return prompts.get(strategy or "", "Walk me through the reasoning behind that choice.")
+
+
+_CANDIDATE_META_PREFIXES = (
+    re.compile(
+        r"^the\s+candidate\s+(?:claims?|said|states?|argues?|believes?)\s+(?:that\s+)?",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^the\s+candidate(?:'s)?\s+claim\s+(?:is|that)\s+", re.IGNORECASE),
+    re.compile(r"^candidate\s*:\s*", re.IGNORECASE),
+)
+
+
+def _candidate_safe_claim(claim: str) -> str:
+    value = claim.strip().strip('"\'')
+    previous = None
+    while value != previous:
+        previous = value
+        for pattern in _CANDIDATE_META_PREFIXES:
+            value = pattern.sub("", value, count=1).strip()
+    return value
 
 
 def _claim_excerpt(claim: str, *, maximum_length: int = 180) -> str:

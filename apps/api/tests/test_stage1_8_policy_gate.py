@@ -15,6 +15,7 @@ from app.interviews.models import InterviewerPrompt, InterviewerPromptDelivery, 
 from app.interviews.prompt_authorization import (
     PromptAuthorizationService,
     PromptGateRuntimeState,
+    compose_candidate_safe_prompt,
 )
 from app.observation.models import CodeSnapshot
 from app.realtime.control_protocol import (
@@ -134,6 +135,33 @@ async def test_assumption_challenge_uses_concise_candidate_safe_claim_wording(
     assert gate.candidate_safe_text == (
         "You said lookup is always guaranteed O(1). Is that actually guaranteed?"
     )
+
+
+async def test_candidate_safe_renderer_strips_model_meta_prefixes_and_keeps_silence_empty() -> None:
+    rendered = compose_candidate_safe_prompt(
+        action="PROBE",
+        strategy="ASSUMPTION_CHALLENGE",
+        normalized_claim=(
+            "The candidate claims that unordered_map lookup is always O(1), "
+            "therefore the algorithm is guaranteed O(n)."
+        ),
+    )
+    assert rendered == (
+        "You said unordered_map lookup is always O(1), therefore the algorithm is "
+        "guaranteed O(n). Is that actually guaranteed?"
+    )
+    assert "candidate claims" not in rendered.casefold()
+    assert compose_candidate_safe_prompt(
+        action="WAIT", strategy=None, normalized_claim=None
+    ) == ""
+    assert compose_candidate_safe_prompt(
+        action="OBSERVE", strategy=None, normalized_claim=None
+    ) == ""
+    failure_mode = compose_candidate_safe_prompt(
+        action="PROBE", strategy="FAILURE_MODE", normalized_claim=None
+    )
+    assert failure_mode == "How could this implementation fail on a valid input?"
+    assert "fix" not in failure_mode.casefold()
 
 
 async def test_wait_decision_accepts_silence_without_prompt(

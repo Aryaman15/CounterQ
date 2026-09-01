@@ -37,6 +37,13 @@ InterviewStage = Literal[
 ]
 SourceObservationType = Literal["CANDIDATE_TRANSCRIPT_FINALIZED", "CODE_MEANINGFULLY_CHANGED"]
 EvaluationActualAction = Literal["WAIT", "OBSERVE", "ASK", "PROBE", "SUPPRESSED"]
+EvaluationCallStatus = Literal["COMPLETED", "TIMED_OUT", "COMPLETED_AFTER_DEADLINE"]
+EvaluationDeadlineOutcome = Literal[
+    "NONE",
+    "INITIAL_TIMEOUT",
+    "INSUFFICIENT_STRONG_WINDOW",
+    "STRONG_TIMEOUT",
+]
 
 
 class EvaluationTimeContext(BaseModel):
@@ -107,6 +114,7 @@ class TechnicalRationaleRubric(BaseModel):
 class EvaluationExpectations(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_action: ExaminerAction
+    acceptable_alternative_actions: list[ExaminerAction] = Field(default_factory=list)
     acceptable_strategies: list[ExaminerProbeStrategy] = Field(default_factory=list)
     forbidden_strategies: list[ExaminerProbeStrategy] = Field(default_factory=list)
     acceptable_target_kinds: list[ExaminerTargetKind] = Field(default_factory=list)
@@ -125,6 +133,12 @@ class EvaluationExpectations(BaseModel):
             raise ValueError("Only PROBE fixtures may specify acceptable strategies")
         if set(self.acceptable_strategies) & set(self.forbidden_strategies):
             raise ValueError("A strategy cannot be both acceptable and forbidden")
+        if self.expected_action in self.acceptable_alternative_actions:
+            raise ValueError("Preferred action cannot also be an acceptable alternative")
+        if len(set(self.acceptable_alternative_actions)) != len(
+            self.acceptable_alternative_actions
+        ):
+            raise ValueError("Acceptable alternative actions must be unique")
         if set(self.acceptable_target_kinds) & set(self.forbidden_target_kinds):
             raise ValueError("A target kind cannot be both acceptable and forbidden")
         return self
@@ -151,6 +165,7 @@ class EvaluationFixture(BaseModel):
 class EvaluationCallMetrics(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reasoning_tier: ExaminerReasoningTier
+    status: EvaluationCallStatus = "COMPLETED"
     provider: str
     model: str
     provider_model_version: str | None
@@ -166,6 +181,7 @@ class EvaluationResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     fixture_id: str
     expected_action: ExaminerAction
+    acceptable_alternative_actions: list[ExaminerAction] = Field(default_factory=list)
     actual_action: EvaluationActualAction
     expected_strategies: list[ExaminerProbeStrategy]
     actual_strategy: ExaminerProbeStrategy | None
@@ -175,9 +191,11 @@ class EvaluationResult(BaseModel):
     verification_reason: ExaminerVerificationReason = "NONE"
     preliminary_action: ExaminerAction | None = None
     preliminary_strategy: ExaminerProbeStrategy | None = None
-    final_action: ExaminerAction
+    final_action: ExaminerAction | None
     final_strategy: ExaminerProbeStrategy | None
-    final_status: Literal["COMPLETED", "SUPPRESSED"] = "COMPLETED"
+    final_status: Literal["COMPLETED", "SUPPRESSED", "DEADLINE_EXPIRED"] = "COMPLETED"
+    deadline_outcome: EvaluationDeadlineOutcome = "NONE"
+    preferred_action_correct: bool
     action_correct: bool
     strategy_acceptable: bool | None
     forbidden_strategy_used: bool
@@ -197,6 +215,11 @@ class EvaluationResult(BaseModel):
     candidate_specificity_acceptable: bool | None = None
     technical_rationale: str
     candidate_facing_prompt: str
+    usefulness_deadline_seconds: float | None = None
+    elapsed_reasoning_ms: int | None = None
+    remaining_usefulness_ms_at_completion: int | None = None
+    context_json_characters: int | None = None
+    context_json_bytes: int | None = None
     provider: str | None = None
     model: str | None = None
     provider_model_version: str | None = None

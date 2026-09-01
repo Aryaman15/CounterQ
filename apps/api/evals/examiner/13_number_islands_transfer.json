@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "I mark each discovered land cell before exploring neighbors.",
+    "candidate_statement": "For every unvisited land cell, I increment the component count, mark it when discovered, and flood-fill its four neighbors. Marking before enqueue or recursion means no land cell is processed twice; after scanning the grid, the count is the number of islands. That completes my base approach.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

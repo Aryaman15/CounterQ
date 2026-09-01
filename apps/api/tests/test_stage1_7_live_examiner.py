@@ -428,12 +428,12 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
             ExaminerAnalysisResult.model_validate(invalid_non_claim_target)
 
 
-def test_live_examiner_policy_v5_guides_ranking_strategies_depth_and_verification() -> None:
+def test_live_examiner_policy_v6_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v5"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v5"
+    assert descriptor.version == "v6"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v6"
     assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid absolute complexity guarantee" in LIVE_EXAMINER_INSTRUCTIONS
@@ -445,7 +445,8 @@ def test_live_examiner_policy_v5_guides_ranking_strategies_depth_and_verificatio
     assert "Populate every target_ranking factor" in LIVE_EXAMINER_INSTRUCTIONS
     assert "STABLE_AFTER_EDIT_BURST" in LIVE_EXAMINER_INSTRUCTIONS
     assert "stable enough to analyze" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "Do not require Run" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not require" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Run or a declared-done signal" in LIVE_EXAMINER_INSTRUCTIONS
     assert "require target_claim_index=null" in LIVE_EXAMINER_INSTRUCTIONS
     schema = ExaminerAnalysisResult.model_json_schema()
     decision_schema = schema["$defs"]["ExaminerDecisionOutput"]["properties"]

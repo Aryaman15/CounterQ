@@ -15,6 +15,12 @@ from app.examiner.context_contract import (
     RecentDeliveredPromptIntentSummary,
     serialize_diagnostic_context,
 )
+from app.examiner.context_projection import (
+    LIVE_EXAMINER_CONTEXT_PROJECTION_KEY,
+    LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
+    project_interview_pack,
+    project_problem_context,
+)
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.execution.models import ExecutionRun
 from app.interviews.budget_policy import probe_budget_snapshot
@@ -81,11 +87,22 @@ def serialize_examiner_context(
 
     Evaluation and production use the same typed Stage-4 diagnostic section.
     """
+    language = str(interview.get("language", ""))
+    candidate_level = str(interview.get("candidate_level", ""))
+    interview_stage = str(interview.get("current_stage", ""))
     context: dict[str, object] = {
+        "context_projection": {
+            "key": LIVE_EXAMINER_CONTEXT_PROJECTION_KEY,
+            "version": LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
+        },
         "trusted_policy": trusted_policy,
         "interview": interview,
-        "problem": problem,
-        "interview_pack": interview_pack,
+        "problem": project_problem_context(problem, language=language),
+        "interview_pack": project_interview_pack(
+            interview_pack,
+            candidate_level=candidate_level,
+            interview_stage=interview_stage,
+        ),
         "source_observation": source_observation,
         "source_freshness": source_freshness,
         "recent_history": recent_history,

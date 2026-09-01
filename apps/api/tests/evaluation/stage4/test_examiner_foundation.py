@@ -24,6 +24,7 @@ from app.examiner.context import (
     CODE_EDIT_OBSERVATION_SEMANTICS,
     SOURCE_FRESHNESS_SEMANTICS,
 )
+from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 from app.examiner.models import CandidateClaim, ExaminerDecision
 
 
@@ -92,6 +93,7 @@ def test_transcript_and_code_context_match_production_nested_shapes() -> None:
     }
     transcript = evaluation_context_json(fixture("two-sum-hash-assumption").input)
     assert set(transcript) == {
+        "context_projection",
         "trusted_policy",
         "interview",
         "problem",
@@ -100,6 +102,10 @@ def test_transcript_and_code_context_match_production_nested_shapes() -> None:
         "source_freshness",
         "recent_history",
         "diagnostic_context",
+    }
+    assert transcript["context_projection"] == {
+        "key": "live_examiner_context",
+        "version": LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
     }
     assert set(cast(dict[str, object], transcript["trusted_policy"])) == {
         "simulation_no_hints",
@@ -124,18 +130,24 @@ def test_transcript_and_code_context_match_production_nested_shapes() -> None:
         "statement",
         "constraints",
         "examples",
-        "io_schema",
+        "io_contract",
+        "active_language_contract",
     }
     pack_context = cast(dict[str, object], transcript["interview_pack"])
     assert set(pack_context) == {
         "interview_pack_version_id",
         "schema_version",
         "review_status",
-        "pack",
+        "diagnostic_pack",
     }
-    pack_payload = cast(dict[str, object], pack_context["pack"])
+    pack_payload = cast(dict[str, object], pack_context["diagnostic_pack"])
     assert "pack" not in pack_payload
-    assert pack_payload["schema_version"] == "interview-pack.v1"
+    assert "reference_solutions" not in pack_payload
+    assert "reference_reasoning" not in pack_payload
+    serialized = json.dumps(transcript)
+    assert "starter_code" not in serialized
+    assert "visible_cases" not in serialized
+    assert "source_code\": \"class Solution" not in serialized
     transcript_source = cast(dict[str, object], transcript["source_observation"])
     assert transcript_source["trigger_class"] == "VOICE_TURN_COMPLETED"
     assert set(cast(dict[str, object], transcript_source["transcript"])) == {
@@ -230,6 +242,35 @@ def test_fixture_specific_diagnostic_context_survives_serialization() -> None:
     assert stale_state["diagnostic_context"]["remaining_probe_budget"] == 0
 
 
+def test_compact_projection_excludes_heavy_reference_and_starter_payloads() -> None:
+    item = fixture("two-sum-hash-assumption")
+    raw = item.input.model_dump(mode="json")
+    marker = "HEAVY_REFERENCE_PAYLOAD_SHOULD_NEVER_REACH_EXAMINER"
+    raw["interview_pack"]["reference_solutions"][0]["source_code"] = marker * 1000
+    raw["problem_context"]["io_schema"]["execution"]["visible_cases"] = [
+        {"marker": marker * 1000}
+    ]
+    raw["problem_context"]["io_schema"]["languages"]["python"]["starter_code"] = (
+        marker * 1000
+    )
+    projected_input = item.input.__class__.model_validate(raw)
+
+    serialized = model_input_json(projected_input)
+    context = json.loads(serialized)
+    assert marker not in serialized
+    assert len(serialized.encode("utf-8")) < 10_000
+    assert context["problem"]["active_language_contract"] == {
+        "language": "cpp",
+        "display_signature": "vector<int> twoSum(vector<int> nums, int target)",
+    }
+    diagnostic_pack = context["interview_pack"]["diagnostic_pack"]
+    assert "reference_solutions" not in diagnostic_pack
+    assert diagnostic_pack["counterexamples"][0] == {
+        "id": "same_element",
+        "purpose": "Exposes returning the same index for 3 + 3.",
+    }
+
+
 def test_input_cannot_receive_expectations_or_sentinel() -> None:
     for item in load_fixtures():
         serialized = model_input_json(item.input)
@@ -255,6 +296,59 @@ def test_fixture_domain_and_expectation_validation() -> None:
     raw["expectations"]["acceptable_strategies"] = []
     with pytest.raises(ValueError):
         EvaluationFixture.model_validate(raw)
+
+
+def test_only_founder_approved_fixtures_allow_alternative_actions() -> None:
+    alternatives = {
+        item.fixture_id: item.expectations.acceptable_alternative_actions
+        for item in load_fixtures()
+        if item.expectations.acceptable_alternative_actions
+    }
+    assert alternatives == {
+        "stale-code-wait": ["OBSERVE"],
+        "transcription-ambiguity-observe": ["ASK"],
+    }
+
+    stale = fixture("stale-code-wait")
+    observe = score_fixture(stale, output("OBSERVE", None, "NONE"))
+    assert observe.action_correct and not observe.preferred_action_correct
+    assert not observe.stale_behavior_violation
+
+    ambiguity = fixture("transcription-ambiguity-observe")
+    ask = score_fixture(ambiguity, output("ASK", None, "CLAIM"))
+    assert ask.action_correct and not ask.preferred_action_correct
+    assert ask.candidate_facing_prompt == "Can you clarify that part of your approach?"
+
+
+def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
+    maximum = fixture("maximum-subarray-shallow-why")
+    assert "max(nums[i], current + nums[i])" in (maximum.input.candidate_statement or "")
+    assert maximum.expectations.acceptable_strategies == ["WHY"]
+
+    longest = fixture("longest-substring-invariant-prove")
+    assert "FAILURE_MODE" in longest.expectations.acceptable_strategies
+    assert longest.expectations.acceptable_target_kinds == ["CODE_SNAPSHOT"]
+
+    sort_indices = fixture("two-sum-sort-index-choice")
+    assert "while (left < right)" in (sort_indices.input.code_snapshot or "")
+    assert "return {left, right}" in (sort_indices.input.code_snapshot or "")
+
+    mutation = fixture("minimum-subarray-negative-mutation")
+    assert "positive-only base problem" in (mutation.input.candidate_statement or "")
+    assert mutation.expectations.acceptable_strategies == ["CONSTRAINT_MUTATION"]
+
+    course = fixture("course-schedule-cycle-failure")
+    assert "vector<bool> visited" in (course.input.code_snapshot or "")
+    assert "visited[node] = true" in (course.input.code_snapshot or "")
+    assert course.expectations.acceptable_strategies == ["FAILURE_MODE"]
+
+    islands = fixture("number-islands-transfer")
+    assert "That completes my base approach" in (islands.input.candidate_statement or "")
+    assert islands.expectations.acceptable_strategies == ["TRANSFER"]
+
+    tradeoff = fixture("two-sum-sort-tradeoff")
+    assert "keeps its original index" in (tradeoff.input.candidate_statement or "")
+    assert tradeoff.expectations.acceptable_strategies == ["TRADE_OFF", "ALTERNATIVE"]
 
 
 def test_negative_scorer_cases_and_candidate_facing_leakage() -> None:

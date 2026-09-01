@@ -309,6 +309,9 @@
   },
   "expectations": {
     "expected_action": "WAIT",
+    "acceptable_alternative_actions": [
+      "OBSERVE"
+    ],
     "acceptable_strategies": [],
     "forbidden_strategies": [
       "PROVE"

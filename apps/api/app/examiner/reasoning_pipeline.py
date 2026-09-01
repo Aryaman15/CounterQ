@@ -131,6 +131,7 @@ def next_strong_verification_reason(
     verification = result.decision.verification
     if (
         current_tier != "STRONG"
+        and result.decision.action == "PROBE"
         and verification.required
         and verification.reason in ALLOWED_STRONG_VERIFICATION_REASONS
     ):

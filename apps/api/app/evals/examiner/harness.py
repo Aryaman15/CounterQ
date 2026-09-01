@@ -168,9 +168,14 @@ def score_fixture(
         )
     )
     values = metadata or {}
+    preferred_action_correct = actual_action == expected.expected_action
+    action_correct = preferred_action_correct or (
+        actual_action in expected.acceptable_alternative_actions
+    )
     return EvaluationResult(
         fixture_id=fixture.fixture_id,
         expected_action=expected.expected_action,
+        acceptable_alternative_actions=list(expected.acceptable_alternative_actions),
         actual_action=actual_action,
         expected_strategies=list(expected.acceptable_strategies),
         actual_strategy=actual_strategy,
@@ -182,8 +187,12 @@ def score_fixture(
         preliminary_strategy=values.get("preliminary_strategy"),
         final_action=decision.action,
         final_strategy=decision.proposed_probe_strategy,
-        final_status="SUPPRESSED" if suppressed else "COMPLETED",
-        action_correct=actual_action == expected.expected_action,
+        final_status=values.get(
+            "final_status", "SUPPRESSED" if suppressed else "COMPLETED"
+        ),
+        deadline_outcome=values.get("deadline_outcome", "NONE"),
+        preferred_action_correct=preferred_action_correct,
+        action_correct=action_correct,
         strategy_acceptable=(
             actual_strategy in expected.acceptable_strategies
             if expected.expected_action == "PROBE"
@@ -200,8 +209,11 @@ def score_fixture(
         obvious_answer_leakage=any(
             item.lower() in candidate_prompt.lower() for item in expected.must_not_reveal if item
         ),
-        stale_behavior_violation=expected.expect_stale_suppression
-        and actual_action not in {"WAIT", "SUPPRESSED"},
+        stale_behavior_violation=(
+            expected.expect_stale_suppression
+            and actual_action != "SUPPRESSED"
+            and not action_correct
+        ),
         duplicate_probe_violation=expected.expect_duplicate_suppression
         and actual_action == "PROBE",
         strategy_applicable=expected.expected_action == "PROBE",
@@ -214,6 +226,13 @@ def score_fixture(
         candidate_specificity_acceptable=None,
         technical_rationale=decision.technical_rationale,
         candidate_facing_prompt=candidate_prompt,
+        usefulness_deadline_seconds=values.get("usefulness_deadline_seconds"),
+        elapsed_reasoning_ms=values.get("elapsed_reasoning_ms"),
+        remaining_usefulness_ms_at_completion=values.get(
+            "remaining_usefulness_ms_at_completion"
+        ),
+        context_json_characters=values.get("context_json_characters"),
+        context_json_bytes=values.get("context_json_bytes"),
         provider=values.get("provider"),
         model=values.get("model"),
         provider_model_version=values.get("provider_model_version"),
@@ -224,6 +243,75 @@ def score_fixture(
         output_tokens=values.get("output_tokens"),
         estimated_cost=values.get("estimated_cost"),
         currency=values.get("currency"),
+    )
+
+
+def score_non_delivery(
+    fixture: EvaluationFixture,
+    *,
+    metadata: dict[str, Any],
+    technical_rationale: str,
+) -> EvaluationResult:
+    """Record a safe operational non-delivery without inventing a model decision."""
+    expected = fixture.expectations
+    return EvaluationResult(
+        fixture_id=fixture.fixture_id,
+        expected_action=expected.expected_action,
+        acceptable_alternative_actions=list(expected.acceptable_alternative_actions),
+        actual_action="SUPPRESSED",
+        expected_strategies=list(expected.acceptable_strategies),
+        actual_strategy=None,
+        actual_target_kind="NONE",
+        initial_reasoning_tier=metadata.get("initial_reasoning_tier"),
+        strong_escalation_occurred=False,
+        verification_reason="NONE",
+        preliminary_action=None,
+        preliminary_strategy=None,
+        final_action=None,
+        final_strategy=None,
+        final_status="DEADLINE_EXPIRED",
+        deadline_outcome=metadata.get("deadline_outcome", "INITIAL_TIMEOUT"),
+        preferred_action_correct=False,
+        action_correct=False,
+        strategy_acceptable=False if expected.expected_action == "PROBE" else None,
+        forbidden_strategy_used=False,
+        target_kind_acceptable=(
+            "NONE" in expected.acceptable_target_kinds
+            if expected.acceptable_target_kinds
+            else None
+        ),
+        forbidden_target_kind_used="NONE" in expected.forbidden_target_kinds,
+        unnecessary_probe=False,
+        obvious_answer_leakage=False,
+        stale_behavior_violation=False,
+        duplicate_probe_violation=False,
+        strategy_applicable=expected.expected_action == "PROBE",
+        answer_leakage_applicable=bool(expected.must_not_reveal),
+        stale_suppression_applicable=expected.expect_stale_suppression,
+        duplicate_suppression_applicable=expected.expect_duplicate_suppression,
+        manual_technical_review_required=fixture.review.requires_manual_technical_review,
+        candidate_specificity_review_required=(
+            fixture.review.requires_candidate_specificity_review
+        ),
+        technical_rationale=technical_rationale,
+        candidate_facing_prompt="",
+        usefulness_deadline_seconds=metadata.get("usefulness_deadline_seconds"),
+        elapsed_reasoning_ms=metadata.get("elapsed_reasoning_ms"),
+        remaining_usefulness_ms_at_completion=metadata.get(
+            "remaining_usefulness_ms_at_completion"
+        ),
+        context_json_characters=metadata.get("context_json_characters"),
+        context_json_bytes=metadata.get("context_json_bytes"),
+        provider=metadata.get("provider"),
+        model=metadata.get("model"),
+        provider_model_version=metadata.get("provider_model_version"),
+        calls=metadata.get("calls", []),
+        total_latency_ms=metadata.get("total_latency_ms"),
+        input_tokens=metadata.get("input_tokens"),
+        cached_input_tokens=metadata.get("cached_input_tokens"),
+        output_tokens=metadata.get("output_tokens"),
+        estimated_cost=metadata.get("estimated_cost"),
+        currency=metadata.get("currency"),
     )
 
 
@@ -252,6 +340,9 @@ def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
     costs = [Decimal(item.estimated_cost) for item in results if item.estimated_cost is not None]
     return {
         "fixtures": len(results),
+        "preferred_action_correctness": metric(
+            results, lambda item: item.preferred_action_correct
+        ),
         "action_correctness": metric(results, lambda item: item.action_correct),
         "strategy_appropriateness": metric(
             probes,
@@ -292,6 +383,12 @@ def aggregate_results(results: list[EvaluationResult]) -> dict[str, object]:
         ),
         "p95_total_latency_ms": _nearest_rank_percentile(total_latencies, 0.95),
         "latency_fixture_count": len(total_latencies),
+        "context_size": {
+            "average_characters": _average_optional(results, "context_json_characters"),
+            "p95_characters": _percentile_optional(results, "context_json_characters"),
+            "average_bytes": _average_optional(results, "context_json_bytes"),
+            "p95_bytes": _percentile_optional(results, "context_json_bytes"),
+        },
         "total_tokens": {
             "input_tokens": _complete_optional_sum(results, "input_tokens"),
             "cached_input_tokens": _complete_optional_sum(results, "cached_input_tokens"),
@@ -325,3 +422,26 @@ def _complete_optional_sum(
     if not values or any(value is None for value in values):
         return None
     return sum(value for value in values if value is not None)
+
+
+def _average_optional(
+    results: list[EvaluationResult],
+    field_name: Literal["context_json_characters", "context_json_bytes"],
+) -> float | None:
+    values = [getattr(result, field_name) for result in results]
+    present = [value for value in values if value is not None]
+    return sum(present) / len(present) if present else None
+
+
+def _percentile_optional(
+    results: list[EvaluationResult],
+    field_name: Literal["context_json_characters", "context_json_bytes"],
+) -> int | None:
+    values = (
+        getattr(result, field_name)
+        for result in results
+    )
+    return _nearest_rank_percentile(
+        [value for value in values if value is not None],
+        0.95,
+    )

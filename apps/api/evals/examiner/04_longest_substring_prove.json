@@ -310,7 +310,8 @@
     "expected_action": "PROBE",
     "acceptable_strategies": [
       "PROVE",
-      "COUNTEREXAMPLE"
+      "COUNTEREXAMPLE",
+      "FAILURE_MODE"
     ],
     "forbidden_strategies": [],
     "acceptable_target_kinds": [

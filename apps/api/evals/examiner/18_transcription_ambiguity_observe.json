@@ -479,6 +479,9 @@
   },
   "expectations": {
     "expected_action": "OBSERVE",
+    "acceptable_alternative_actions": [
+      "ASK"
+    ],
     "acceptable_strategies": [],
     "forbidden_strategies": [
       "COMPLEXITY"

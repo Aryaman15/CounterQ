@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -25,8 +26,14 @@ from app.observation.models import InterviewEvent
 class FakeCalibrationProvider:
     provider_name = "stage4c-fake"
 
-    def __init__(self, outputs: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        outputs: list[dict[str, Any]],
+        *,
+        after_call: Callable[[int], None] | None = None,
+    ) -> None:
         self.outputs = outputs
+        self.after_call = after_call
         self.calls: list[tuple[ReasoningRequest, str, ReasoningEffort]] = []
 
     async def reason_structured(
@@ -40,6 +47,8 @@ class FakeCalibrationProvider:
         if call_number > len(self.outputs):
             raise AssertionError("Calibration runner made an unexpected provider call")
         self.calls.append((request, model, reasoning_effort))
+        if self.after_call is not None:
+            self.after_call(call_number)
         return ProviderReasoningResult(
             output_data=self.outputs[call_number - 1],
             provider=self.provider_name,
@@ -52,6 +61,14 @@ class FakeCalibrationProvider:
             estimated_cost=Decimal("0.01"),
             currency="USD",
         )
+
+
+class MutableClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+
+    def __call__(self) -> float:
+        return self.value
 
 
 def _fixture(fixture_id: str) -> EvaluationFixture:
@@ -147,6 +164,7 @@ async def test_fast_case_uses_production_tier_effort_and_runtime_control(
         _fixture("container-water-ask-objective"),
         provider=provider,
         settings=_settings(tmp_path),
+        clock=MutableClock(),
     )
 
     request, model, effort = provider.calls[0]
@@ -155,6 +173,10 @@ async def test_fast_case_uses_production_tier_effort_and_runtime_control(
     assert request.capability == "STANDARD_REASONING"
     assert request.purpose == "live_examiner"
     assert model == "stage4c-standard" and effort == "low"
+    assert request.timeout_seconds == 8.0
+    assert result.deadline_outcome == "NONE"
+    assert result.usefulness_deadline_seconds == 8.0
+    assert result.remaining_usefulness_ms_at_completion == 8000
     assert json.loads(request.input_content)["trusted_runtime_control"] == {
         "reasoning_tier": "FAST",
         "verification_pass": "NONE",
@@ -182,6 +204,12 @@ async def test_medium_case_uses_production_tier_effort(tmp_path: Path) -> None:
 async def test_strong_escalation_scores_final_result_and_retains_preliminary_call(
     tmp_path: Path,
 ) -> None:
+    clock = MutableClock()
+
+    def advance_after_initial(call_number: int) -> None:
+        if call_number == 1:
+            clock.value = 3.0
+
     provider = FakeCalibrationProvider(
         [
             _output(
@@ -192,12 +220,14 @@ async def test_strong_escalation_scores_final_result_and_retains_preliminary_cal
                 verification_reason="DIFFICULT_CODE_SEMANTICS",
             ),
             _output("PROBE", strategy="ASSUMPTION_CHALLENGE", target_kind="CLAIM"),
-        ]
+        ],
+        after_call=advance_after_initial,
     )
     result = await evaluate_fixture(
         _fixture("two-sum-hash-assumption"),
         provider=provider,
         settings=_settings(tmp_path),
+        clock=clock,
     )
 
     assert len(provider.calls) == 2
@@ -208,11 +238,14 @@ async def test_strong_escalation_scores_final_result_and_retains_preliminary_cal
     assert result.final_strategy == "ASSUMPTION_CHALLENGE"
     assert result.actual_strategy == "ASSUMPTION_CHALLENGE"
     assert result.action_correct and result.strategy_acceptable
+    assert result.deadline_outcome == "NONE"
     assert [call.reasoning_tier for call in result.calls] == ["MEDIUM", "STRONG"]
     strong_request, strong_model, strong_effort = provider.calls[1]
     assert strong_request.capability == "STRONG_REASONING"
     assert strong_request.purpose == "live_examiner_strong_verification"
     assert strong_model == "stage4c-strong" and strong_effort == "high"
+    assert strong_request.timeout_seconds == 5.0
+    assert result.remaining_usefulness_ms_at_completion == 5000
     control = json.loads(strong_request.input_content)["trusted_runtime_control"]
     assert control == {
         "reasoning_tier": "STRONG",
@@ -264,6 +297,136 @@ async def test_unresolved_strong_probe_is_suppressed_after_one_escalation(
     assert result.final_status == "SUPPRESSED"
     assert not result.action_correct and result.strategy_acceptable is False
     assert result.candidate_facing_prompt == ""
+
+
+async def test_initial_call_timeout_is_safe_non_delivery(tmp_path: Path) -> None:
+    provider = FakeCalibrationProvider([_output("PROBE", strategy="WHY", target_kind="CLAIM")])
+
+    async def timeout_waiter(
+        awaitable: Awaitable[ProviderReasoningResult], timeout_seconds: float
+    ) -> ProviderReasoningResult:
+        assert timeout_seconds == 8.0
+        await awaitable
+        raise TimeoutError
+
+    result = await evaluate_fixture(
+        _fixture("maximum-subarray-shallow-why"),
+        provider=provider,
+        settings=_settings(tmp_path),
+        clock=MutableClock(),
+        wait_for_provider=timeout_waiter,
+    )
+
+    assert len(provider.calls) == 1
+    assert result.actual_action == "SUPPRESSED"
+    assert result.final_action is None
+    assert result.final_status == "DEADLINE_EXPIRED"
+    assert result.deadline_outcome == "INITIAL_TIMEOUT"
+    assert result.candidate_facing_prompt == ""
+    assert result.calls[0].status == "TIMED_OUT"
+
+
+async def test_insufficient_remaining_window_skips_strong_and_suppresses(
+    tmp_path: Path,
+) -> None:
+    clock = MutableClock()
+
+    def advance_after_initial(call_number: int) -> None:
+        if call_number == 1:
+            clock.value = 6.5
+
+    provider = FakeCalibrationProvider(
+        [
+            _output(
+                "PROBE",
+                strategy="WHY",
+                target_kind="CLAIM",
+                verification_required=True,
+                verification_reason="DIFFICULT_CODE_SEMANTICS",
+            )
+        ],
+        after_call=advance_after_initial,
+    )
+    result = await evaluate_fixture(
+        _fixture("maximum-subarray-shallow-why"),
+        provider=provider,
+        settings=_settings(tmp_path),
+        clock=clock,
+    )
+
+    assert len(provider.calls) == 1
+    assert not result.strong_escalation_occurred
+    assert result.actual_action == "SUPPRESSED"
+    assert result.final_status == "SUPPRESSED"
+    assert result.deadline_outcome == "INSUFFICIENT_STRONG_WINDOW"
+    assert result.remaining_usefulness_ms_at_completion == 1500
+
+
+async def test_strong_timeout_is_safely_suppressed(tmp_path: Path) -> None:
+    provider = FakeCalibrationProvider(
+        [
+            _output(
+                "PROBE",
+                strategy="WHY",
+                target_kind="CLAIM",
+                verification_required=True,
+                verification_reason="DIFFICULT_CODE_SEMANTICS",
+            ),
+            _output("PROBE", strategy="WHY", target_kind="CLAIM"),
+        ]
+    )
+    calls = 0
+
+    async def second_call_timeout(
+        awaitable: Awaitable[ProviderReasoningResult], timeout_seconds: float
+    ) -> ProviderReasoningResult:
+        nonlocal calls
+        calls += 1
+        result = await awaitable
+        if calls == 2:
+            raise TimeoutError
+        return result
+
+    result = await evaluate_fixture(
+        _fixture("maximum-subarray-shallow-why"),
+        provider=provider,
+        settings=_settings(tmp_path),
+        clock=MutableClock(),
+        wait_for_provider=second_call_timeout,
+    )
+
+    assert len(provider.calls) == 2
+    assert result.strong_escalation_occurred
+    assert result.actual_action == "SUPPRESSED"
+    assert result.final_status == "DEADLINE_EXPIRED"
+    assert result.deadline_outcome == "STRONG_TIMEOUT"
+    assert [call.status for call in result.calls] == ["COMPLETED", "TIMED_OUT"]
+
+
+async def test_safe_actions_never_escalate_only_because_verification_is_requested(
+    tmp_path: Path,
+) -> None:
+    for action in ("WAIT", "OBSERVE", "ASK"):
+        provider = FakeCalibrationProvider(
+            [
+                _output(
+                    action,
+                    target_kind="CLAIM" if action == "ASK" else "NONE",
+                    verification_required=True,
+                    verification_reason="CONSEQUENTIAL_LOW_CONFIDENCE",
+                )
+            ]
+        )
+        result = await evaluate_fixture(
+            _fixture("weak-candidate-restraint"),
+            provider=provider,
+            settings=_settings(tmp_path),
+            clock=MutableClock(),
+        )
+        assert len(provider.calls) == 1
+        assert not result.strong_escalation_occurred
+        assert result.verification_reason == "NONE"
+        assert result.actual_action == action
 
 
 async def test_calibration_runner_does_not_mutate_interview_history(
@@ -344,10 +507,18 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
         "candidate_specificity_review_required",
         "technical_rationale",
         "candidate_facing_prompt",
+        "deadline_outcome",
+        "preferred_action_correct",
+        "usefulness_deadline_seconds",
+        "elapsed_reasoning_ms",
+        "remaining_usefulness_ms_at_completion",
+        "context_json_characters",
+        "context_json_bytes",
     } <= set(result)
     calls = cast(list[dict[str, Any]], result["calls"])
     assert set(calls[0]) == {
         "reasoning_tier",
+        "status",
         "provider",
         "model",
         "provider_model_version",
@@ -359,6 +530,18 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
         "currency",
     }
     aggregate = cast(dict[str, Any], report["aggregate"])
+    metadata = cast(dict[str, Any], report["metadata"])
+    assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v2"
+    assert metadata["runner_version"] == "stage4c-live-runner.v2"
+    assert metadata["policy_key"] == "live_examiner"
+    assert metadata["policy_version"] == "v6"
+    assert metadata["context_projection_version"] == "v1"
+    assert metadata["fixture_count"] == 2
+    assert len(metadata["canonical_corpus_sha256"]) == 64
+    assert metadata["standard_model"] == "stage4c-standard"
+    assert metadata["strong_model"] == "stage4c-strong"
+    assert metadata["usefulness_deadline_seconds"] == 8.0
+    assert metadata["git_revision"]
     assert aggregate["initial_reasoning_tiers"] == {
         "FAST": {"count": 1, "rate": 0.5},
         "MEDIUM": {"count": 1, "rate": 0.5},
@@ -377,3 +560,5 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
     }
     assert aggregate["total_estimated_cost"] == "0.02"
     assert aggregate["currency"] == "USD"
+    assert aggregate["context_size"]["average_characters"] > 0
+    assert aggregate["context_size"]["p95_bytes"] > 0

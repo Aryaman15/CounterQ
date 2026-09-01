@@ -11,7 +11,7 @@
     "remaining_probe_budget": 2,
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
-    "candidate_statement": "I reset whenever the running sum is negative because that is better.",
+    "candidate_statement": "I keep the subarray non-empty with current = max(nums[i], current + nums[i]), restarting at the current value when extending is worse. I use that rule because it is better.",
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,

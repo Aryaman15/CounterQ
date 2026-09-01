@@ -12,7 +12,7 @@
     "source_observation_type": "CODE_MEANINGFULLY_CHANGED",
     "recent_transcript": [],
     "candidate_statement": null,
-    "code_snapshot": "sort(nums.begin(), nums.end()); return {left, right};",
+    "code_snapshot": "sort(nums.begin(), nums.end());\nint left = 0, right = (int)nums.size() - 1;\nwhile (left < right) {\n    int sum = nums[left] + nums[right];\n    if (sum == target) return {left, right};\n    if (sum < target) ++left;\n    else --right;\n}\nreturn {};",
     "code_diff": null,
     "execution_context": null,
     "recent_claims": [],

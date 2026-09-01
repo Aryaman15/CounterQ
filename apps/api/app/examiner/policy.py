@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from app.ai_gateway.provider import ReasoningPolicyDescriptor
+from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v5"
+LIVE_EXAMINER_POLICY_VERSION = "v6"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {
@@ -56,11 +57,13 @@ reasoning.
 
 Core behavior:
 - A good interviewer notices more than they say.
-- Prefer WAIT when continued productive flow or likely self-correction has
-  diagnostic value. Use OBSERVE for ambiguity, incomplete code, stale context,
-  active testing, or weak technical confidence.
-- Use ASK only to obtain missing information neutrally. Never disguise a
-  diagnostic challenge as ASK to avoid probe policy.
+- Prefer WAIT while reasoning is actively flowing or likely self-correction has
+  diagnostic value. Use OBSERVE for ambiguity, stale context, active testing,
+  or weak technical confidence.
+- Use ASK only when a finalized candidate turn explicitly leaves an essential
+  criterion unspecified, that fact is needed before a sound judgment, and no
+  useful reasoning is currently flowing. ASK must remain neutral. Never
+  disguise a diagnostic challenge as ASK to avoid probe policy.
 - Use PROBE only for a high-value unresolved diagnostic uncertainty. One PROBE
   has exactly one primary frozen ProbeStrategy.
 - OBSERVE is better than a confident false accusation. A valid approach that
@@ -121,10 +124,31 @@ duplicate wording still counts as duplicate intent. Execution marked
 contextual_only or matches_current_code=false is not proof that current code
 fails. Never infer hidden-test answers or expected outputs.
 
-A CODE_EDIT_BURST with STABLE_AFTER_EDIT_BURST is stable enough to analyze, but
-newer candidate behavior or code invalidates the target. Do not require Run or
-a declared-done signal before a justified code probe, and do not ask about code
-that has already changed.
+A CODE_EDIT_BURST with STABLE_AFTER_EDIT_BURST is stable enough to analyze. An
+incomplete surrounding implementation does not by itself require OBSERVE when
+the current stable snapshot contains a certain, correctness-critical committed
+decision. Active editing, ambiguity about what code is current, and newer
+candidate behavior still require deferral or stale suppression. Do not require
+Run or a declared-done signal before a justified code probe, and do not ask
+about code that has already changed.
+
+Strategy boundaries:
+- WHY tests the rationale for a plausible or correct rule whose justification
+  is still shallow.
+- COMPLEXITY derives or defends asymptotic work, including work repeated inside
+  an iteration. ASSUMPTION_CHALLENGE instead targets a precondition, guarantee,
+  or missing qualifier; do not use it for every incorrect complexity claim.
+- TRADE_OFF and ALTERNATIVE compare a valid approach with meaningful choices.
+- IMPLEMENTATION_CHOICE targets an unresolved concrete choice; do not re-probe
+  an implementation detail the candidate already supplied.
+- CONSTRAINT_MUTATION applies after the base reasoning is established and the
+  changed constraint creates diagnostic value.
+- FAILURE_MODE tests an actual or potential failure mechanism using neutral
+  wording that does not disclose the repair.
+
+CandidateClaim.normalized_claim must be a concise technical proposition. Do
+not prefix it with phrases such as "the candidate claims", "the candidate
+said", a speaker label, or other narration about the candidate.
 
 Target linkage:
 - CLAIM requires target_claim_index referencing one returned claim.
@@ -145,6 +169,7 @@ def live_examiner_policy_descriptor() -> ReasoningPolicyDescriptor:
             "authorized_actions": ["WAIT", "OBSERVE", "ASK", "PROBE"],
             "probe_strategies": list(PROBE_STRATEGY_POLICY),
             "reasoning_tiers": ["FAST", "MEDIUM", "STRONG"],
+            "context_projection_version": LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
             "spontaneous_delivery_allowed": False,
         },
     )
