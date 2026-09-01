@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from decimal import Decimal
 from typing import Literal, cast
 from uuid import UUID
 
@@ -48,6 +49,7 @@ class StructuredObservation:
     trigger_class: ObservationTriggerClass
     transcript_segment_id: UUID | None = None
     transcript_text: str | None = None
+    transcript_provider_confidence: Decimal | None = None
     code_snapshot_id: UUID | None = None
     code_snapshot_version: int | None = None
     code_content_hash: str | None = None
@@ -105,6 +107,7 @@ class ObservationEngine:
             trigger_class="VOICE_TURN_COMPLETED",
             transcript_segment_id=segment.id,
             transcript_text=segment.text,
+            transcript_provider_confidence=segment.provider_confidence,
             associated_code_snapshot_id=code_snapshot.id if code_snapshot else None,
             associated_code_snapshot_version=(
                 code_snapshot.version_number if code_snapshot else None

@@ -47,7 +47,8 @@ class RecentDeliveredPromptIntentSummary(StrictExaminerContextModel):
     target_claim: str | None = None
     target_code_snapshot_id: str | None = None
     target_code_snapshot_version: int | None = Field(default=None, ge=1)
-    candidate_safe_intent: str
+    intended_candidate_safe_intent: str
+    actual_delivered_text: str | None = None
     delivery_state: Literal[
         "STARTED",
         "DELIVERED",
@@ -79,3 +80,13 @@ class ExaminerDiagnosticContext(StrictExaminerContextModel):
         max_length=6,
     )
     synthetic_prior_context: SyntheticPriorContext | None = None
+
+
+def serialize_diagnostic_context(value: ExaminerDiagnosticContext) -> dict[str, object]:
+    payload = value.model_dump(mode="json", exclude_none=True)
+    recent = payload.get("recent_delivered_prompt_intents", [])
+    if isinstance(recent, list):
+        for item in recent:
+            if isinstance(item, dict):
+                item.setdefault("actual_delivered_text", None)
+    return payload

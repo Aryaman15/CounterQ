@@ -25,7 +25,8 @@
         "target_claim": "hash lookup is guaranteed constant time",
         "target_code_snapshot_id": null,
         "target_code_snapshot_version": null,
-        "candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+        "intended_candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+        "actual_delivered_text": "Is hash lookup guaranteed constant time?",
         "delivery_state": "DELIVERED"
       }
     ],

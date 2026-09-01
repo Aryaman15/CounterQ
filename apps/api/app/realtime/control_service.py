@@ -5,6 +5,7 @@ import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import cast
 from uuid import UUID
 
@@ -190,6 +191,12 @@ class RealtimeControlService:
                 segment.text != message.transcript
                 or segment.provider_segment_id != provider_segment_id
                 or segment.speaker != "CANDIDATE"
+                or (
+                    float(segment.provider_confidence)
+                    if segment.provider_confidence is not None
+                    else None
+                )
+                != message.provider_confidence
             ):
                 raise IdempotencyConflict(
                     "Candidate transcript idempotency key conflicts with existing transcript"
@@ -213,6 +220,11 @@ class RealtimeControlService:
             text=message.transcript,
             interview_stage=interview.current_stage,
             interview_state_version=interview.state_version,
+            provider_confidence=(
+                Decimal(str(message.provider_confidence))
+                if message.provider_confidence is not None
+                else None
+            ),
             provider_segment_id=provider_segment_id,
         )
         return TranscriptPersistenceResult(

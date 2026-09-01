@@ -140,7 +140,8 @@ def test_transcript_and_code_context_match_production_nested_shapes() -> None:
     assert transcript_source["trigger_class"] == "VOICE_TURN_COMPLETED"
     assert set(cast(dict[str, object], transcript_source["transcript"])) == {
         "transcript_segment_id",
-        "text",
+            "text",
+            "provider_confidence",
         "associated_code_snapshot_id",
         "associated_code_snapshot_version",
     }
@@ -195,18 +196,15 @@ def test_fixture_specific_diagnostic_context_survives_serialization() -> None:
             "target_concept_id": "hash-lookup-guarantee",
             "target_claim_type": "COMPLEXITY",
             "target_claim": "hash lookup is guaranteed constant time",
-            "candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+            "intended_candidate_safe_intent": "Is hash lookup guaranteed constant time?",
+            "actual_delivered_text": "Is hash lookup guaranteed constant time?",
             "delivery_state": "DELIVERED",
         }
     ]
 
     ambiguity = json.loads(model_input_json(fixture("transcription-ambiguity-observe").input))
-    assert ambiguity["diagnostic_context"]["recent_claims"][0] == {
-        "normalized_claim": "heap maybe linear?",
-        "claim_type": "COMPLEXITY",
-        "extraction_confidence": 0.31,
-        "source_event_watermark": 1,
-    }
+    assert ambiguity["diagnostic_context"]["recent_claims"] == []
+    assert ambiguity["source_observation"]["transcript"]["provider_confidence"] == 0.31
 
     transcript_input = fixture("transcription-ambiguity-observe").input.model_copy(
         update={"recent_transcript": ["earlier ambiguous utterance"]}

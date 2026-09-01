@@ -580,6 +580,7 @@ async def test_openai_adapter_targets_responses_api_and_structured_output(
 
     assert client.url == OPENAI_RESPONSES_URL
     assert client.json is not None
+    assert client.json["input"] == "Fixed smoke input"
     assert client.json["reasoning"] == {"effort": "medium"}
     assert client.json["text"]["format"]["type"] == "json_schema"
     assert client.json["text"]["format"]["strict"] is True

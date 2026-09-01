@@ -347,6 +347,7 @@ async def add_transcript(
     transcript: str = "I'm using an unordered map because lookup is always guaranteed O(1).",
     sequence: int = 1,
     now: datetime | None = None,
+    provider_confidence: float | None = None,
 ) -> Any:
     occurred_at = now or datetime.now(UTC)
     async with maker() as session:
@@ -361,6 +362,7 @@ async def add_transcript(
                     type="candidate_transcript_finalized",
                     provider_item_id=f"candidate-item-{sequence}",
                     transcript=transcript,
+                    provider_confidence=provider_confidence,
                     ended_at=occurred_at,
                 ),
             )

@@ -13,6 +13,7 @@ from app.examiner.context_contract import (
     ExecutionContextSummary,
     RecentClaimSummary,
     RecentDeliveredPromptIntentSummary,
+    serialize_diagnostic_context,
 )
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.execution.models import ExecutionRun
@@ -183,7 +184,7 @@ class ExaminerContextBuilder:
             source_observation=_observation_payload(observation, associated_code),
             source_freshness=source_freshness,
             recent_history=history,
-            diagnostic_context=diagnostic_context.model_dump(mode="json", exclude_none=True),
+            diagnostic_context=serialize_diagnostic_context(diagnostic_context),
         )
         return ExaminerContext(observation=observation, context_json=context_json)
 
@@ -342,6 +343,7 @@ class ExaminerContextBuilder:
                         CandidateClaim,
                         ExaminerDecision,
                         CodeSnapshot,
+                        TranscriptSegment,
                     )
                     .join(
                         InterviewerPromptDelivery,
@@ -358,6 +360,11 @@ class ExaminerContextBuilder:
                     .outerjoin(
                         CodeSnapshot,
                         ExaminerDecision.target_code_snapshot_id == CodeSnapshot.id,
+                    )
+                    .outerjoin(
+                        TranscriptSegment,
+                        InterviewerPromptDelivery.actual_transcript_segment_id
+                        == TranscriptSegment.id,
                     )
                     .where(InterviewerPrompt.interview_session_id == session_id)
                     .where(
@@ -384,10 +391,13 @@ class ExaminerContextBuilder:
                 ),
                 target_code_snapshot_id=(str(snapshot.id) if snapshot else None),
                 target_code_snapshot_version=(snapshot.version_number if snapshot else None),
-                candidate_safe_intent=_bounded_text(prompt.intent, 500),
+                intended_candidate_safe_intent=_bounded_text(prompt.intent, 500),
+                actual_delivered_text=(
+                    _bounded_text(actual_segment.text, 500) if actual_segment else None
+                ),
                 delivery_state=cast(str, delivery.delivery_state),
             )
-            for prompt, delivery, claim, _decision, snapshot in reversed(rows)
+            for prompt, delivery, claim, _decision, snapshot, actual_segment in reversed(rows)
         ]
 
     async def _execution_context(
@@ -434,6 +444,11 @@ def _observation_payload(
         transcript = {
             "transcript_segment_id": str(observation.transcript_segment_id),
             "text": observation.transcript_text,
+            "provider_confidence": (
+                float(observation.transcript_provider_confidence)
+                if observation.transcript_provider_confidence is not None
+                else None
+            ),
             "associated_code_snapshot_id": (
                 str(observation.associated_code_snapshot_id)
                 if observation.associated_code_snapshot_id

@@ -13,7 +13,10 @@ from app.examiner.context import (
     serialize_source_freshness,
     serialize_source_observation,
 )
-from app.examiner.context_contract import ExaminerDiagnosticContext
+from app.examiner.context_contract import (
+    ExaminerDiagnosticContext,
+    serialize_diagnostic_context,
+)
 from app.interviews.prompt_authorization import compose_candidate_safe_prompt
 
 FIXTURE_DIRECTORY = Path(__file__).resolve().parents[3] / "evals" / "examiner"
@@ -34,6 +37,7 @@ def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
         transcript = {
             "transcript_segment_id": "evaluation-transcript",
             "text": value.candidate_statement or "\n".join(value.recent_transcript),
+            "provider_confidence": value.candidate_statement_provider_confidence,
             "associated_code_snapshot_id": None,
             "associated_code_snapshot_version": None,
         }
@@ -117,7 +121,7 @@ def evaluation_context_json(value: EvaluationInput) -> dict[str, object]:
                 "payload_keys": ["interview_stage"],
             }
         ],
-        diagnostic_context=diagnostic_context.model_dump(mode="json", exclude_none=True),
+        diagnostic_context=serialize_diagnostic_context(diagnostic_context),
     )
 
 

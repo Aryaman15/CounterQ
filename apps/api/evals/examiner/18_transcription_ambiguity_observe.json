@@ -12,17 +12,11 @@
     "source_observation_type": "CANDIDATE_TRANSCRIPT_FINALIZED",
     "recent_transcript": [],
     "candidate_statement": "heap maybe linear?",
+    "candidate_statement_provider_confidence": 0.31,
     "code_snapshot": null,
     "code_diff": null,
     "execution_context": null,
-    "recent_claims": [
-      {
-        "normalized_claim": "heap maybe linear?",
-        "claim_type": "COMPLEXITY",
-        "extraction_confidence": 0.31,
-        "source_event_watermark": 1
-      }
-    ],
+    "recent_claims": [],
     "recent_delivered_prompt_intents": [],
     "problem_context": {
       "problem_version_id": "evaluation-problem-top-k-frequent-elements-v2",

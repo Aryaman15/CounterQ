@@ -66,6 +66,11 @@ class EvaluationInput(BaseModel):
     source_observation_type: SourceObservationType
     recent_transcript: list[str] = Field(default_factory=list)
     candidate_statement: str | None = None
+    candidate_statement_provider_confidence: float | None = Field(
+        default=None,
+        ge=0,
+        le=1,
+    )
     code_snapshot: str | None = None
     code_diff: str | None = None
     execution_context: ExecutionContextSummary | None = None

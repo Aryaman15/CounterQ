@@ -117,6 +117,7 @@ class CandidateTranscriptFinalizedMessage(ClientMessageBase):
     provider_item_id: str = Field(min_length=1, max_length=256)
     content_index: int | None = Field(default=None, ge=0)
     transcript: str = Field(min_length=1)
+    provider_confidence: float | None = Field(default=None, ge=0, le=1)
     started_at: datetime | None = None
     ended_at: datetime | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)

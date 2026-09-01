@@ -37,9 +37,6 @@ CONSEQUENTIAL_CLAIM_CHALLENGE_STRATEGIES = frozenset(
         "FAILURE_MODE",
     }
 )
-CANDIDATE_VISIBLE_DELIVERY_STATES = frozenset(
-    {"STARTED", "DELIVERED", "PARTIALLY_DELIVERED", "INTERRUPTED"}
-)
 MIN_REMAINING_PROMPT_SECONDS = 8
 PROBE_ALLOWED_STAGES = {
     "PROBLEM_UNDERSTANDING",
@@ -415,6 +412,10 @@ class PromptAuthorizationService:
         )
         if newer_candidate_event is not None:
             return ("STALE", "Newer candidate behavior arrived after prompt authorization.")
+        if decision.action == "PROBE":
+            duplicate_result = await self._duplicate_probe_result(decision)
+            if duplicate_result is not None:
+                return duplicate_result
         return None
 
     async def _probe_budget_result(self, session_id: UUID) -> tuple[str, str] | None:
@@ -472,11 +473,7 @@ class PromptAuthorizationService:
                 .where(InterviewerPrompt.interview_session_id == decision.interview_session_id)
                 .where(InterviewerPrompt.kind == "PROBE")
                 .where(InterviewerPrompt.probe_strategy == decision.proposed_probe_strategy)
-                .where(
-                    InterviewerPromptDelivery.delivery_state.in_(
-                        CANDIDATE_VISIBLE_DELIVERY_STATES
-                    )
-                )
+                .where(InterviewerPromptDelivery.delivery_state == "DELIVERED")
             )
         ).all()
         for _prompt, previous_decision, previous_claim in rows:

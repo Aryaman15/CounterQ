@@ -145,6 +145,82 @@ def get_live_examiner_task_registry() -> LiveExaminerTaskRegistry:
     return _DEFAULT_REGISTRY
 
 
+def _reasoning_input_payload(
+    *,
+    context: ExaminerContext,
+    tier: ExaminerReasoningTier,
+    required_verification_reason: str | None,
+    preliminary_analysis: ExaminerAnalysisResult | None,
+) -> dict[str, object]:
+    payload = dict(context.context_json)
+    runtime_control: dict[str, object] = {
+        "reasoning_tier": tier,
+        "verification_pass": "NONE",
+        "this_is_single_verification_pass": False,
+    }
+    if tier == "STRONG":
+        if required_verification_reason is None or preliminary_analysis is None:
+            raise LiveExaminerError(
+                "Strong verification requires a preliminary result and verification reason"
+            )
+        preliminary = preliminary_analysis.decision
+        runtime_control.update(
+            {
+                "verification_pass": "ONE_AND_ONLY",
+                "this_is_single_verification_pass": True,
+                "verification_reason": required_verification_reason,
+                "preliminary_recommendation": {
+                    "action": preliminary.action,
+                    "target": _preliminary_target(context, preliminary_analysis),
+                    "strategy": preliminary.proposed_probe_strategy,
+                },
+                "verification_requirements": {
+                    "resolve_uncertainty_independently_using_original_context": True,
+                    "do_not_escalate_again": True,
+                    "if_unresolved": {
+                        "prefer_safe_neutral_action": ["WAIT", "OBSERVE"],
+                        "do_not_make_consequential_accusation": True,
+                    },
+                },
+            }
+        )
+    payload["trusted_runtime_control"] = runtime_control
+    return payload
+
+
+def _preliminary_target(
+    context: ExaminerContext,
+    analysis: ExaminerAnalysisResult,
+) -> dict[str, object]:
+    decision = analysis.decision
+    target: dict[str, object] = {"kind": decision.target_kind}
+    if decision.target_kind == "CLAIM" and decision.target_claim_index is not None:
+        claim = analysis.claims[decision.target_claim_index]
+        target.update(
+            {
+                "claim_type": claim.claim_type,
+                "normalized_claim": claim.normalized_claim,
+            }
+        )
+    elif decision.target_kind == "CODE_SNAPSHOT":
+        snapshot_id = (
+            context.observation.code_snapshot_id
+            or context.observation.associated_code_snapshot_id
+        )
+        target.update(
+            {
+                "code_snapshot_id": str(snapshot_id) if snapshot_id is not None else None,
+                "code_snapshot_version": (
+                    context.observation.code_snapshot_version
+                    or context.observation.associated_code_snapshot_version
+                ),
+            }
+        )
+    elif decision.target_kind == "EVENT":
+        target["source_event_id"] = str(context.observation.source_event_id)
+    return target
+
+
 class LiveExaminerCoordinator:
     def __init__(
         self,
@@ -287,6 +363,7 @@ class LiveExaminerCoordinator:
                     tier="STRONG",
                     preliminary_ai_invocation_id=preliminary_invocation_id,
                     required_verification_reason=verification_reason(result.parsed),
+                    preliminary_analysis=result.parsed,
                 )
             except ReasoningBudgetExceeded:
                 return self._unpersisted_result(
@@ -360,6 +437,7 @@ class LiveExaminerCoordinator:
         tier: ExaminerReasoningTier,
         preliminary_ai_invocation_id: UUID | None = None,
         required_verification_reason: str | None = None,
+        preliminary_analysis: ExaminerAnalysisResult | None = None,
     ) -> AIGatewayResult[ExaminerAnalysisResult]:
         remaining = max(0.1, (deadline_at - self._clock()).total_seconds())
         metadata: dict[str, object] = {
@@ -371,6 +449,12 @@ class LiveExaminerCoordinator:
             metadata["preliminary_ai_invocation_id"] = str(preliminary_ai_invocation_id)
         if required_verification_reason is not None:
             metadata["required_verification_reason"] = required_verification_reason
+        input_payload = _reasoning_input_payload(
+            context=context,
+            tier=tier,
+            required_verification_reason=required_verification_reason,
+            preliminary_analysis=preliminary_analysis,
+        )
         return await gateway.reason_structured(
             interview_session_id=context.observation.interview_session_id,
             capability="STRONG_REASONING" if tier == "STRONG" else "STANDARD_REASONING",
@@ -379,7 +463,7 @@ class LiveExaminerCoordinator:
             ),
             policy=live_examiner_policy_descriptor(),
             instructions=LIVE_EXAMINER_INSTRUCTIONS,
-            input_content=json.dumps(context.context_json, sort_keys=True, default=str),
+            input_content=json.dumps(input_payload, sort_keys=True, default=str),
             output_model=ExaminerAnalysisResult,
             timeout_seconds=remaining,
             usefulness_deadline=deadline_at,

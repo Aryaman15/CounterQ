@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -47,6 +48,7 @@ from app.examiner.policy import (
 )
 from app.examiner.repository import ExaminerRepository
 from app.execution.models import ExecutionRun
+from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
     InterviewerPrompt,
     InterviewerPromptDelivery,
@@ -55,7 +57,8 @@ from app.interviews.models import (
 )
 from app.interviews.prompt_authorization import PromptAuthorizationService
 from app.interviews.repository import InterviewRepository
-from app.observation.models import CodeSnapshot
+from app.observation.models import CodeSnapshot, TranscriptSegment
+from app.observation.repository import ObservationRepository
 
 
 class SequencedReasoningProvider:
@@ -122,6 +125,163 @@ async def _coordinator(
         provider=provider,
         registry=LiveExaminerTaskRegistry(),
     )
+
+
+async def test_transcript_provider_confidence_reaches_durable_and_model_context(
+    tmp_path: Path,
+) -> None:
+    for confidence in (0.31, None):
+        async with dev_context() as (maker, dev):
+            source = await add_transcript(
+                maker,
+                dev.interview_session.id,
+                sequence=1,
+                provider_confidence=confidence,
+            )
+            provider = SequencedReasoningProvider([wait_output()])
+            await (await _coordinator(tmp_path, maker, provider)).analyze_latest(
+                dev.interview_session.id
+            )
+
+            model_input = json.loads(provider.calls[0][0].input_content)
+            assert model_input["source_observation"]["transcript"][
+                "provider_confidence"
+            ] == confidence
+            async with maker() as session:
+                segment = await session.get(TranscriptSegment, source.transcript_segment_id)
+            assert segment is not None
+            assert (
+                float(segment.provider_confidence)
+                if segment.provider_confidence is not None
+                else None
+            ) == confidence
+
+
+async def _add_counterq_transcript_segment(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    text: str,
+    delivery_state: str,
+    occurred_at: datetime,
+) -> TranscriptSegment:
+    interview = await session.get(InterviewSession, session_id, with_for_update=True)
+    assert interview is not None
+    interview.last_server_sequence += 1
+    event = await InterviewRepository(session).add_event(
+        session_id=session_id,
+        user_id=interview.user_id,
+        event_type="COUNTERQ_UTTERANCE_DELIVERED",
+        source="COUNTERQ_VOICE",
+        occurred_at=occurred_at,
+        received_at=occurred_at,
+        server_sequence=interview.last_server_sequence,
+        interview_state_version=interview.state_version,
+        schema_version="counterq.delivery.completed.v1",
+    )
+    return await ObservationRepository(session).add_transcript_segment(
+        session_id=session_id,
+        event_id=event.id,
+        speaker="COUNTERQ",
+        sequence=event.server_sequence,
+        started_at=occurred_at,
+        ended_at=occurred_at,
+        text=text,
+        interview_stage=interview.current_stage,
+        interview_state_version=interview.state_version,
+        delivery_state=delivery_state,
+    )
+
+
+async def test_recent_prompt_history_separates_intended_from_actual_delivery_truth() -> None:
+    async with dev_context() as (maker, dev):
+        session_id = dev.interview_session.id
+        base = datetime.now(UTC) - timedelta(seconds=20)
+        async with maker() as session:
+            async with session.begin():
+                full_segment = await _add_counterq_transcript_segment(
+                    session,
+                    session_id=session_id,
+                    text="Fully delivered wording.",
+                    delivery_state="DELIVERED",
+                    occurred_at=base,
+                )
+                partial_segment = await _add_counterq_transcript_segment(
+                    session,
+                    session_id=session_id,
+                    text="Only the audible prefix",
+                    delivery_state="PARTIALLY_DELIVERED",
+                    occurred_at=base + timedelta(seconds=1),
+                )
+                interactions = InterviewInteractionRepository(session)
+                cases = [
+                    ("Full intended wording with remainder.", "DELIVERED", full_segment.id),
+                    (
+                        "Partial intended wording with remainder.",
+                        "PARTIALLY_DELIVERED",
+                        partial_segment.id,
+                    ),
+                    ("Started intended wording.", "STARTED", None),
+                    ("Interrupted intended wording.", "INTERRUPTED", None),
+                ]
+                for offset, (intent, state, transcript_id) in enumerate(cases, start=2):
+                    prompt = await interactions.add_prompt(
+                        interview_session_id=session_id,
+                        origin="SYSTEM",
+                        kind="INSTRUCTION",
+                        intent=intent,
+                        status=(
+                            "DELIVERED"
+                            if state == "DELIVERED"
+                            else "AUTHORIZED"
+                            if state == "STARTED"
+                            else "INTERRUPTED"
+                        ),
+                        authorized_at=base,
+                    )
+                    await interactions.add_delivery(
+                        interview_session_id=session_id,
+                        interviewer_prompt_id=prompt.id,
+                        delivery_attempt=1,
+                        intended_text=intent,
+                        actual_transcript_segment_id=transcript_id,
+                        delivery_state=state,
+                        started_at=base + timedelta(seconds=offset),
+                        completed_at=(
+                            base + timedelta(seconds=offset) if state == "DELIVERED" else None
+                        ),
+                        interrupted_at=(
+                            base + timedelta(seconds=offset)
+                            if state in {"PARTIALLY_DELIVERED", "INTERRUPTED"}
+                            else None
+                        ),
+                    )
+
+        source = await add_transcript(
+            maker,
+            session_id,
+            transcript="Current candidate statement.",
+            sequence=1,
+        )
+        async with maker() as session:
+            context = await ExaminerContextBuilder(session).build_for_event(source.event_id)
+        diagnostic = context.context_json["diagnostic_context"]
+        assert isinstance(diagnostic, dict)
+        history = diagnostic["recent_delivered_prompt_intents"]
+        assert isinstance(history, list)
+        by_state = {item["delivery_state"]: item for item in history}
+        assert by_state["DELIVERED"]["actual_delivered_text"] == "Fully delivered wording."
+        assert by_state["DELIVERED"]["intended_candidate_safe_intent"] == (
+            "Full intended wording with remainder."
+        )
+        assert by_state["PARTIALLY_DELIVERED"]["actual_delivered_text"] == (
+            "Only the audible prefix"
+        )
+        assert by_state["PARTIALLY_DELIVERED"]["intended_candidate_safe_intent"] != (
+            by_state["PARTIALLY_DELIVERED"]["actual_delivered_text"]
+        )
+        assert by_state["STARTED"]["actual_delivered_text"] is None
+        assert by_state["INTERRUPTED"]["actual_delivered_text"] is None
 
 
 async def test_production_context_budget_claim_delivery_bounds_and_watermark(
@@ -390,19 +550,53 @@ async def test_duplicate_guard_uses_delivery_truth_and_allows_distinct_strategy(
 
     prompt = await db_session.get(InterviewerPrompt, first_gate.prompt_id)
     assert prompt is not None
-    prompt.status = "DELIVERED"
-    db_session.add(
-        InterviewerPromptDelivery(
-            interview_session_id=first.interview_session_id,
-            interviewer_prompt_id=prompt.id,
-            delivery_attempt=1,
-            intended_text=prompt.intent,
-            delivery_state="DELIVERED",
-            started_at=datetime.now(UTC),
-            completed_at=datetime.now(UTC),
-        )
+    partial_segment = await _add_counterq_transcript_segment(
+        db_session,
+        session_id=first.interview_session_id,
+        text="Why is",
+        delivery_state="PARTIALLY_DELIVERED",
+        occurred_at=datetime.now(UTC),
     )
+    prompt.status = "INTERRUPTED"
+    delivery = InterviewerPromptDelivery(
+        interview_session_id=first.interview_session_id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=1,
+        intended_text=prompt.intent,
+        actual_transcript_segment_id=partial_segment.id,
+        delivery_state="PARTIALLY_DELIVERED",
+        started_at=datetime.now(UTC),
+        interrupted_at=datetime.now(UTC),
+    )
+    db_session.add(delivery)
     await db_session.flush()
+
+    after_partial = await _clone_decision(
+        db_session,
+        first,
+        strategy="ASSUMPTION_CHALLENGE",
+    )
+    after_partial_gate = await PromptAuthorizationService(
+        db_session
+    ).evaluate_examiner_decision(
+        session_id=first.interview_session_id,
+        decision_id=after_partial.id,
+    )
+    assert after_partial_gate.disposition == "AUTHORIZED"
+
+    delivery.delivery_state = "DELIVERED"
+    delivery.completed_at = datetime.now(UTC)
+    delivery.interrupted_at = None
+    prompt.status = "DELIVERED"
+    await db_session.flush()
+
+    assert undelivered_gate.prompt_id is not None
+    raced_permit = await PromptAuthorizationService(db_session).permit_delivery(
+        session_id=first.interview_session_id,
+        prompt_id=undelivered_gate.prompt_id,
+    )
+    assert raced_permit.status == "REJECTED"
+    assert "same structured target and strategy" in raced_permit.reason
 
     duplicate = await _clone_decision(
         db_session,
@@ -469,6 +663,12 @@ async def test_fast_medium_and_single_strong_escalation_preserve_provenance(
         result = await (await _coordinator(tmp_path, maker, fast)).analyze_latest(session_id)
         assert result.reasoning_tier == "FAST"
         assert fast.calls[0][2] == "low"
+        fast_input = json.loads(fast.calls[0][0].input_content)
+        assert fast_input["trusted_runtime_control"] == {
+            "reasoning_tier": "FAST",
+            "verification_pass": "NONE",
+            "this_is_single_verification_pass": False,
+        }
 
     async with dev_context() as (maker, dev):
         session_id = dev.interview_session.id
@@ -490,6 +690,12 @@ async def test_fast_medium_and_single_strong_escalation_preserve_provenance(
         result = await (await _coordinator(tmp_path, maker, medium)).analyze_latest(session_id)
         assert result.reasoning_tier == "MEDIUM"
         assert medium.calls[0][2] == "medium"
+        medium_input = json.loads(medium.calls[0][0].input_content)
+        assert medium_input["trusted_runtime_control"] == {
+            "reasoning_tier": "MEDIUM",
+            "verification_pass": "NONE",
+            "this_is_single_verification_pass": False,
+        }
 
     async with dev_context() as (maker, dev):
         session_id = dev.interview_session.id
@@ -505,6 +711,33 @@ async def test_fast_medium_and_single_strong_escalation_preserve_provenance(
         assert strong.calls[0][0].capability == "STANDARD_REASONING"
         assert strong.calls[1][0].capability == "STRONG_REASONING"
         assert strong.calls[1][2] == "high"
+        preliminary_input = json.loads(strong.calls[0][0].input_content)
+        verification_input = json.loads(strong.calls[1][0].input_content)
+        assert verification_input["source_observation"] == preliminary_input[
+            "source_observation"
+        ]
+        control = verification_input["trusted_runtime_control"]
+        assert control["reasoning_tier"] == "STRONG"
+        assert control["verification_pass"] == "ONE_AND_ONLY"
+        assert control["this_is_single_verification_pass"] is True
+        assert control["verification_reason"] == "DIFFICULT_CODE_SEMANTICS"
+        assert control["preliminary_recommendation"] == {
+            "action": "PROBE",
+            "target": {
+                "kind": "CLAIM",
+                "claim_type": "COMPLEXITY",
+                "normalized_claim": "preliminary unverified claim",
+            },
+            "strategy": "ASSUMPTION_CHALLENGE",
+        }
+        assert control["verification_requirements"] == {
+            "resolve_uncertainty_independently_using_original_context": True,
+            "do_not_escalate_again": True,
+            "if_unresolved": {
+                "prefer_safe_neutral_action": ["WAIT", "OBSERVE"],
+                "do_not_make_consequential_accusation": True,
+            },
+        }
 
         async with maker() as session:
             invocations = list(
