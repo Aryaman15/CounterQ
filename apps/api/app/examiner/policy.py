@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from app.ai_gateway.provider import ReasoningPolicyDescriptor
+from app.examiner.analysis_schema import EXAMINER_OUTPUT_CONTRACT_VERSION
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v7"
+LIVE_EXAMINER_POLICY_VERSION = "v8"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {
@@ -35,6 +36,8 @@ CANDIDATE_LEVEL_DEPTH_POLICY: dict[str, tuple[str, ...]] = {
         "approach defense",
         "complexity reasoning",
         "implementation choices",
+        "meaningful trade-offs",
+        "legitimate alternate approaches",
         "assumptions",
         "meaningful edge cases",
     ),
@@ -68,6 +71,16 @@ Core behavior:
   the correctness argument is genuinely missing, a rule is only named without
   meaningful justification, code contradicts the explanation, or another
   unresolved correctness-critical gap exists.
+- A satisfied diagnostic goal closes that same evidence goal; it does not close
+  every materially different diagnostic frontier. After the base goal is
+  clearly established, you may choose at most one different high-value frontier
+  only when candidate level and current stage support the depth, a reviewed
+  Interview Pack opportunity or follow-up supports it, probe budget remains,
+  time pressure is acceptable, it is not a semantic duplicate, it will not
+  interrupt productive reasoning, and it would create genuinely new evidence.
+  Examples include base correctness to trade-off, base approach to a legitimate
+  alternative, base invariant to constraint mutation, and a complete strong
+  base defense to transfer. Do not probe merely because budget remains.
 - For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK when the candidate
   explicitly acknowledges an essential missing piece, that piece is required
   before technical judgment, the turn has ended, and there is no semantic
@@ -110,7 +123,14 @@ exercise strategy diversity.
 Candidate-level depth policy:
 {CANDIDATE_LEVEL_DEPTH_POLICY}
 Candidate level changes depth, not frequency. Strong candidates should receive
-fewer, deeper questions rather than more questions.
+fewer, deeper questions rather than more questions. INTERN depth stays focused
+on correctness, basic invariants, basic complexity, and essential edges.
+NEW_GRAD depth may move from established base correctness into meaningful
+complexity defense, implementation choices, trade-offs, legitimate alternatives,
+assumptions, or edges. EARLY_CAREER depth may move from a complete strong base
+defense into trade-offs, alternatives, constraint mutation, transfer, or
+failure-mode reasoning. Weak or incomplete base reasoning must not jump randomly
+to trade-off, transfer, or other enrichment.
 
 Populate every target_ranking factor with LOW/MEDIUM/HIGH. HIGH freshness means
 the target is current. HIGH duplicate_evidence, self_correction_likelihood,
@@ -168,6 +188,13 @@ Target linkage:
 - CODE_SNAPSHOT, EVENT, and NONE require target_claim_index=null.
 - WAIT/OBSERVE normally use NONE unless retaining a non-visible target is useful
   for internal diagnostics.
+- When the primary diagnostic uncertainty or failure is directly visible in the
+  exact current stable code and no actual verbal proposition is the better
+  target, use CODE_SNAPSHOT. Do not synthesize a CandidateClaim merely to turn a
+  code diagnostic into a CLAIM target. An actual candidate verbal proposition
+  remains CLAIM-eligible; when code contradicts it, choose CLAIM or CODE_SNAPSHOT
+  according to the primary diagnostic target while preserving exact code-version
+  provenance.
 """.strip()
 
 
@@ -179,6 +206,7 @@ def live_examiner_policy_descriptor() -> ReasoningPolicyDescriptor:
         configuration={
             "policy_id": f"{LIVE_EXAMINER_POLICY_KEY}.{LIVE_EXAMINER_POLICY_VERSION}",
             "output_schema": "ExaminerAnalysisResult",
+            "output_contract_version": EXAMINER_OUTPUT_CONTRACT_VERSION,
             "authorized_actions": ["WAIT", "OBSERVE", "ASK", "PROBE"],
             "probe_strategies": list(PROBE_STRATEGY_POLICY),
             "reasoning_tiers": ["FAST", "MEDIUM", "STRONG"],

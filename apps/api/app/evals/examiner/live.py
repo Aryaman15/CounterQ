@@ -36,7 +36,11 @@ from app.evals.examiner.schema import (
     EvaluationFixture,
     EvaluationResult,
 )
-from app.examiner.analysis_schema import ExaminerAnalysisResult, ExaminerVerificationReason
+from app.examiner.analysis_schema import (
+    EXAMINER_OUTPUT_CONTRACT_VERSION,
+    ExaminerAnalysisResult,
+    ExaminerVerificationReason,
+)
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 from app.examiner.policy import (
     LIVE_EXAMINER_INSTRUCTIONS,
@@ -55,8 +59,8 @@ from app.examiner.reasoning_pipeline import (
 )
 
 LIVE_EVALUATION_OUTPUT = REPOSITORY_ROOT / "tmp" / "stage4-examiner-eval.json"
-LIVE_EVALUATION_REPORT_SCHEMA_VERSION = "stage4-examiner-calibration-report.v3"
-LIVE_EVALUATION_RUNNER_VERSION = "stage4c-live-runner.v3"
+LIVE_EVALUATION_REPORT_SCHEMA_VERSION = "stage4-examiner-calibration-report.v4"
+LIVE_EVALUATION_RUNNER_VERSION = "stage4c-live-runner.v4"
 ProviderWaiter = Callable[
     [Awaitable[ProviderReasoningResult], float], Awaitable[ProviderReasoningResult]
 ]
@@ -551,6 +555,7 @@ def _run_metadata(*, fixtures: list[EvaluationFixture], settings: Settings) -> d
         "runner_version": LIVE_EVALUATION_RUNNER_VERSION,
         "policy_key": LIVE_EXAMINER_POLICY_KEY,
         "policy_version": LIVE_EXAMINER_POLICY_VERSION,
+        "output_contract_version": EXAMINER_OUTPUT_CONTRACT_VERSION,
         "context_projection_version": LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
         "fixture_count": len(fixtures),
         "canonical_corpus_sha256": hashlib.sha256(canonical_corpus.encode("utf-8")).hexdigest(),

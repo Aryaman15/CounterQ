@@ -640,10 +640,11 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
     }
     aggregate = cast(dict[str, Any], report["aggregate"])
     metadata = cast(dict[str, Any], report["metadata"])
-    assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v3"
-    assert metadata["runner_version"] == "stage4c-live-runner.v3"
+    assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v4"
+    assert metadata["runner_version"] == "stage4c-live-runner.v4"
     assert metadata["policy_key"] == "live_examiner"
-    assert metadata["policy_version"] == "v7"
+    assert metadata["policy_version"] == "v8"
+    assert metadata["output_contract_version"] == "v2"
     assert metadata["context_projection_version"] == "v2"
     assert metadata["fixture_count"] == 2
     assert len(metadata["canonical_corpus_sha256"]) == 64

@@ -459,6 +459,42 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     assert merge.expectations.acceptable_strategies == ["EDGE_CASE", "FAILURE_MODE"]
 
 
+def test_frozen_corpus_preserves_distinct_frontiers_and_restraint() -> None:
+    distinct_frontiers = {
+        "two-sum-sort-tradeoff": ("NEW_GRAD", {"TRADE_OFF", "ALTERNATIVE"}),
+        "valid-palindrome-alternative": ("NEW_GRAD", {"ALTERNATIVE", "TRADE_OFF"}),
+        "minimum-subarray-negative-mutation": ("NEW_GRAD", {"CONSTRAINT_MUTATION"}),
+        "number-islands-transfer": ("EARLY_CAREER", {"TRANSFER"}),
+    }
+    for fixture_id, (level, strategies) in distinct_frontiers.items():
+        item = fixture(fixture_id)
+        assert item.input.candidate_level == level
+        assert item.expectations.expected_action == "PROBE"
+        assert set(item.expectations.acceptable_strategies) == strategies
+        assert item.input.interview_pack["review_status"] == "REVIEWED"
+
+    for fixture_id in (
+        "two-sum-correct-wait",
+        "longest-substring-self-correction",
+        "weak-candidate-restraint",
+        "two-sum-repeated-concept-wait",
+    ):
+        assert fixture(fixture_id).expectations.expected_action == "WAIT"
+
+
+def test_frozen_corpus_preserves_code_and_claim_target_provenance() -> None:
+    code_bug = fixture("longest-substring-invariant-prove")
+    assert code_bug.input.source_observation_type == "CODE_MEANINGFULLY_CHANGED"
+    assert code_bug.input.candidate_statement is None
+    assert code_bug.input.recent_claims == []
+    assert code_bug.expectations.acceptable_target_kinds == ["CODE_SNAPSHOT"]
+
+    verbal_claim = fixture("two-sum-hash-assumption")
+    assert verbal_claim.input.source_observation_type == "CANDIDATE_TRANSCRIPT_FINALIZED"
+    assert verbal_claim.input.candidate_statement
+    assert verbal_claim.expectations.acceptable_target_kinds == ["CLAIM"]
+
+
 def test_only_founder_approved_strategy_alternatives_are_present() -> None:
     alternatives = {
         item.fixture_id: item.expectations.acceptable_strategies
@@ -480,7 +516,7 @@ def test_only_founder_approved_strategy_alternatives_are_present() -> None:
     }
 
 
-def test_v7_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
+def test_v8_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
     for name in (
         "prior-context-neutral-ask",
         "container-water-ask-objective",

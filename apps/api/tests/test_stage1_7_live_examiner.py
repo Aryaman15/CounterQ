@@ -24,9 +24,14 @@ from app.ai_gateway.provider import (
     ReasoningUsage,
 )
 from app.ai_gateway.routes import get_reasoning_provider_builder
+from app.ai_gateway.structured_output import validate_strict_reasoning_schema
 from app.config.settings import Settings, create_settings, get_settings
+from app.db.constants import PROBE_STRATEGIES
 from app.db.session import build_engine, dispose_engine
-from app.examiner.analysis_schema import ExaminerAnalysisResult
+from app.examiner.analysis_schema import (
+    EXAMINER_OUTPUT_CONTRACT_VERSION,
+    ExaminerAnalysisResult,
+)
 from app.examiner.coordinator import LiveExaminerCoordinator, LiveExaminerTaskRegistry
 from app.examiner.development_workflow import DevelopmentAnalyzeAndAuthorizeWorkflow
 from app.examiner.models import CandidateClaim, ExaminerDecision
@@ -440,13 +445,42 @@ def test_examiner_analysis_schema_enforces_action_strategy_and_claim_target() ->
             ExaminerAnalysisResult.model_validate(invalid_non_claim_target)
 
 
-def test_live_examiner_policy_v7_guides_ranking_strategies_depth_and_verification() -> None:
+def test_provider_schema_encodes_action_specific_probe_strategy_contract() -> None:
+    schema = ExaminerAnalysisResult.model_json_schema()
+    validate_strict_reasoning_schema(schema)
+
+    assert schema["type"] == "object"
+    assert "anyOf" not in schema
+    decision_union = schema["properties"]["decision"]["anyOf"]
+    assert len(decision_union) == 4
+    definitions = schema["$defs"]
+    variants = {
+        definitions[item["$ref"].removeprefix("#/$defs/")]["properties"]["action"][
+            "const"
+        ]: definitions[item["$ref"].removeprefix("#/$defs/")]
+        for item in decision_union
+    }
+
+    for action in ("WAIT", "OBSERVE", "ASK"):
+        variant = variants[action]
+        assert variant["properties"]["proposed_probe_strategy"]["type"] == "null"
+        assert "proposed_probe_strategy" in variant["required"]
+    probe = variants["PROBE"]
+    strategy = probe["properties"]["proposed_probe_strategy"]
+    assert strategy["type"] == "string"
+    assert set(strategy["enum"]) == set(PROBE_STRATEGIES)
+    assert "proposed_probe_strategy" in probe["required"]
+
+
+def test_live_examiner_policy_v8_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v7"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v7"
+    assert descriptor.version == "v8"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v8"
     assert descriptor.configuration["context_projection_version"] == "v2"
+    assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
+    assert descriptor.configuration["output_contract_version"] == "v2"
     assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid absolute complexity guarantee" in LIVE_EXAMINER_INSTRUCTIONS
@@ -462,7 +496,7 @@ def test_live_examiner_policy_v7_guides_ranking_strategies_depth_and_verificatio
     assert "Run or a declared-done signal" in LIVE_EXAMINER_INSTRUCTIONS
     assert "require target_claim_index=null" in LIVE_EXAMINER_INSTRUCTIONS
     schema = ExaminerAnalysisResult.model_json_schema()
-    decision_schema = schema["$defs"]["ExaminerDecisionOutput"]["properties"]
+    decision_schema = schema["$defs"]["ExaminerProbeDecisionOutput"]["properties"]
     assert "Primary diagnostic target" in decision_schema["target_kind"]["description"]
     assert "zero-based index" in decision_schema["target_claim_index"]["description"]
 

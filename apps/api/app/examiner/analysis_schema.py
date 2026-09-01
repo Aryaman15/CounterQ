@@ -43,6 +43,7 @@ ExaminerVerificationReason = Literal[
     "VERIFIED_PACK_DISAGREEMENT",
     "CONSEQUENTIAL_LOW_CONFIDENCE",
 ]
+EXAMINER_OUTPUT_CONTRACT_VERSION = "v2"
 
 
 class ExaminerTargetRankingOutput(StrictReasoningOutputModel):
@@ -84,7 +85,6 @@ class ExaminerClaimOutput(StrictReasoningOutputModel):
 
 
 class ExaminerDecisionOutput(StrictReasoningOutputModel):
-    action: ExaminerAction
     target_kind: ExaminerTargetKind = Field(
         description=(
             "Primary diagnostic target: CLAIM for an extracted candidate claim; "
@@ -99,7 +99,6 @@ class ExaminerDecisionOutput(StrictReasoningOutputModel):
             "returned claim. For NONE, EVENT, and CODE_SNAPSHOT this must be JSON null."
         ),
     )
-    proposed_probe_strategy: ExaminerProbeStrategy | None
     technical_rationale: str = Field(max_length=900)
     confidence: float = Field(ge=0, le=1)
     priority: int = Field(ge=0, le=5)
@@ -108,9 +107,37 @@ class ExaminerDecisionOutput(StrictReasoningOutputModel):
     verification: ExaminerVerificationOutput
 
 
+class ExaminerWaitDecisionOutput(ExaminerDecisionOutput):
+    action: Literal["WAIT"]
+    proposed_probe_strategy: None
+
+
+class ExaminerObserveDecisionOutput(ExaminerDecisionOutput):
+    action: Literal["OBSERVE"]
+    proposed_probe_strategy: None
+
+
+class ExaminerAskDecisionOutput(ExaminerDecisionOutput):
+    action: Literal["ASK"]
+    proposed_probe_strategy: None
+
+
+class ExaminerProbeDecisionOutput(ExaminerDecisionOutput):
+    action: Literal["PROBE"]
+    proposed_probe_strategy: ExaminerProbeStrategy
+
+
+ExaminerActionSpecificDecisionOutput = (
+    ExaminerWaitDecisionOutput
+    | ExaminerObserveDecisionOutput
+    | ExaminerAskDecisionOutput
+    | ExaminerProbeDecisionOutput
+)
+
+
 class ExaminerAnalysisResult(StrictReasoningOutputModel):
     claims: list[ExaminerClaimOutput] = Field(max_length=4)
-    decision: ExaminerDecisionOutput
+    decision: ExaminerActionSpecificDecisionOutput
 
     @model_validator(mode="after")
     def validate_decision_links(self) -> ExaminerAnalysisResult:

@@ -33,12 +33,14 @@ from app.ai_gateway.provider import (
     ReasoningUsage,
 )
 from app.db.base import Base
+from app.examiner.analysis_schema import EXAMINER_OUTPUT_CONTRACT_VERSION
 from app.examiner.context import (
     RECENT_CLAIM_LIMIT,
     RECENT_DELIVERED_PROMPT_LIMIT,
     RECENT_TRANSCRIPT_LIMIT,
     ExaminerContextBuilder,
 )
+from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 from app.examiner.coordinator import LiveExaminerCoordinator, LiveExaminerTaskRegistry
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.examiner.policy import (
@@ -46,6 +48,7 @@ from app.examiner.policy import (
     LIVE_EXAMINER_INSTRUCTIONS,
     LIVE_EXAMINER_POLICY_VERSION,
     PROBE_STRATEGY_POLICY,
+    live_examiner_policy_descriptor,
 )
 from app.examiner.repository import ExaminerRepository
 from app.execution.models import ExecutionRun
@@ -861,18 +864,28 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
 
 
 def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
-    assert LIVE_EXAMINER_POLICY_VERSION == "v7"
+    assert LIVE_EXAMINER_POLICY_VERSION == "v8"
+    assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v2"
+    assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
+    assert live_examiner_policy_descriptor().configuration["output_contract_version"] == "v2"
     assert len(PROBE_STRATEGY_POLICY) == 12
     assert set(CANDIDATE_LEVEL_DEPTH_POLICY) == {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
     assert "evidence" not in Base.metadata.tables
     assert "breakpoints" not in Base.metadata.tables
 
 
-def test_v7_policy_calibrates_satisfied_goals_ask_wait_and_strategy_boundaries() -> None:
+def test_v8_policy_distinguishes_satisfied_goals_from_new_diagnostic_frontiers() -> None:
     assert "A diagnostic goal can be satisfied by the current candidate turn" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
     assert "Do not immediately re-probe that same" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "closes that same evidence goal" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "does not close" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "materially different diagnostic frontier" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "at most one different high-value frontier" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "reviewed" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Interview Pack opportunity or follow-up supports it" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not probe merely because budget remains" in LIVE_EXAMINER_INSTRUCTIONS
     assert "PROVE remains appropriate when" in LIVE_EXAMINER_INSTRUCTIONS
     assert "For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK" in (
         LIVE_EXAMINER_INSTRUCTIONS
@@ -889,6 +902,27 @@ def test_v7_policy_calibrates_satisfied_goals_ask_wait_and_strategy_boundaries()
     assert "CONSTRAINT_MUTATION applies after the base reasoning is established" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
+    assert "complete strong base" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "to transfer" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Weak or incomplete base reasoning must not jump randomly" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
     assert "CandidateClaim.normalized_claim must be a concise technical proposition" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
+    assert "exact current stable code" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Do not synthesize a CandidateClaim" in LIVE_EXAMINER_INSTRUCTIONS
+
+
+def test_v8_candidate_level_changes_depth_not_probe_frequency() -> None:
+    assert CANDIDATE_LEVEL_DEPTH_POLICY["INTERN"] == (
+        "core correctness",
+        "basic invariant explanation",
+        "straightforward complexity",
+        "essential edge cases",
+    )
+    assert "meaningful trade-offs" in CANDIDATE_LEVEL_DEPTH_POLICY["NEW_GRAD"]
+    assert "legitimate alternate approaches" in CANDIDATE_LEVEL_DEPTH_POLICY["NEW_GRAD"]
+    assert "constraint mutation" in CANDIDATE_LEVEL_DEPTH_POLICY["EARLY_CAREER"]
+    assert "transfer" in CANDIDATE_LEVEL_DEPTH_POLICY["EARLY_CAREER"]
+    assert "Candidate level changes depth, not frequency" in LIVE_EXAMINER_INSTRUCTIONS
