@@ -4,7 +4,7 @@
   "input": {
     "candidate_level": "NEW_GRAD",
     "mode": "SIMULATION",
-    "state": "APPROACH_DEFENSE",
+    "state": "CONSTRAINT_MUTATION",
     "time_context": {
       "remaining_seconds": 600
     },

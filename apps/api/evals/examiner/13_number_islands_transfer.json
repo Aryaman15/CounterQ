@@ -4,7 +4,7 @@
   "input": {
     "candidate_level": "EARLY_CAREER",
     "mode": "SIMULATION",
-    "state": "APPROACH_DEFENSE",
+    "state": "FINAL_DEFENSE",
     "time_context": {
       "remaining_seconds": 600
     },
@@ -278,6 +278,17 @@
           "approach_id": "dfs_flood_fill",
           "relevant_strategies": [
             "PROVE"
+          ]
+        },
+        {
+          "id": "transfer_component_invariant_to_graph",
+          "concept_keys": [
+            "graph_traversal"
+          ],
+          "diagnostic_goal": "Test whether the established visited/component-counting invariant applies to a nearby graph representation.",
+          "approach_id": "dfs_flood_fill",
+          "relevant_strategies": [
+            "TRANSFER"
           ]
         }
       ],

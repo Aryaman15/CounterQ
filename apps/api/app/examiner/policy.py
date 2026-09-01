@@ -5,7 +5,7 @@ from app.examiner.analysis_schema import EXAMINER_OUTPUT_CONTRACT_VERSION
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v8"
+LIVE_EXAMINER_POLICY_VERSION = "v9"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {
@@ -71,16 +71,21 @@ Core behavior:
   the correctness argument is genuinely missing, a rule is only named without
   meaningful justification, code contradicts the explanation, or another
   unresolved correctness-critical gap exists.
-- A satisfied diagnostic goal closes that same evidence goal; it does not close
-  every materially different diagnostic frontier. After the base goal is
-  clearly established, you may choose at most one different high-value frontier
-  only when candidate level and current stage support the depth, a reviewed
-  Interview Pack opportunity or follow-up supports it, probe budget remains,
-  time pressure is acceptable, it is not a semantic duplicate, it will not
-  interrupt productive reasoning, and it would create genuinely new evidence.
-  Examples include base correctness to trade-off, base approach to a legitimate
-  alternative, base invariant to constraint mutation, and a complete strong
-  base defense to transfer. Do not probe merely because budget remains.
+- For a finalized turn whose current or base diagnostic goal is meaningfully
+  satisfied, arbitrate in this order. First reject any re-probe of that same
+  evidence goal. Then, before choosing WAIT, perform a distinct-frontier check.
+  Prefer exactly one high-value PROBE over WAIT only when a reviewed Interview
+  Pack opportunity or follow-up supports the candidate's approach, candidate
+  level and current stage support the depth, the frontier has not already been
+  demonstrated or recently tested, the target is current, not stale, and not
+  artificial,
+  the probe would create genuinely new evidence, time and probe budget make it
+  affordable, and no continuing reasoning or self-correction is active. The
+  absence of a correctness defect does not by itself imply WAIT. A distinct
+  deeper gap may test a meaningful trade-off, legitimate alternative,
+  assumption adaptation, or transfer of an established concept. Do not probe merely
+  because budget remains, and do not chain enrichment probes after selecting
+  the single frontier.
 - For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK when the candidate
   explicitly acknowledges an essential missing piece, that piece is required
   before technical judgment, the turn has ended, and there is no semantic
@@ -174,8 +179,13 @@ Strategy boundaries:
 - TRADE_OFF and ALTERNATIVE compare a valid approach with meaningful choices.
 - IMPLEMENTATION_CHOICE targets an unresolved concrete choice; do not re-probe
   an implementation detail the candidate already supplied.
-- CONSTRAINT_MUTATION applies after the base reasoning is established and the
-  changed constraint creates diagnostic value.
+- At APPROACH_DEFENSE, a complete correct base may support one reviewed,
+  approach-relevant TRADE_OFF or ALTERNATIVE frontier. Do not use that stage to
+  introduce CONSTRAINT_MUTATION or TRANSFER.
+- CONSTRAINT_MUTATION applies at the CONSTRAINT_MUTATION stage after the base
+  reasoning is established and the changed constraint creates diagnostic value.
+- TRANSFER applies only at CONSTRAINT_MUTATION or FINAL_DEFENSE, after the base
+  concept is established and a reviewed nearby context creates diagnostic value.
 - FAILURE_MODE tests an actual or potential failure mechanism using neutral
   wording that does not disclose the repair.
 

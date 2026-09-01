@@ -864,7 +864,7 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
 
 
 def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
-    assert LIVE_EXAMINER_POLICY_VERSION == "v8"
+    assert LIVE_EXAMINER_POLICY_VERSION == "v9"
     assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v2"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert live_examiner_policy_descriptor().configuration["output_contract_version"] == "v2"
@@ -874,18 +874,29 @@ def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_
     assert "breakpoints" not in Base.metadata.tables
 
 
-def test_v8_policy_distinguishes_satisfied_goals_from_new_diagnostic_frontiers() -> None:
+def test_v9_policy_checks_one_distinct_frontier_before_waiting() -> None:
     assert "A diagnostic goal can be satisfied by the current candidate turn" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
     assert "Do not immediately re-probe that same" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "closes that same evidence goal" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "does not close" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "materially different diagnostic frontier" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "at most one different high-value frontier" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "First reject any re-probe of that same" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "before choosing WAIT, perform a distinct-frontier check" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
+    assert "Prefer exactly one high-value PROBE over WAIT" in LIVE_EXAMINER_INSTRUCTIONS
     assert "reviewed" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "Interview Pack opportunity or follow-up supports it" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "Do not probe merely because budget remains" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "Pack opportunity or follow-up supports the candidate's approach" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
+    assert "has not already been" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "current, not stale, and not" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "assumption adaptation" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "absence of a correctness defect does not by itself imply WAIT" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
+    assert "Do not probe" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "because budget remains" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "do not chain enrichment probes" in LIVE_EXAMINER_INSTRUCTIONS
     assert "PROVE remains appropriate when" in LIVE_EXAMINER_INSTRUCTIONS
     assert "For CANDIDATE_TRANSCRIPT_FINALIZED, prefer neutral ASK" in (
         LIVE_EXAMINER_INSTRUCTIONS
@@ -899,11 +910,14 @@ def test_v8_policy_distinguishes_satisfied_goals_from_new_diagnostic_frontiers()
         LIVE_EXAMINER_INSTRUCTIONS
     )
     assert "COMPLEXITY derives or defends asymptotic work" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "CONSTRAINT_MUTATION applies after the base reasoning is established" in (
+    assert "At APPROACH_DEFENSE" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "TRADE_OFF or ALTERNATIVE frontier" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "CONSTRAINT_MUTATION applies at the CONSTRAINT_MUTATION stage" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
-    assert "complete strong base" in LIVE_EXAMINER_INSTRUCTIONS
-    assert "to transfer" in LIVE_EXAMINER_INSTRUCTIONS
+    assert "TRANSFER applies only at CONSTRAINT_MUTATION or FINAL_DEFENSE" in (
+        LIVE_EXAMINER_INSTRUCTIONS
+    )
     assert "Weak or incomplete base reasoning must not jump randomly" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
@@ -914,7 +928,7 @@ def test_v8_policy_distinguishes_satisfied_goals_from_new_diagnostic_frontiers()
     assert "Do not synthesize a CandidateClaim" in LIVE_EXAMINER_INSTRUCTIONS
 
 
-def test_v8_candidate_level_changes_depth_not_probe_frequency() -> None:
+def test_v9_candidate_level_changes_depth_not_probe_frequency() -> None:
     assert CANDIDATE_LEVEL_DEPTH_POLICY["INTERN"] == (
         "core correctness",
         "basic invariant explanation",

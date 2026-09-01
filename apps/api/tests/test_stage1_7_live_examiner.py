@@ -472,12 +472,12 @@ def test_provider_schema_encodes_action_specific_probe_strategy_contract() -> No
     assert "proposed_probe_strategy" in probe["required"]
 
 
-def test_live_examiner_policy_v8_guides_ranking_strategies_depth_and_verification() -> None:
+def test_live_examiner_policy_v9_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v8"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v8"
+    assert descriptor.version == "v9"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v9"
     assert descriptor.configuration["context_projection_version"] == "v2"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert descriptor.configuration["output_contract_version"] == "v2"

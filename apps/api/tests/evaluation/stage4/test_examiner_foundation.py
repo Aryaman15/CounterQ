@@ -27,6 +27,7 @@ from app.examiner.context import (
 )
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.problems.content import InterviewPackContent
 
 
 def decision_metadata() -> dict[str, object]:
@@ -318,13 +319,29 @@ def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_fami
         "alternative_approaches"
     ][0]
 
-    mutation = diagnostic_pack(
-        "minimum-subarray-negative-mutation",
-        state="CONSTRAINT_MUTATION",
-    )
+    mutation = diagnostic_pack("minimum-subarray-negative-mutation")
     assert "constraint_mutations" in mutation
     assert "complexity_expectations" not in mutation
     assert "failure_modes" not in mutation
+
+    transfer = diagnostic_pack("number-islands-transfer")
+    transfer_opportunities = [
+        item
+        for item in transfer["probe_opportunities"]
+        if item["relevant_strategies"] == ["TRANSFER"]
+    ]
+    assert transfer_opportunities == [
+        {
+            "id": "transfer_component_invariant_to_graph",
+            "concept_keys": ["graph_traversal"],
+            "diagnostic_goal": (
+                "Test whether the established visited/component-counting invariant "
+                "applies to a nearby graph representation."
+            ),
+            "approach_id": "dfs_flood_fill",
+            "relevant_strategies": ["TRANSFER"],
+        }
+    ]
 
 
 def test_evaluation_and_production_use_the_exact_same_projection() -> None:
@@ -426,9 +443,15 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     ]
 
     mutation = fixture("minimum-subarray-negative-mutation")
-    assert "positive-only base problem" in (mutation.input.candidate_statement or "")
-    assert "negative" not in (mutation.input.candidate_statement or "").casefold()
+    assert mutation.input.state == "CONSTRAINT_MUTATION"
+    assert mutation.input.candidate_statement == (
+        "For the positive-only base problem, expanding right can only increase the sum "
+        "and shrinking left can only decrease it, so I shrink left whenever the sum "
+        "reaches target to minimize the window. That establishes why the sliding window "
+        "is valid for the stated positive-only constraints."
+    )
     assert mutation.expectations.acceptable_strategies == ["CONSTRAINT_MUTATION"]
+    assert mutation.expectations.must_not_reveal == ["prefix sum"]
 
     course = fixture("course-schedule-cycle-failure")
     assert "vector<bool> visited" in (course.input.code_snapshot or "")
@@ -437,11 +460,40 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
 
     islands = fixture("number-islands-transfer")
     assert islands.input.candidate_level == "EARLY_CAREER"
-    assert "entire orthogonally connected component" in (
-        islands.input.candidate_statement or ""
+    assert islands.input.state == "FINAL_DEFENSE"
+    assert islands.input.candidate_statement == (
+        "For every unvisited land cell, I increment the component count and flood-fill "
+        "orthogonal land neighbors. That traversal reaches the entire orthogonally "
+        "connected component, and I mark each discovered cell before enqueue or recursion "
+        "so it cannot be processed twice. Once the traversal finishes, no cell in that "
+        "component can start another count. After scanning the grid, the count is exactly "
+        "the number of islands. That completes my base correctness argument."
     )
-    assert "can start another count" in (islands.input.candidate_statement or "")
     assert islands.expectations.acceptable_strategies == ["TRANSFER"]
+    assert islands.expectations.must_not_reveal == ["adjacency list"]
+    islands_pack = cast(dict[str, Any], islands.input.interview_pack)
+    probe_opportunities = cast(
+        list[dict[str, Any]], islands_pack["probe_opportunities"]
+    )
+    transfer_opportunities = [
+        item
+        for item in probe_opportunities
+        if item["relevant_strategies"] == ["TRANSFER"]
+    ]
+    assert len(probe_opportunities) == 2
+    assert transfer_opportunities == [
+        {
+            "id": "transfer_component_invariant_to_graph",
+            "concept_keys": ["graph_traversal"],
+            "diagnostic_goal": (
+                "Test whether the established visited/component-counting invariant "
+                "applies to a nearby graph representation."
+            ),
+            "approach_id": "dfs_flood_fill",
+            "relevant_strategies": ["TRANSFER"],
+        }
+    ]
+    InterviewPackContent.model_validate(islands.input.interview_pack)
 
     tradeoff = fixture("two-sum-sort-tradeoff")
     assert "keeps its original index" in (tradeoff.input.candidate_statement or "")
@@ -459,27 +511,64 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     assert merge.expectations.acceptable_strategies == ["EDGE_CASE", "FAILURE_MODE"]
 
 
-def test_frozen_corpus_preserves_distinct_frontiers_and_restraint() -> None:
+def test_v9_corpus_preserves_stage_appropriate_distinct_frontiers_and_restraint() -> None:
     distinct_frontiers = {
-        "two-sum-sort-tradeoff": ("NEW_GRAD", {"TRADE_OFF", "ALTERNATIVE"}),
-        "valid-palindrome-alternative": ("NEW_GRAD", {"ALTERNATIVE", "TRADE_OFF"}),
-        "minimum-subarray-negative-mutation": ("NEW_GRAD", {"CONSTRAINT_MUTATION"}),
-        "number-islands-transfer": ("EARLY_CAREER", {"TRANSFER"}),
+        "two-sum-sort-tradeoff": (
+            "NEW_GRAD",
+            "APPROACH_DEFENSE",
+            {"TRADE_OFF", "ALTERNATIVE"},
+        ),
+        "valid-palindrome-alternative": (
+            "NEW_GRAD",
+            "APPROACH_DEFENSE",
+            {"ALTERNATIVE", "TRADE_OFF"},
+        ),
+        "minimum-subarray-negative-mutation": (
+            "NEW_GRAD",
+            "CONSTRAINT_MUTATION",
+            {"CONSTRAINT_MUTATION"},
+        ),
+        "number-islands-transfer": (
+            "EARLY_CAREER",
+            "FINAL_DEFENSE",
+            {"TRANSFER"},
+        ),
     }
-    for fixture_id, (level, strategies) in distinct_frontiers.items():
+    for fixture_id, (level, state, strategies) in distinct_frontiers.items():
         item = fixture(fixture_id)
         assert item.input.candidate_level == level
+        assert item.input.state == state
+        assert item.input.source_observation_type == "CANDIDATE_TRANSCRIPT_FINALIZED"
+        assert item.input.remaining_probe_budget > 0
+        assert item.input.time_context.remaining_seconds >= 600
         assert item.expectations.expected_action == "PROBE"
         assert set(item.expectations.acceptable_strategies) == strategies
         assert item.input.interview_pack["review_status"] == "REVIEWED"
+        InterviewPackContent.model_validate(item.input.interview_pack)
 
-    for fixture_id in (
-        "two-sum-correct-wait",
-        "longest-substring-self-correction",
-        "weak-candidate-restraint",
-        "two-sum-repeated-concept-wait",
-    ):
-        assert fixture(fixture_id).expectations.expected_action == "WAIT"
+    approach_frontiers = {
+        "two-sum-sort-tradeoff": {"TRADE_OFF", "ALTERNATIVE"},
+        "valid-palindrome-alternative": {"TRADE_OFF", "ALTERNATIVE"},
+    }
+    for fixture_id, expected_strategies in approach_frontiers.items():
+        pack = diagnostic_pack(fixture_id)
+        supported_strategies = {
+            strategy
+            for opportunity in pack["probe_opportunities"]
+            for strategy in opportunity["relevant_strategies"]
+        }
+        assert expected_strategies <= supported_strategies
+
+    restraint = {
+        "two-sum-correct-wait": "IMPLEMENTATION",
+        "longest-substring-self-correction": "IMPLEMENTATION",
+        "weak-candidate-restraint": "IMPLEMENTATION",
+        "two-sum-repeated-concept-wait": "COMPLEXITY_EDGE_CASES",
+    }
+    for fixture_id, state in restraint.items():
+        item = fixture(fixture_id)
+        assert item.input.state == state
+        assert item.expectations.expected_action == "WAIT"
 
 
 def test_frozen_corpus_preserves_code_and_claim_target_provenance() -> None:
@@ -516,7 +605,7 @@ def test_only_founder_approved_strategy_alternatives_are_present() -> None:
     }
 
 
-def test_v8_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
+def test_v9_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
     for name in (
         "prior-context-neutral-ask",
         "container-water-ask-objective",
