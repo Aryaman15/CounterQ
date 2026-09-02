@@ -26,18 +26,23 @@ from app.evidence.contracts import (
 )
 from app.evidence.models import Assessment, AssessmentSource, SkillDimension
 from app.evidence.repository import EvidenceRepository
+from app.evidence.source_admission import evidence_source_admission
 from app.examiner.models import CandidateClaim
 from app.interviews.models import CandidateResponse, CandidateResponseSource, InterviewSession
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
 from app.problems.models import Concept
 
 EVIDENCE_VALIDATION_POLICY_KEY = "evidence_validation"
-EVIDENCE_VALIDATION_POLICY_VERSION = "v1"
+EVIDENCE_VALIDATION_POLICY_VERSION = "v2"
 EVIDENCE_VALIDATION_POLICY_CONFIGURATION: dict[str, object] = {
     "kind": "deterministic_software",
     "requires_validated_assessment": True,
     "requires_factual_event_source": True,
+    "requires_candidate_demonstration_source": True,
+    "requires_all_sources_in_assessment_provenance": True,
+    "context_only_sources_require_context_role": True,
     "requires_canonical_target": True,
+    "source_admission_policy_version": "v1",
 }
 
 
@@ -193,55 +198,7 @@ class EvidenceValidationService:
         failures.extend(self._validate_evidence_values(command))
         failures.extend(await self._validate_targets(command))
 
-        requested_source_ids = [source.interview_event_id for source in command.sources]
-        if not requested_source_ids:
-            failures.append(
-                _failure(
-                    "FACTUAL_SOURCE_REQUIRED",
-                    "Canonical Evidence requires at least one InterviewEvent source",
-                )
-            )
-        elif len(requested_source_ids) != len(set(requested_source_ids)):
-            failures.append(
-                _failure("DUPLICATE_EVIDENCE_SOURCE", "Evidence event sources must be unique")
-            )
-        else:
-            source_events = await self._events(requested_source_ids)
-            if len(source_events) != len(requested_source_ids):
-                failures.append(
-                    _failure("FACTUAL_SOURCE_NOT_FOUND", "One or more InterviewEvents do not exist")
-                )
-            elif any(
-                event.interview_session_id != command.interview_session_id
-                for event in source_events
-            ):
-                failures.append(
-                    _failure(
-                        "SOURCE_SESSION_MISMATCH",
-                        "Every Evidence source must belong to the Evidence session",
-                    )
-                )
-            elif any(source.source_role not in EVIDENCE_SOURCE_ROLES for source in command.sources):
-                failures.append(
-                    _failure("INVALID_SOURCE_ROLE", "Evidence source role is not supported")
-                )
-            else:
-                assessment_event_ids = await self._assessment_factual_event_ids(assessment)
-                if not assessment_event_ids:
-                    failures.append(
-                        _failure(
-                            "ASSESSMENT_FACTUAL_PROVENANCE_MISSING",
-                            "Assessment no longer resolves to factual InterviewEvent provenance",
-                        )
-                    )
-                elif assessment_event_ids.isdisjoint(requested_source_ids):
-                    failures.append(
-                        _failure(
-                            "SOURCE_NOT_ASSESSMENT_PROVENANCE",
-                            "Evidence must retain at least one factual source "
-                            "used by its Assessment",
-                        )
-                    )
+        failures.extend(await self._validate_sources(assessment, command))
 
         if failures:
             return _rejected(failures)
@@ -443,6 +400,83 @@ class EvidenceValidationService:
                         "Every Evidence SkillDimension must exist and be active",
                     )
                 )
+        return failures
+
+    async def _validate_sources(
+        self,
+        assessment: Assessment,
+        command: ValidateEvidenceCommand,
+    ) -> list[EvidenceValidationFailure]:
+        if not command.sources:
+            return [
+                _failure(
+                    "FACTUAL_SOURCE_REQUIRED",
+                    "Canonical Evidence requires at least one InterviewEvent source",
+                )
+            ]
+
+        requested_source_ids = [source.interview_event_id for source in command.sources]
+        if len(requested_source_ids) != len(set(requested_source_ids)):
+            return [_failure("DUPLICATE_EVIDENCE_SOURCE", "Evidence event sources must be unique")]
+        source_events = await self._events(requested_source_ids)
+        if len(source_events) != len(requested_source_ids):
+            return [
+                _failure("FACTUAL_SOURCE_NOT_FOUND", "One or more InterviewEvents do not exist")
+            ]
+        if any(
+            event.interview_session_id != command.interview_session_id for event in source_events
+        ):
+            return [
+                _failure(
+                    "SOURCE_SESSION_MISMATCH",
+                    "Every Evidence source must belong to the Evidence session",
+                )
+            ]
+        if any(source.source_role not in EVIDENCE_SOURCE_ROLES for source in command.sources):
+            return [_failure("INVALID_SOURCE_ROLE", "Evidence source role is not supported")]
+
+        assessment_event_ids = await self._assessment_factual_event_ids(assessment)
+        if not assessment_event_ids:
+            return [
+                _failure(
+                    "ASSESSMENT_FACTUAL_PROVENANCE_MISSING",
+                    "Assessment no longer resolves to factual InterviewEvent provenance",
+                )
+            ]
+
+        failures: list[EvidenceValidationFailure] = []
+        if not set(requested_source_ids).issubset(assessment_event_ids):
+            failures.append(
+                _failure(
+                    "SOURCE_NOT_ASSESSMENT_PROVENANCE",
+                    "Every Evidence source must be factual provenance of its Assessment",
+                )
+            )
+
+        event_by_id = {event.id: event for event in source_events}
+        admissions = [
+            evidence_source_admission(
+                event_type=event_by_id[source.interview_event_id].event_type,
+                event_source=event_by_id[source.interview_event_id].source,
+                source_role=source.source_role,
+            )
+            for source in command.sources
+        ]
+        for admission in admissions:
+            if not admission.admitted:
+                failures.append(
+                    _failure(
+                        admission.reason,
+                        "Evidence source event/category is not admitted for its requested role",
+                    )
+                )
+        if not any(admission.counts_as_candidate_demonstration for admission in admissions):
+            failures.append(
+                _failure(
+                    "CANDIDATE_DEMONSTRATION_SOURCE_REQUIRED",
+                    "Canonical Evidence requires candidate-demonstration factual support",
+                )
+            )
         return failures
 
     async def _assessment_factual_event_ids(self, assessment: Assessment) -> set[UUID]:

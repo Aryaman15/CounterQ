@@ -163,8 +163,11 @@ class BreakpointService:
                 )
             )
         )
+        target_matching_ids = concept_links.intersection(skill_links)
+        if not set(evidence_ids).issubset(target_matching_ids):
+            return BreakpointEligibility(False, "EVIDENCE_TARGET_MISMATCH")
         qualifying_ids = {evidence.id for evidence in qualifying}
-        if not qualifying_ids.intersection(concept_links).intersection(skill_links):
+        if not qualifying_ids.intersection(target_matching_ids):
             return BreakpointEligibility(False, "EVIDENCE_TARGET_MISMATCH")
         return BreakpointEligibility(True, "ELIGIBLE")
 
@@ -185,6 +188,22 @@ class BreakpointService:
             assessment_dimension=candidate.assessment_dimension,
             known_subtype=candidate.known_subtype,
         )
+        evidence_rows = list(
+            await self._session.scalars(
+                select(Evidence)
+                .where(Evidence.id.in_(candidate.evidence_ids))
+                .order_by(Evidence.created_at, Evidence.id)
+            )
+        )
+        earliest_qualifying_evidence = min(
+            (
+                evidence
+                for evidence in evidence_rows
+                if evidence.strength in QUALIFYING_EVIDENCE_STRENGTHS
+                and evidence.confidence >= MIN_BREAKPOINT_EVIDENCE_CONFIDENCE
+            ),
+            key=lambda evidence: (evidence.created_at, evidence.id),
+        )
         now = datetime.now(UTC)
         proposed_id = uuid7()
         inserted_id = await self._session.scalar(
@@ -195,8 +214,8 @@ class BreakpointService:
                 concept_id=candidate.concept_id,
                 skill_dimension_id=candidate.skill_dimension_id,
                 breakpoint_key=breakpoint_key,
-                first_detected_session_id=candidate.interview_session_id,
-                first_detected_at=now,
+                first_detected_session_id=earliest_qualifying_evidence.interview_session_id,
+                first_detected_at=earliest_qualifying_evidence.created_at,
                 severity=candidate.severity.strip(),
                 status="OPEN",
                 summary=candidate.summary.strip(),
@@ -228,15 +247,12 @@ class BreakpointService:
         if breakpoint_id is None:
             raise BreakpointPolicyError("Active Breakpoint conflict could not be resolved")
 
-        evidence_rows = list(
-            await self._session.scalars(
-                select(Evidence)
-                .where(Evidence.id.in_(candidate.evidence_ids))
-                .order_by(Evidence.created_at, Evidence.id)
+        for evidence in evidence_rows:
+            relationship = (
+                "CREATED"
+                if created and evidence.id == earliest_qualifying_evidence.id
+                else "REINFORCED"
             )
-        )
-        for index, evidence in enumerate(evidence_rows):
-            relationship = "CREATED" if created and index == 0 else "REINFORCED"
             await self._session.execute(
                 insert(BreakpointEvidence)
                 .values(
@@ -276,6 +292,14 @@ class BreakpointService:
             or evidence.invalidated_at is not None
         ):
             raise BreakpointPolicyError("Evidence is not active canonical support for this user")
+        if not await self._evidence_targets_boundary(
+            evidence_id=evidence.id,
+            concept_id=breakpoint.concept_id,
+            skill_dimension_id=breakpoint.skill_dimension_id,
+        ):
+            raise BreakpointPolicyError(
+                "Evidence does not target the Breakpoint Concept and SkillDimension"
+            )
         await self._session.execute(
             insert(BreakpointEvidence)
             .values(
@@ -291,6 +315,29 @@ class BreakpointService:
             )
         )
         await self._session.flush()
+
+    async def _evidence_targets_boundary(
+        self,
+        *,
+        evidence_id: UUID,
+        concept_id: UUID,
+        skill_dimension_id: UUID,
+    ) -> bool:
+        concept_match = await self._session.scalar(
+            select(EvidenceConcept.evidence_id).where(
+                EvidenceConcept.evidence_id == evidence_id,
+                EvidenceConcept.concept_id == concept_id,
+            )
+        )
+        if concept_match is None:
+            return False
+        skill_match = await self._session.scalar(
+            select(EvidenceSkill.evidence_id).where(
+                EvidenceSkill.evidence_id == evidence_id,
+                EvidenceSkill.skill_dimension_id == skill_dimension_id,
+            )
+        )
+        return skill_match is not None
 
 
 def normalize_breakpoint_key(
