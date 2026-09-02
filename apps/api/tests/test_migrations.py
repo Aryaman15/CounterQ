@@ -9,11 +9,11 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage5b_evaluation_identity_head() -> None:
+def test_alembic_configuration_has_stage5b_post_interview_budget_reserve_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609020113"
+    assert script.get_current_head() == "202609030114"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:

@@ -11,8 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from test_stage1_1a_persistence import create_stage1_graph
 
 from app.db.session import build_engine
+from app.interviews.budget_policy import interactive_deep_reasoning_limit
 from app.interviews.dev_factory import create_development_interview
-from app.interviews.models import InterviewStageTransition
+from app.interviews.models import InterviewStageTransition, SessionBudget
 from app.interviews.runtime import (
     ActivePromptDeliveryBlocksTransition,
     InterviewRuntime,
@@ -36,8 +37,35 @@ def test_template_durations_and_standard_plan_are_configuration() -> None:
     assert sum(entry.target_seconds for entry in STANDARD_STAGE_PLAN) == 1800
     assert standard.protected_final_defense_seconds == 120
     assert standard.protected_wrap_up_seconds == 60
+    assert standard.max_probes == 5
+    assert standard.max_deep_reasoning_calls == 24
+    assert standard.reserved_post_interview_deep_reasoning_calls == 16
     mutation = next(entry for entry in STANDARD_STAGE_PLAN if entry.stage == "CONSTRAINT_MUTATION")
     assert mutation.skippable
+
+
+def test_all_templates_explicitly_preserve_eight_interactive_deep_calls() -> None:
+    expected_totals_and_reserves = {
+        "QUICK_DRILL": (16, 8),
+        "SOLUTION_DEFENSE": (20, 12),
+        "STANDARD_CODING_INTERVIEW": (24, 16),
+        "FULL_SIMULATION": (24, 16),
+    }
+
+    for template, (total, reserve) in expected_totals_and_reserves.items():
+        policy = template_policy(template)  # type: ignore[arg-type]
+        budget = SessionBudget(
+            max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
+            reserved_post_interview_deep_reasoning_calls=(
+                policy.reserved_post_interview_deep_reasoning_calls
+            ),
+        )
+        assert (
+            policy.max_deep_reasoning_calls,
+            policy.reserved_post_interview_deep_reasoning_calls,
+        ) == (total, reserve)
+        assert 0 <= reserve <= total
+        assert interactive_deep_reasoning_limit(budget) == 8
 
 
 def test_time_policy_protects_final_defense_and_wrap_up() -> None:

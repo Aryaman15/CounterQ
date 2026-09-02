@@ -88,6 +88,7 @@ async def create_stage1_graph(
         max_duration_seconds=1_800,
         max_probes=5,
         max_deep_reasoning_calls=8,
+        reserved_post_interview_deep_reasoning_calls=0,
         max_strong_reasoning_calls=1,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5000"),
@@ -198,6 +199,18 @@ async def test_session_budget_is_one_to_one_with_session(db_session: AsyncSessio
                 realtime_reserved_budget=Decimal("0.5000"),
             ),
         )
+
+
+@pytest.mark.parametrize("reserve", [-1, 9])
+async def test_post_interview_deep_reasoning_reserve_stays_within_total(
+    db_session: AsyncSession,
+    reserve: int,
+) -> None:
+    graph = await create_stage1_graph(db_session)
+    graph.budget.reserved_post_interview_deep_reasoning_calls = reserve
+
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
 
 
 async def test_interview_event_requires_valid_session_provenance(

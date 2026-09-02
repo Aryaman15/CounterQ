@@ -354,6 +354,7 @@ async def test_current_versions_and_exact_historical_session_binding(
         max_duration_seconds=1800,
         max_probes=5,
         max_deep_reasoning_calls=8,
+        reserved_post_interview_deep_reasoning_calls=0,
         max_strong_reasoning_calls=1,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5"),

@@ -437,6 +437,89 @@ describe("Interview Room demo", () => {
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
 
+  it("shows compact Stage 5 unit status without exposing model output", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          interview_session_id: "session-1",
+          completed_units: 1,
+          skipped_units: 0,
+          failed_units: 1,
+          units: [
+            {
+              unit_key: "sha256:failed-unit",
+              unit_kind: "EXECUTION_DEBUGGING",
+              status: "FAILED",
+              assessment_ids: [],
+              evidence_ids: [],
+              breakpoint_ids: [],
+              error_category: "STRUCTURED_OUTPUT_INVALID",
+            },
+            {
+              unit_key: "sha256:completed-unit",
+              unit_kind: "CANDIDATE_RESPONSE",
+              status: "COMPLETED",
+              assessment_ids: ["assessment-1"],
+              evidence_ids: ["evidence-1"],
+              breakpoint_ids: ["breakpoint-1"],
+              error_category: null,
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          interview_session_id: "session-1",
+          assessments: [],
+          evidence: [],
+          breakpoints: [],
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(
+      <InterviewerSurface
+        voiceState="Ready"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript=""
+        lastFinalTranscript=""
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
+        onOpenConversation={vi.fn()}
+        evaluationReady
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Evaluate Stage 5 evidence" }));
+
+    const units = await screen.findByRole("list", {
+      name: "Stage 5 assessment unit results",
+    });
+    expect(within(units).getByText("EXECUTION_DEBUGGING")).toBeInTheDocument();
+    expect(within(units).getByText("STRUCTURED_OUTPUT_INVALID")).toBeInTheDocument();
+    expect(within(units).getByText("0 Assessments · 0 Evidence · 0 Breakpoints"))
+      .toBeInTheDocument();
+    expect(within(units).getByText("CANDIDATE_RESPONSE")).toBeInTheDocument();
+    expect(within(units).getByText("1 Assessments · 1 Evidence · 1 Breakpoints"))
+      .toBeInTheDocument();
+    expect(within(units).getByText("No error")).toBeInTheDocument();
+    expect(screen.queryByText(/raw model output/i)).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("shows development delivery-permit diagnostics distinctly", () => {
     const noop = vi.fn();
     const diagnostics = {

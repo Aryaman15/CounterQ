@@ -71,6 +71,7 @@ class InterviewRepository:
         max_duration_seconds: int,
         max_probes: int,
         max_deep_reasoning_calls: int,
+        reserved_post_interview_deep_reasoning_calls: int,
         max_strong_reasoning_calls: int,
         max_vision_calls: int,
         soft_monetary_budget: Decimal,
@@ -82,6 +83,9 @@ class InterviewRepository:
             max_duration_seconds=max_duration_seconds,
             max_probes=max_probes,
             max_deep_reasoning_calls=max_deep_reasoning_calls,
+            reserved_post_interview_deep_reasoning_calls=(
+                reserved_post_interview_deep_reasoning_calls
+            ),
             max_strong_reasoning_calls=max_strong_reasoning_calls,
             max_vision_calls=max_vision_calls,
             soft_monetary_budget=soft_monetary_budget,

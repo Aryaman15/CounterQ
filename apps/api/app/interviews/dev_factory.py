@@ -158,6 +158,9 @@ async def create_development_interview(
         max_duration_seconds=policy.configured_duration_seconds,
         max_probes=policy.max_probes,
         max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
+        reserved_post_interview_deep_reasoning_calls=(
+            policy.reserved_post_interview_deep_reasoning_calls
+        ),
         max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5000"),
@@ -227,6 +230,9 @@ async def create_curated_development_interview(
         max_duration_seconds=policy.configured_duration_seconds,
         max_probes=policy.max_probes,
         max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
+        reserved_post_interview_deep_reasoning_calls=(
+            policy.reserved_post_interview_deep_reasoning_calls
+        ),
         max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5000"),

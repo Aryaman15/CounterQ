@@ -649,6 +649,25 @@ export function InterviewerSurface({
                           )}{" "}
                           Evidence rows
                         </span>
+                        <ul
+                          className="voice-dev-evidence-units"
+                          aria-label="Stage 5 assessment unit results"
+                        >
+                          {evidenceResult.units.map((unit) => (
+                            <li key={unit.unit_key}>
+                              <span className="voice-dev-evidence-unit-heading">
+                                <strong>{unit.unit_kind}</strong>
+                                <span>{unit.status}</span>
+                              </span>
+                              <span>{unit.error_category ?? "No error"}</span>
+                              <span>
+                                {unit.assessment_ids.length} Assessments ·{" "}
+                                {unit.evidence_ids.length} Evidence ·{" "}
+                                {unit.breakpoint_ids.length} Breakpoints
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     ) : null}
                     {evidenceSnapshot ? (

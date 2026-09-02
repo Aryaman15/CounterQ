@@ -64,6 +64,11 @@ async def canonical_concept(
     *,
     canonical_key: str = "hash_table_complexity",
 ) -> Concept:
+    existing = await db_session.scalar(
+        select(Concept).where(Concept.canonical_key == canonical_key)
+    )
+    if existing is not None:
+        return existing
     concept = Concept(
         canonical_key=canonical_key,
         display_name=canonical_key.replace("_", " ").title(),

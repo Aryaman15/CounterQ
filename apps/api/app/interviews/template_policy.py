@@ -28,9 +28,16 @@ class InterviewTemplatePolicy:
     stage_plan: tuple[StagePlanEntry, ...]
     protected_final_defense_seconds: int
     protected_wrap_up_seconds: int
-    max_probes: int = 5
-    max_deep_reasoning_calls: int = 8
-    max_strong_reasoning_calls: int = 1
+    max_probes: int
+    max_deep_reasoning_calls: int
+    reserved_post_interview_deep_reasoning_calls: int
+    max_strong_reasoning_calls: int
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.reserved_post_interview_deep_reasoning_calls <= (
+            self.max_deep_reasoning_calls
+        ):
+            raise ValueError("Post-interview reserve must be within the total deep budget")
 
     @property
     def protected_downstream_seconds(self) -> int:
@@ -51,12 +58,50 @@ STANDARD_STAGE_PLAN = (
 )
 
 TEMPLATE_POLICIES: dict[InterviewTemplate, InterviewTemplatePolicy] = {
-    "QUICK_DRILL": InterviewTemplatePolicy("QUICK_DRILL", 600, (), 120, 60),
-    "SOLUTION_DEFENSE": InterviewTemplatePolicy("SOLUTION_DEFENSE", 900, (), 120, 60),
-    "STANDARD_CODING_INTERVIEW": InterviewTemplatePolicy(
-        "STANDARD_CODING_INTERVIEW", 1800, STANDARD_STAGE_PLAN, 120, 60
+    "QUICK_DRILL": InterviewTemplatePolicy(
+        template="QUICK_DRILL",
+        configured_duration_seconds=600,
+        stage_plan=(),
+        protected_final_defense_seconds=120,
+        protected_wrap_up_seconds=60,
+        max_probes=5,
+        max_deep_reasoning_calls=16,
+        reserved_post_interview_deep_reasoning_calls=8,
+        max_strong_reasoning_calls=1,
     ),
-    "FULL_SIMULATION": InterviewTemplatePolicy("FULL_SIMULATION", None, (), 120, 60),
+    "SOLUTION_DEFENSE": InterviewTemplatePolicy(
+        template="SOLUTION_DEFENSE",
+        configured_duration_seconds=900,
+        stage_plan=(),
+        protected_final_defense_seconds=120,
+        protected_wrap_up_seconds=60,
+        max_probes=5,
+        max_deep_reasoning_calls=20,
+        reserved_post_interview_deep_reasoning_calls=12,
+        max_strong_reasoning_calls=1,
+    ),
+    "STANDARD_CODING_INTERVIEW": InterviewTemplatePolicy(
+        template="STANDARD_CODING_INTERVIEW",
+        configured_duration_seconds=1800,
+        stage_plan=STANDARD_STAGE_PLAN,
+        protected_final_defense_seconds=120,
+        protected_wrap_up_seconds=60,
+        max_probes=5,
+        max_deep_reasoning_calls=24,
+        reserved_post_interview_deep_reasoning_calls=16,
+        max_strong_reasoning_calls=1,
+    ),
+    "FULL_SIMULATION": InterviewTemplatePolicy(
+        template="FULL_SIMULATION",
+        configured_duration_seconds=None,
+        stage_plan=(),
+        protected_final_defense_seconds=120,
+        protected_wrap_up_seconds=60,
+        max_probes=5,
+        max_deep_reasoning_calls=24,
+        reserved_post_interview_deep_reasoning_calls=16,
+        max_strong_reasoning_calls=1,
+    ),
 }
 
 

@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_gateway.gateway import (
+    POST_INTERVIEW_ASSESSMENT_PURPOSE,
     AIGateway,
     PolicyVersionConflict,
     ReasoningBudgetExceeded,
@@ -43,6 +44,7 @@ from app.config.settings import Settings, create_settings, get_settings
 from app.db.session import build_engine, dispose_engine, get_session
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.examiner.policy import LIVE_EXAMINER_INSTRUCTIONS, live_examiner_policy_descriptor
+from app.interviews.budget_policy import budget_availability, interactive_deep_reasoning_limit
 from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
 from app.interviews.models import InterviewerPrompt, SessionBudget
 from app.main import create_app
@@ -145,6 +147,17 @@ class FakeReasoningProvider:
         )
 
 
+class RecordingGatewayLogger:
+    def __init__(self) -> None:
+        self.warnings: list[dict[str, object]] = []
+
+    def info(self, _event: str, **_metadata: object) -> None:
+        pass
+
+    def warning(self, event: str, **metadata: object) -> None:
+        self.warnings.append({"event": event, **metadata})
+
+
 class RecordingResponsesClient:
     def __init__(self, response: httpx.Response) -> None:
         self.response = response
@@ -234,13 +247,16 @@ async def test_standard_and_strong_reasoning_route_to_configured_models(tmp_path
 
 async def test_strict_structured_output_success_and_invalid_output_failure(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _, _, result, _ = await call_gateway(tmp_path)
     assert result.parsed.verdict == "NOT_GUARANTEED"
 
     async for maker, dev in gateway_sessionmaker():
-        provider = FakeReasoningProvider(output_data={"verdict": "UNCERTAIN"})
+        provider = FakeReasoningProvider(output_data={"verdict": "RAW_PRIVATE_PROVIDER_OUTPUT"})
         gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        recording_logger = RecordingGatewayLogger()
+        monkeypatch.setattr("app.ai_gateway.gateway.logger", recording_logger)
         with pytest.raises(StructuredOutputValidationFailure):
             await gateway.reason_structured(
                 interview_session_id=dev.interview_session.id,
@@ -248,9 +264,26 @@ async def test_strict_structured_output_success_and_invalid_output_failure(
                 purpose="development_reasoning_smoke",
                 policy=policy("invalid output policy"),
                 instructions="invalid output policy",
-                input_content="Fixed smoke input",
+                input_content="PRIVATE_CANDIDATE_INPUT",
                 output_model=SmokeResult,
             )
+
+        diagnostic = next(
+            entry
+            for entry in recording_logger.warnings
+            if entry.get("event") == "reasoning_structured_output_invalid"
+        )
+        assert diagnostic["purpose"] == "development_reasoning_smoke"
+        assert isinstance(diagnostic["policy_key"], str)
+        assert diagnostic["policy_key"].startswith("stage1_6_policy_")
+        assert diagnostic["policy_version"] == "v1"
+        assert diagnostic["output_schema_name"] == "SmokeResult"
+        assert diagnostic["validation_error_count"] == 2
+        assert diagnostic["validation_error_types"] == ["missing"]
+        assert diagnostic["validation_error_field_paths"] == ["technical_note", "confidence"]
+        assert diagnostic["ai_invocation_id"]
+        assert "RAW_PRIVATE_PROVIDER_OUTPUT" not in str(diagnostic)
+        assert "PRIVATE_CANDIDATE_INPUT" not in str(diagnostic)
 
 
 def test_strict_reasoning_schema_contains_required_additional_properties() -> None:
@@ -553,7 +586,7 @@ async def test_provider_call_occurs_with_no_gateway_transaction(tmp_path: Path) 
         assert provider.calls == 1
 
 
-async def test_reasoning_budgets_and_monetary_limit_prevent_provider_invocation(
+async def test_exhausted_deep_reasoning_prevents_provider_invocation(
     tmp_path: Path,
 ) -> None:
     async for maker, dev in gateway_sessionmaker():
@@ -577,27 +610,216 @@ async def test_reasoning_budgets_and_monetary_limit_prevent_provider_invocation(
             )
         assert provider.calls == 0
 
+
+async def test_standard_reasoning_partition_preserves_live_capacity_then_uses_reserve(
+    tmp_path: Path,
+) -> None:
     async for maker, dev in gateway_sessionmaker():
-        async with maker() as session:
-            async with session.begin():
-                budget = await session.get(SessionBudget, dev.interview_session.id)
-                assert budget is not None
-                budget.estimated_cost = budget.hard_monetary_budget
         provider = FakeReasoningProvider()
         gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        for call_number in range(1, 9):
+            result = await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="live_examiner",
+                policy=policy("partition policy"),
+                instructions="partition policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+            assert result.budget_used == call_number
+            assert result.budget_remaining == 8 - call_number
 
         with pytest.raises(ReasoningBudgetExceeded):
             await gateway.reason_structured(
                 interview_session_id=dev.interview_session.id,
-                capability="STRONG_REASONING",
+                capability="STANDARD_REASONING",
                 purpose="development_reasoning_smoke",
-                policy=policy("monetary budget policy"),
-                instructions="monetary budget policy",
+                policy=policy("partition policy"),
+                instructions="partition policy",
                 input_content="Fixed smoke input",
                 output_model=SmokeResult,
             )
+
+        for post_call_number in range(1, 17):
+            result = await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                policy=policy("partition policy"),
+                instructions="partition policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+            assert result.budget_used == 8 + post_call_number
+            assert result.budget_remaining == 16 - post_call_number
+
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                policy=policy("partition policy"),
+                instructions="partition policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+        async with maker() as session:
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == dev.interview_session.id)
+            )
+        assert budget is not None
+        assert budget.max_deep_reasoning_calls == 24
+        assert budget.reserved_post_interview_deep_reasoning_calls == 16
+        assert interactive_deep_reasoning_limit(budget) == 8
+        assert budget_availability(budget).deep_reasoning_available is False
+        assert budget.deep_reasoning_used == 24
+        assert invocation_count == 24
+        assert provider.calls == 24
+
+
+async def test_post_interview_assessment_can_use_unspent_interactive_capacity(
+    tmp_path: Path,
+) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+
+        for _ in range(24):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                policy=policy("post-only policy"),
+                instructions="post-only policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                policy=policy("post-only policy"),
+                instructions="post-only policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+        assert provider.calls == 24
+
+
+async def test_zero_reserve_preserves_legacy_standard_reasoning_limit(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session, session.begin():
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            assert budget is not None
+            budget.max_deep_reasoning_calls = 8
+            budget.reserved_post_interview_deep_reasoning_calls = 0
+
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        for _ in range(8):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="live_examiner",
+                policy=policy("legacy reserve policy"),
+                instructions="legacy reserve policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose="live_examiner",
+                policy=policy("legacy reserve policy"),
+                instructions="legacy reserve policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+        assert provider.calls == 8
+
+
+async def test_hard_monetary_limit_blocks_every_reasoning_partition(tmp_path: Path) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session, session.begin():
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            assert budget is not None
+            budget.estimated_cost = budget.hard_monetary_budget
+
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        for capability, purpose_name in (
+            ("STANDARD_REASONING", "live_examiner"),
+            ("STANDARD_REASONING", POST_INTERVIEW_ASSESSMENT_PURPOSE),
+            ("STRONG_REASONING", "live_examiner"),
+        ):
+            with pytest.raises(ReasoningBudgetExceeded):
+                await gateway.reason_structured(
+                    interview_session_id=dev.interview_session.id,
+                    capability=capability,  # type: ignore[arg-type]
+                    purpose=purpose_name,
+                    policy=policy("hard limit all purposes"),
+                    instructions="hard limit all purposes",
+                    input_content="Fixed smoke input",
+                    output_model=SmokeResult,
+                )
+
+        async with maker() as session:
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == dev.interview_session.id)
+            )
+        assert budget is not None
+        assert budget.deep_reasoning_used == 0
+        assert budget.strong_reasoning_used == 0
+        assert invocation_count == 0
         assert provider.calls == 0
 
+
+async def test_strong_reasoning_counter_is_unchanged_by_standard_partition(
+    tmp_path: Path,
+) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        await gateway.reason_structured(
+            interview_session_id=dev.interview_session.id,
+            capability="STRONG_REASONING",
+            purpose="live_examiner",
+            policy=policy("strong partition policy"),
+            instructions="strong partition policy",
+            input_content="Fixed smoke input",
+            output_model=SmokeResult,
+        )
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STRONG_REASONING",
+                purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                policy=policy("strong partition policy"),
+                instructions="strong partition policy",
+                input_content="Fixed smoke input",
+                output_model=SmokeResult,
+            )
+
+        async with maker() as session:
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+        assert budget is not None
+        assert budget.deep_reasoning_used == 0
+        assert budget.strong_reasoning_used == 1
+        assert provider.calls == 1
 
 def test_known_and_unknown_pricing() -> None:
     known = estimate_text_token_cost(

@@ -245,6 +245,7 @@ async def test_typed_pack_retrieval_preserves_exact_session_pack_and_supports_su
         max_duration_seconds=1800,
         max_probes=5,
         max_deep_reasoning_calls=8,
+        reserved_post_interview_deep_reasoning_calls=0,
         max_strong_reasoning_calls=1,
         max_vision_calls=0,
         soft_monetary_budget=Decimal("2.5"),

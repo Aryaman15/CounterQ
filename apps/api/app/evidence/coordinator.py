@@ -10,7 +10,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.ai_gateway.gateway import AIGateway, AIGatewayError
+from app.ai_gateway.gateway import (
+    POST_INTERVIEW_ASSESSMENT_PURPOSE,
+    AIGateway,
+    AIGatewayError,
+    AIGatewayResult,
+)
 from app.ai_gateway.models import AIPolicyVersion
 from app.ai_gateway.provider import ReasoningProviderError
 from app.evidence.assessment_schema import AssessmentAnalysisResult, AssessmentFinding
@@ -122,30 +127,44 @@ class SessionEvidenceEvaluationCoordinator:
                     )
                 )
                 continue
-            try:
-                gateway_result = await self._gateway.reason_structured(
-                    interview_session_id=interview_session_id,
-                    capability="STANDARD_REASONING",
-                    purpose="post_interview_assessment",
-                    policy=assessment_evaluator_policy_descriptor(),
-                    instructions=ASSESSMENT_EVALUATOR_INSTRUCTIONS,
-                    input_content=unit.serialize(),
-                    output_model=AssessmentAnalysisResult,
-                    correlation_id=unit.unit_key,
-                    metadata={
-                        "assessment_unit_key": unit.unit_key,
-                        "assessment_unit_kind": unit.kind.value,
-                    },
-                )
-            except (AIGatewayError, ReasoningProviderError) as exc:
-                results.append(
-                    UnitEvaluationResult(
-                        unit_key=unit.unit_key,
-                        unit_kind=unit.kind.value,
-                        status="FAILED",
-                        error_category=getattr(exc, "category", "AI_GATEWAY_ERROR"),
+            gateway_result: AIGatewayResult[AssessmentAnalysisResult] | None = None
+            for attempt in (1, 2):
+                try:
+                    gateway_result = await self._gateway.reason_structured(
+                        interview_session_id=interview_session_id,
+                        capability="STANDARD_REASONING",
+                        purpose=POST_INTERVIEW_ASSESSMENT_PURPOSE,
+                        policy=assessment_evaluator_policy_descriptor(),
+                        instructions=ASSESSMENT_EVALUATOR_INSTRUCTIONS,
+                        input_content=unit.serialize(),
+                        output_model=AssessmentAnalysisResult,
+                        correlation_id=f"{unit.unit_key}:attempt:{attempt}",
+                        metadata={
+                            "assessment_unit_key": unit.unit_key,
+                            "assessment_unit_kind": unit.kind.value,
+                            "attempt": attempt,
+                        },
                     )
-                )
+                except (AIGatewayError, ReasoningProviderError) as exc:
+                    error_category = getattr(exc, "category", "AI_GATEWAY_ERROR")
+                    if (
+                        attempt == 1
+                        and isinstance(exc, AIGatewayError)
+                        and error_category == "STRUCTURED_OUTPUT_INVALID"
+                    ):
+                        continue
+                    results.append(
+                        UnitEvaluationResult(
+                            unit_key=unit.unit_key,
+                            unit_kind=unit.kind.value,
+                            status="FAILED",
+                            error_category=error_category,
+                        )
+                    )
+                    break
+                else:
+                    break
+            if gateway_result is None:
                 continue
 
             try:

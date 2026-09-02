@@ -17,10 +17,20 @@ class BudgetAvailability:
     duration_seconds: int
 
 
+def interactive_deep_reasoning_limit(budget: SessionBudget) -> int:
+    """Return the portion of the total deep-reasoning budget available live."""
+    return (
+        budget.max_deep_reasoning_calls
+        - budget.reserved_post_interview_deep_reasoning_calls
+    )
+
+
 def budget_availability(budget: SessionBudget) -> BudgetAvailability:
     return BudgetAvailability(
         probe_available=budget.probes_used < budget.max_probes,
-        deep_reasoning_available=budget.deep_reasoning_used < budget.max_deep_reasoning_calls,
+        deep_reasoning_available=(
+            budget.deep_reasoning_used < interactive_deep_reasoning_limit(budget)
+        ),
         strong_reasoning_available=budget.strong_reasoning_used < budget.max_strong_reasoning_calls,
         vision_available=budget.vision_used < budget.max_vision_calls,
         duration_seconds=budget.max_duration_seconds,

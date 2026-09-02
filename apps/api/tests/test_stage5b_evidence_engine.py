@@ -43,6 +43,10 @@ from app.evidence.models import (
     EvidenceSkill,
     EvidenceSource,
 )
+from app.evidence.policy import (
+    ASSESSMENT_EVALUATOR_INSTRUCTIONS,
+    assessment_evaluator_policy_descriptor,
+)
 from app.evidence.snapshot import canonical_evaluation_snapshot
 from app.evidence.units import (
     AssessmentInputBuilder,
@@ -54,7 +58,12 @@ from app.execution.repository import ExecutionRepository
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.interaction_repository import InterviewInteractionRepository
-from app.interviews.models import CandidateResponse, InterviewerPrompt, InterviewSession
+from app.interviews.models import (
+    CandidateResponse,
+    InterviewerPrompt,
+    InterviewSession,
+    SessionBudget,
+)
 from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
 from app.main import create_app
 from app.observation.models import InterviewEvent
@@ -133,6 +142,28 @@ class _SelectiveAssessmentProvider(FakeReasoningProvider):
         self.output_data = (
             self._selected_output(payload) if self._selector(payload) else {"findings": []}
         )
+        return await super().reason_structured(
+            request,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+
+
+class _SequencedAssessmentProvider(FakeReasoningProvider):
+    def __init__(self, outputs: list[dict[str, Any]]) -> None:
+        if not outputs:
+            raise ValueError("Sequenced provider requires at least one output")
+        super().__init__(output_data=outputs[0])
+        self._outputs = outputs
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        self.output_data = self._outputs[min(self.calls, len(self._outputs) - 1)]
         return await super().reason_structured(
             request,
             model=model,
@@ -1340,9 +1371,16 @@ async def test_assessment_admission_rejects_fabricated_source_concept_and_skill(
             breakpoint_count = await session.scalar(
                 select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
             )
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == session_id)
+            )
         assert statuses == ("REJECTED", "REJECTED", "REJECTED")
         assert evidence_count == 0
         assert breakpoint_count == 0
+        assert invocation_count == 1
+        assert provider.calls == 1
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,
@@ -1741,7 +1779,240 @@ async def test_unresolved_prompted_misconception_after_probe_still_creates_break
         await engine.dispose()
 
 
-async def test_malformed_output_and_provider_failure_create_no_canonical_evidence(
+async def test_structured_output_retry_invalid_then_valid_persists_only_second_attempt(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, concept_key, concept_id = await _create_committed_response_session(
+            sessions
+        )
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        provider = _SequencedAssessmentProvider(
+            [
+                {"findings": [{"malformed": True}]},
+                _analysis_output(concept_key=concept_key, weakness=True),
+            ]
+        )
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        )
+
+        result = await coordinator.evaluate(session_id)
+
+        assert result.completed_units == 1
+        assert result.failed_units == 0
+        assert len(result.units[0].assessment_ids) == 1
+        assert len(result.units[0].evidence_ids) == 1
+        assert len(result.units[0].breakpoint_ids) == 1
+        assert provider.calls == 2
+        assert [request.metadata["attempt"] for request in provider.requests] == [1, 2]
+        assert all(
+            request.metadata["assessment_unit_key"] == result.units[0].unit_key
+            for request in provider.requests
+        )
+        assert [request.correlation_id for request in provider.requests] == [
+            f"{result.units[0].unit_key}:attempt:1",
+            f"{result.units[0].unit_key}:attempt:2",
+        ]
+        assert provider.requests[0].input_content == provider.requests[1].input_content
+        assert provider.requests[0].policy == provider.requests[1].policy
+
+        async with sessions() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.interview_session_id == session_id)
+                    .order_by(AIInvocation.started_at, AIInvocation.id)
+                )
+            )
+            assessments = list(
+                await session.scalars(
+                    select(Assessment).where(Assessment.interview_session_id == session_id)
+                )
+            )
+            evidence_count = await session.scalar(
+                select(func.count())
+                .select_from(Evidence)
+                .where(Evidence.interview_session_id == session_id)
+            )
+            breakpoint_count = await session.scalar(
+                select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
+            )
+        assert [(item.status, item.error_class) for item in invocations] == [
+            ("FAILED", "STRUCTURED_OUTPUT_INVALID"),
+            ("SUCCEEDED", None),
+        ]
+        assert len(assessments) == 1
+        assert assessments[0].ai_invocation_id == invocations[1].id
+        assert evidence_count == 1
+        assert breakpoint_count == 1
+
+        repeated = await coordinator.evaluate(session_id)
+        assert repeated.skipped_units == 1
+        assert repeated.units[0].error_category == "ALREADY_EVALUATED"
+        assert provider.calls == 2
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_post_interview_budget_exhaustion_fails_unit_without_invocation_or_retry(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, _, concept_id = await _create_committed_response_session(sessions)
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        async with sessions() as session, session.begin():
+            budget = await session.get(SessionBudget, session_id)
+            assert budget is not None
+            budget.deep_reasoning_used = budget.max_deep_reasoning_calls
+
+        provider = FakeReasoningProvider(output_data={"findings": []})
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        )
+
+        first = await coordinator.evaluate(session_id)
+        second = await coordinator.evaluate(session_id)
+
+        assert first.failed_units == 1
+        assert second.failed_units == 1
+        assert first.units[0].error_category == "BUDGET_EXHAUSTED"
+        assert second.units[0].error_category == "BUDGET_EXHAUSTED"
+        assert provider.calls == 0
+        async with sessions() as session:
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == session_id)
+            )
+            assessment_count = await session.scalar(
+                select(func.count())
+                .select_from(Assessment)
+                .where(Assessment.interview_session_id == session_id)
+            )
+            budget = await session.get(SessionBudget, session_id)
+        assert invocation_count == 0
+        assert assessment_count == 0
+        assert budget is not None
+        assert budget.deep_reasoning_used == budget.max_deep_reasoning_calls
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_two_live_calls_leave_capacity_for_seven_post_interview_units(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        async with sessions() as session, session.begin():
+            dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+            concept = await _attach_problem_concept(
+                session,
+                dev.interview_session,
+                key=f"stage5_browser_shape_{str(dev.interview_session.id).replace('-', '_')}",
+            )
+            cleanup_user_ids.add(dev.user.id)
+            cleanup_concept_ids.add(concept.id)
+            service = RealtimeControlService(session)
+            for sequence in range(1, 8):
+                await _candidate_turn(
+                    service,
+                    dev.interview_session.id,
+                    sequence=sequence,
+                    provider_item_id=f"browser-shape-{sequence}",
+                    transcript=f"Independent bounded response {sequence}.",
+                )
+            await InterviewCompletionService(session).complete(
+                session_id=dev.interview_session.id,
+                reason="USER_ENDED",
+                expected_state_version=dev.interview_session.state_version,
+                idempotency_key=f"browser-shape-complete:{dev.interview_session.id}",
+            )
+            session_id = dev.interview_session.id
+
+        provider = FakeReasoningProvider(output_data={"findings": []})
+        gateway = AIGateway(
+            settings=create_settings(env_file=tmp_path / ".env"),
+            sessionmaker=sessions,
+            provider=provider,
+        )
+        for live_call in (1, 2):
+            await gateway.reason_structured(
+                interview_session_id=session_id,
+                capability="STANDARD_REASONING",
+                purpose="live_examiner",
+                policy=assessment_evaluator_policy_descriptor(),
+                instructions=ASSESSMENT_EVALUATOR_INSTRUCTIONS,
+                input_content=f'{{"live_call":{live_call}}}',
+                output_model=AssessmentAnalysisResult,
+            )
+
+        result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=gateway,
+        ).evaluate(session_id)
+
+        assert len(result.units) == 7
+        assert result.completed_units == 7
+        assert result.failed_units == 0
+        assert provider.calls == 9
+        async with sessions() as session:
+            budget = await session.get(SessionBudget, session_id)
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(AIInvocation.interview_session_id == session_id)
+                )
+            )
+        assert budget is not None
+        assert budget.max_deep_reasoning_calls == 24
+        assert budget.reserved_post_interview_deep_reasoning_calls == 16
+        assert budget.deep_reasoning_used == 9
+        assert len(invocations) == 9
+        assert sum(item.purpose == "live_examiner" for item in invocations) == 2
+        assert sum(item.purpose == "post_interview_assessment" for item in invocations) == 7
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_malformed_output_exhausts_one_retry_and_provider_failure_does_not_retry(
     tmp_path: Path,
 ) -> None:
     engine = build_engine()
@@ -1752,7 +2023,7 @@ async def test_malformed_output_and_provider_failure_create_no_canonical_evidenc
         (
             malformed_session_id,
             malformed_user_id,
-            _,
+            malformed_concept_key,
             malformed_concept_id,
         ) = await _create_committed_response_session(sessions)
         (
@@ -1774,6 +2045,43 @@ async def test_malformed_output_and_provider_failure_create_no_canonical_evidenc
         )
 
         malformed = await coordinator.evaluate(malformed_session_id)
+        assert provider.calls == 2
+        async with sessions() as session:
+            malformed_assessments = await session.scalar(
+                select(func.count())
+                .select_from(Assessment)
+                .where(Assessment.interview_session_id == malformed_session_id)
+            )
+            malformed_evidence = await session.scalar(
+                select(func.count())
+                .select_from(Evidence)
+                .where(Evidence.interview_session_id == malformed_session_id)
+            )
+            malformed_breakpoints = await session.scalar(
+                select(func.count())
+                .select_from(Breakpoint)
+                .where(Breakpoint.user_id == malformed_user_id)
+            )
+            malformed_invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(
+                        AIInvocation.interview_session_id == malformed_session_id
+                    )
+                )
+            )
+            malformed_budget = await session.get(SessionBudget, malformed_session_id)
+        assert malformed_assessments == 0
+        assert malformed_evidence == 0
+        assert malformed_breakpoints == 0
+        assert len(malformed_invocations) == 2
+        assert malformed_budget is not None
+        assert malformed_budget.deep_reasoning_used == 2
+        assert all(
+            invocation.status == "FAILED"
+            and invocation.error_class == "STRUCTURED_OUTPUT_INVALID"
+            for invocation in malformed_invocations
+        )
+
         provider.output_data = _analysis_output(concept_key=concept_key)
         provider.error = ReasoningProviderError("PROVIDER_UNAVAILABLE")
         failed = await coordinator.evaluate(failed_session_id)
@@ -1782,6 +2090,7 @@ async def test_malformed_output_and_provider_failure_create_no_canonical_evidenc
         assert malformed.units[0].error_category == "STRUCTURED_OUTPUT_INVALID"
         assert failed.failed_units == 1
         assert failed.units[0].error_category == "PROVIDER_UNAVAILABLE"
+        assert provider.calls == 3
         async with sessions() as session:
             assessments = await session.scalar(
                 select(func.count())
@@ -1806,7 +2115,30 @@ async def test_malformed_output_and_provider_failure_create_no_canonical_evidenc
             )
         assert assessments == 0
         assert evidence_count == 0
-        assert invocation_statuses == ("FAILED", "FAILED")
+        assert len(invocation_statuses) == 3
+        assert set(invocation_statuses) == {"FAILED"}
+
+        provider.error = None
+        provider.output_data = _analysis_output(concept_key=malformed_concept_key)
+        retried_later = await coordinator.evaluate(malformed_session_id)
+        assert retried_later.completed_units == 1
+        assert provider.calls == 4
+        async with sessions() as session:
+            later_assessments = await session.scalar(
+                select(func.count())
+                .select_from(Assessment)
+                .where(Assessment.interview_session_id == malformed_session_id)
+            )
+            later_evidence = await session.scalar(
+                select(func.count())
+                .select_from(Evidence)
+                .where(Evidence.interview_session_id == malformed_session_id)
+            )
+            later_budget = await session.get(SessionBudget, malformed_session_id)
+        assert later_assessments == 1
+        assert later_evidence == 1
+        assert later_budget is not None
+        assert later_budget.deep_reasoning_used == 3
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,

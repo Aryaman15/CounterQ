@@ -179,6 +179,14 @@ class SessionBudget(Base):
         CheckConstraint("max_duration_seconds > 0", name="max_duration_positive"),
         CheckConstraint("max_probes >= 0", name="max_probes_nonnegative"),
         CheckConstraint("max_deep_reasoning_calls >= 0", name="max_deep_reasoning_nonnegative"),
+        CheckConstraint(
+            "reserved_post_interview_deep_reasoning_calls >= 0",
+            name="post_eval_deep_reserve_nonnegative",
+        ),
+        CheckConstraint(
+            "reserved_post_interview_deep_reasoning_calls <= max_deep_reasoning_calls",
+            name="post_eval_deep_reserve_within_total",
+        ),
         CheckConstraint("max_strong_reasoning_calls >= 0", name="max_strong_reasoning_nonnegative"),
         CheckConstraint("max_vision_calls >= 0", name="max_vision_nonnegative"),
         CheckConstraint("probes_used >= 0", name="probes_used_nonnegative"),
@@ -202,6 +210,12 @@ class SessionBudget(Base):
     max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     max_probes: Mapped[int] = mapped_column(Integer, nullable=False)
     max_deep_reasoning_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_post_interview_deep_reasoning_calls: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     max_strong_reasoning_calls: Mapped[int] = mapped_column(Integer, nullable=False)
     max_vision_calls: Mapped[int] = mapped_column(Integer, nullable=False)
     soft_monetary_budget: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)

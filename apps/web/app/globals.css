@@ -811,6 +811,34 @@ a:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.voice-dev-evidence-units {
+  display: grid;
+  gap: 6px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.voice-dev-evidence-units li {
+  display: grid;
+  gap: 2px;
+  border-left: 2px solid var(--line-strong);
+  padding-left: 7px;
+  color: var(--quiet);
+  font-size: 10px;
+}
+
+.voice-dev-evidence-unit-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+}
+
+.voice-dev-evidence-unit-heading strong {
+  font-weight: 800;
+}
+
 .voice-dev-evidence-snapshot {
   max-height: 280px;
   margin: 0;

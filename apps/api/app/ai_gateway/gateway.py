@@ -32,10 +32,12 @@ from app.ai_gateway.structured_output import (
     validate_strict_reasoning_schema,
 )
 from app.config.settings import Settings
+from app.interviews.budget_policy import interactive_deep_reasoning_limit
 from app.interviews.models import InterviewSession, SessionBudget
 
 T = TypeVar("T", bound=BaseModel)
 logger = structlog.get_logger(__name__)
+POST_INTERVIEW_ASSESSMENT_PURPOSE = "post_interview_assessment"
 
 
 class AIGatewayError(Exception):
@@ -255,6 +257,27 @@ class AIGateway:
         try:
             parsed = output_model.model_validate(provider_result.output_data)
         except ValidationError as exc:
+            validation_errors = exc.errors(
+                include_url=False,
+                include_context=False,
+                include_input=False,
+            )
+            logger.warning(
+                "reasoning_structured_output_invalid",
+                ai_invocation_id=str(prepared.invocation_id),
+                purpose=purpose,
+                policy_key=policy.policy_key,
+                policy_version=policy.version,
+                output_schema_name=output_model.__name__,
+                validation_error_count=len(validation_errors),
+                validation_error_types=sorted(
+                    {str(error["type"]) for error in validation_errors}
+                ),
+                validation_error_field_paths=[
+                    ".".join(str(path_part) for path_part in error.get("loc", ()))
+                    for error in validation_errors
+                ],
+            )
             await self._finish_failed_invocation(
                 prepared.invocation_id,
                 status="FAILED",
@@ -319,7 +342,11 @@ class AIGateway:
                         raise ReasoningSessionNotFound("Interview session was not found")
                     policy_version = await get_or_create_policy_version(session, policy)
                     budget = await _lock_budget(session, interview_session_id)
-                    budget_used, budget_remaining = _reserve_reasoning_budget(budget, capability)
+                    budget_used, budget_remaining = _reserve_reasoning_budget(
+                        budget,
+                        capability,
+                        purpose=purpose,
+                    )
                     invocation = AIInvocation(
                         user_id=interview.user_id,
                         interview_session_id=interview.id,
@@ -457,17 +484,24 @@ async def _lock_budget(session: AsyncSession, interview_session_id: UUID) -> Ses
 def _reserve_reasoning_budget(
     budget: SessionBudget,
     capability: ReasoningCapability,
+    *,
+    purpose: str,
 ) -> tuple[int, int]:
     if budget.estimated_cost >= budget.hard_monetary_budget:
         raise ReasoningBudgetExceeded("Interview session has reached its hard reasoning budget")
 
     if capability == "STANDARD_REASONING":
-        if budget.deep_reasoning_used >= budget.max_deep_reasoning_calls:
+        deep_reasoning_limit = (
+            budget.max_deep_reasoning_calls
+            if purpose == POST_INTERVIEW_ASSESSMENT_PURPOSE
+            else interactive_deep_reasoning_limit(budget)
+        )
+        if budget.deep_reasoning_used >= deep_reasoning_limit:
             raise ReasoningBudgetExceeded("Deep reasoning budget is exhausted")
         budget.deep_reasoning_used += 1
         return (
             budget.deep_reasoning_used,
-            budget.max_deep_reasoning_calls - budget.deep_reasoning_used,
+            deep_reasoning_limit - budget.deep_reasoning_used,
         )
 
     if budget.strong_reasoning_used >= budget.max_strong_reasoning_calls:
