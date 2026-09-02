@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -15,7 +17,12 @@ from test_stage5a_canonical_evaluation import evidence_fixture, validate_evidenc
 
 from app.ai_gateway.gateway import AIGateway
 from app.ai_gateway.models import AIInvocation
-from app.ai_gateway.provider import ReasoningProviderError
+from app.ai_gateway.provider import (
+    ProviderReasoningResult,
+    ReasoningEffort,
+    ReasoningProviderError,
+    ReasoningRequest,
+)
 from app.auth.models import User
 from app.config.settings import create_settings, get_settings
 from app.db.session import build_engine
@@ -37,7 +44,11 @@ from app.evidence.models import (
     EvidenceSource,
 )
 from app.evidence.snapshot import canonical_evaluation_snapshot
-from app.evidence.units import AssessmentInputBuilder, AssessmentUnitKind
+from app.evidence.units import (
+    AssessmentInputBuilder,
+    AssessmentUnitKind,
+    is_successful_recovery_unit,
+)
 from app.evidence.validation import EvidenceValidationService
 from app.execution.repository import ExecutionRepository
 from app.interviews.completion import InterviewCompletionService
@@ -98,6 +109,65 @@ def _analysis_output(
             }
         ]
     }
+
+
+class _SelectiveAssessmentProvider(FakeReasoningProvider):
+    def __init__(
+        self,
+        *,
+        selector: Callable[[dict[str, Any]], bool],
+        selected_output: Callable[[dict[str, Any]], dict[str, Any]],
+    ) -> None:
+        super().__init__(output_data={"findings": []})
+        self._selector = selector
+        self._selected_output = selected_output
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        payload = cast(dict[str, Any], json.loads(request.input_content))
+        self.output_data = (
+            self._selected_output(payload) if self._selector(payload) else {"findings": []}
+        )
+        return await super().reason_structured(
+            request,
+            model=model,
+            reasoning_effort=reasoning_effort,
+        )
+
+
+def _unit_kind_is(kind: str) -> Callable[[dict[str, Any]], bool]:
+    return lambda payload: payload["assessment_unit"]["kind"] == kind
+
+
+def _payload_is_successful_recovery(payload: dict[str, Any]) -> bool:
+    unit = payload["assessment_unit"]
+    execution = unit.get("execution", {})
+    previous = execution.get("previous_failed_execution")
+    return (
+        unit["kind"] == "EXECUTION_DEBUGGING"
+        and execution.get("status") == "SUCCEEDED"
+        and isinstance(previous, dict)
+        and previous.get("status") != "SUCCEEDED"
+    )
+
+
+def _weakness_output_for_payload(
+    payload: dict[str, Any], *, concept_key: str, polarity: str = "NEGATIVE"
+) -> dict[str, Any]:
+    source_aliases = [
+        source["alias"] for source in payload["assessment_unit"]["source_allowlist"]
+    ]
+    return _analysis_output(
+        concept_key=concept_key,
+        polarity=polarity,
+        source_aliases=source_aliases,
+        weakness=True,
+    )
 
 
 def test_stage5_development_routes_are_blocked_in_production(tmp_path: Path) -> None:
@@ -273,24 +343,181 @@ async def _attach_problem_concept(
 
 async def _create_committed_response_session(
     sessions: async_sessionmaker[AsyncSession],
+    *,
+    with_probe: bool = False,
+    candidate_transcript: str = "This is one bounded finalized candidate demonstration.",
 ) -> tuple[UUID, UUID, str, UUID]:
     async with sessions() as session, session.begin():
         dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
         dev.budget.max_deep_reasoning_calls = 20
         concept_key = f"stage5_admission_{str(dev.interview_session.id).replace('-', '_')}"
         concept = await _attach_problem_concept(session, dev.interview_session, key=concept_key)
+        service = RealtimeControlService(session)
+        sequence = 1
+        if with_probe:
+            prompt = await _prompt(
+                session,
+                dev.interview_session.id,
+                kind="PROBE",
+                text="Test the candidate's unresolved technical boundary.",
+            )
+            await _deliver(
+                service,
+                dev.interview_session.id,
+                prompt,
+                sequence=sequence,
+                actual="Why does that invariant hold?",
+            )
+            sequence = 3
         await _candidate_turn(
-            RealtimeControlService(session),
+            service,
             dev.interview_session.id,
-            sequence=1,
+            sequence=sequence,
             provider_item_id=f"admission-{dev.interview_session.id}",
-            transcript="This is one bounded finalized candidate demonstration.",
+            transcript=candidate_transcript,
         )
         await InterviewCompletionService(session).complete(
             session_id=dev.interview_session.id,
             reason="USER_ENDED",
             expected_state_version=dev.interview_session.state_version,
             idempotency_key=f"stage5-admission-complete:{dev.interview_session.id}",
+        )
+        return dev.interview_session.id, dev.user.id, concept_key, concept.id
+
+
+async def _create_committed_recovery_session(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    with_probe: bool,
+    user_id: UUID | None = None,
+    concept_id: UUID | None = None,
+    concept_key: str | None = None,
+) -> tuple[UUID, UUID, UUID, str, UUID]:
+    async with sessions() as session, session.begin():
+        dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+        dev.budget.max_deep_reasoning_calls = 20
+        created_user_id = dev.user.id
+        if user_id is not None:
+            dev.interview_session.user_id = user_id
+        if concept_id is None:
+            resolved_key = (
+                concept_key
+                or f"stage5_recovery_{str(dev.interview_session.id).replace('-', '_')}"
+            )
+            concept = await _attach_problem_concept(
+                session, dev.interview_session, key=resolved_key
+            )
+            concept_id = concept.id
+        else:
+            if concept_key is None:
+                raise ValueError("Reused recovery Concept requires its canonical key")
+            resolved_key = concept_key
+            session.add(
+                ProblemConcept(
+                    problem_version_id=dev.problem_version.id,
+                    concept_id=concept_id,
+                    relevance="CORE",
+                    expected_importance="HIGH",
+                    role="PRIMARY",
+                )
+            )
+            await session.flush()
+
+        service = RealtimeControlService(session)
+        previous = await service.persist_candidate_code_snapshot(
+            session_id=dev.interview_session.id,
+            message=CandidateCodeSnapshotMessage(
+                **_client(1),
+                type="candidate_code_snapshot",
+                source_code="left = mid;",
+                language="cpp",
+                trigger="INITIAL_EDITOR_STATE",
+            ),
+        )
+        await _completed_execution(
+            session,
+            dev.interview_session,
+            code_snapshot_id=previous.snapshot_id,
+            status="RUNTIME_ERROR",
+            idempotency_key=f"recovery-failed:{dev.interview_session.id}",
+        )
+        delivery_event_id: UUID | None = None
+        if with_probe:
+            prompt = await _prompt(
+                session,
+                dev.interview_session.id,
+                kind="PROBE",
+                text="Test the failed boundary.",
+            )
+            delivery_event_id = await _deliver(
+                service,
+                dev.interview_session.id,
+                prompt,
+                sequence=2,
+                actual="Which update guarantees progress?",
+            )
+        current = await service.persist_candidate_code_snapshot(
+            session_id=dev.interview_session.id,
+            message=CandidateCodeSnapshotMessage(
+                **_client(4 if with_probe else 2),
+                type="candidate_code_snapshot",
+                source_code="left = mid + 1;",
+                language="cpp",
+                trigger="EDIT_BURST",
+            ),
+        )
+        if delivery_event_id is not None:
+            current_event = await session.get(InterviewEvent, current.event_id)
+            assert current_event is not None
+            current_event.causation_id = delivery_event_id
+            await session.flush()
+        await _completed_execution(
+            session,
+            dev.interview_session,
+            code_snapshot_id=current.snapshot_id,
+            status="SUCCEEDED",
+            idempotency_key=f"recovery-succeeded:{dev.interview_session.id}",
+        )
+        await InterviewCompletionService(session).complete(
+            session_id=dev.interview_session.id,
+            reason="USER_ENDED",
+            expected_state_version=dev.interview_session.state_version,
+            idempotency_key=f"recovery-complete:{dev.interview_session.id}",
+        )
+        return (
+            dev.interview_session.id,
+            dev.interview_session.user_id,
+            created_user_id,
+            resolved_key,
+            concept_id,
+        )
+
+
+async def _create_committed_direct_code_session(
+    sessions: async_sessionmaker[AsyncSession],
+) -> tuple[UUID, UUID, str, UUID]:
+    async with sessions() as session, session.begin():
+        dev = await create_development_interview(session, initial_stage="IMPLEMENTATION")
+        dev.budget.max_deep_reasoning_calls = 20
+        concept_key = f"stage5_direct_{str(dev.interview_session.id).replace('-', '_')}"
+        concept = await _attach_problem_concept(
+            session, dev.interview_session, key=concept_key
+        )
+        await RealtimeControlService(session).persist_candidate_code_snapshot(
+            session_id=dev.interview_session.id,
+            message=CandidateCodeSnapshotMessage(
+                **_client(1),
+                type="candidate_code_snapshot",
+                source_code="while (left <= right) { left = mid; }",
+                language="cpp",
+                trigger="EDIT_BURST",
+            ),
+        )
+        await InterviewCompletionService(session).complete(
+            session_id=dev.interview_session.id,
+            reason="USER_ENDED",
+            expected_state_version=dev.interview_session.state_version,
+            idempotency_key=f"direct-complete:{dev.interview_session.id}",
         )
         return dev.interview_session.id, dev.user.id, concept_key, concept.id
 
@@ -788,6 +1015,12 @@ async def test_assessment_builder_applies_debugging_window_independence(
     )
 
     units = await AssessmentInputBuilder(db_session).build_completed_simulation(interview.id)
+    failed_execution = next(
+        unit
+        for unit in units
+        if unit.kind == AssessmentUnitKind.EXECUTION_DEBUGGING
+        and unit.source_code_snapshot_id == previous.snapshot_id
+    )
     debugging = next(
         unit
         for unit in units
@@ -806,6 +1039,8 @@ async def test_assessment_builder_applies_debugging_window_independence(
         cast(dict[str, object], event)["code_diff"] is not None
         for event in cast(list[object], execution["behavior_sequence"])
     )
+    assert is_successful_recovery_unit(failed_execution) is False
+    assert is_successful_recovery_unit(debugging) is True
     if with_probe:
         assert debugging.independence_level is None
         assert debugging.independence_reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
@@ -853,6 +1088,7 @@ async def test_ordinary_independent_code_diff_remains_direct_code(
     code = cast(dict[str, object], assessment_unit["code"])
 
     assert unit.kind == AssessmentUnitKind.DIRECT_CODE
+    assert is_successful_recovery_unit(unit) is False
     assert code["candidate_revision_observed"] is True
     assert code["correction_status"] == "NOT_DETERMINED_BY_SOFTWARE"
     assert "self_correction" not in unit.serialize().lower()
@@ -1240,6 +1476,262 @@ async def test_concept_only_skill_only_and_combined_findings_become_evidence(
             "EXPLANATION_QUALITY": (0, 1),
             "DEPTH": (1, 1),
         }
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_independent_successful_recovery_preserves_evidence_without_breakpoint_on_retry(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, created_user_id, concept_key, concept_id = (
+            await _create_committed_recovery_session(sessions, with_probe=False)
+        )
+        cleanup_user_ids.update((user_id, created_user_id))
+        cleanup_concept_ids.add(concept_id)
+        provider = _SelectiveAssessmentProvider(
+            selector=_payload_is_successful_recovery,
+            selected_output=lambda payload: _weakness_output_for_payload(
+                payload, concept_key=concept_key, polarity="MIXED"
+            ),
+        )
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        )
+
+        first = await coordinator.evaluate(session_id)
+        second = await coordinator.evaluate(session_id)
+
+        recovery = next(unit for unit in first.units if unit.evidence_ids)
+        retried_recovery = next(unit for unit in second.units if unit.evidence_ids)
+        assert recovery.unit_kind == "EXECUTION_DEBUGGING"
+        assert recovery.breakpoint_ids == ()
+        assert retried_recovery.error_category == "ALREADY_EVALUATED"
+        assert retried_recovery.breakpoint_ids == ()
+        async with sessions() as session:
+            evidence = await session.scalar(
+                select(Evidence).where(Evidence.interview_session_id == session_id)
+            )
+            breakpoint_count = await session.scalar(
+                select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
+            )
+            link_count = await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .join(Evidence, Evidence.id == BreakpointEvidence.evidence_id)
+                .where(Evidence.interview_session_id == session_id)
+            )
+        assert evidence is not None
+        assert evidence.polarity == "MIXED"
+        assert evidence.independence_level == "INDEPENDENT"
+        assert breakpoint_count == 0
+        assert link_count == 0
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_after_probe_successful_recovery_preserves_attribution_without_breakpoint(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, created_user_id, concept_key, concept_id = (
+            await _create_committed_recovery_session(sessions, with_probe=True)
+        )
+        cleanup_user_ids.update((user_id, created_user_id))
+        cleanup_concept_ids.add(concept_id)
+        provider = _SelectiveAssessmentProvider(
+            selector=_payload_is_successful_recovery,
+            selected_output=lambda payload: _weakness_output_for_payload(
+                payload, concept_key=concept_key, polarity="MIXED"
+            ),
+        )
+        result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        ).evaluate(session_id)
+
+        recovery = next(unit for unit in result.units if unit.evidence_ids)
+        assert recovery.breakpoint_ids == ()
+        async with sessions() as session:
+            evidence = await session.scalar(
+                select(Evidence).where(Evidence.interview_session_id == session_id)
+            )
+            breakpoint_count = await session.scalar(
+                select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
+            )
+        assert evidence is not None
+        assert evidence.independence_level == "AFTER_PROBE"
+        assert breakpoint_count == 0
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_unresolved_direct_bug_creates_breakpoint_recovery_does_not_reinforce_it(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        direct_session_id, user_id, concept_key, concept_id = (
+            await _create_committed_direct_code_session(sessions)
+        )
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        direct_provider = _SelectiveAssessmentProvider(
+            selector=_unit_kind_is("DIRECT_CODE"),
+            selected_output=lambda payload: _weakness_output_for_payload(
+                payload, concept_key=concept_key
+            ),
+        )
+        direct_result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=direct_provider,
+            ),
+        ).evaluate(direct_session_id)
+        assert len(direct_result.units[0].breakpoint_ids) == 1
+
+        recovery_session_id, _, recovery_user_id, _, _ = (
+            await _create_committed_recovery_session(
+                sessions,
+                with_probe=False,
+                user_id=user_id,
+                concept_id=concept_id,
+                concept_key=concept_key,
+            )
+        )
+        cleanup_user_ids.add(recovery_user_id)
+        recovery_provider = _SelectiveAssessmentProvider(
+            selector=_payload_is_successful_recovery,
+            selected_output=lambda payload: _weakness_output_for_payload(
+                payload, concept_key=concept_key, polarity="MIXED"
+            ),
+        )
+        recovery_result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=recovery_provider,
+            ),
+        ).evaluate(recovery_session_id)
+
+        assert all(not unit.breakpoint_ids for unit in recovery_result.units)
+        async with sessions() as session:
+            breakpoints = list(
+                await session.scalars(
+                    select(Breakpoint).where(Breakpoint.user_id == user_id)
+                )
+            )
+            relationships = list(
+                await session.scalars(
+                    select(BreakpointEvidence.relationship).where(
+                        BreakpointEvidence.breakpoint_id == breakpoints[0].id
+                    )
+                )
+            )
+            recovery_evidence = await session.scalar(
+                select(Evidence).where(
+                    Evidence.interview_session_id == recovery_session_id
+                )
+            )
+        assert len(breakpoints) == 1
+        assert breakpoints[0].status == "OPEN"
+        assert relationships == ["CREATED"]
+        assert recovery_evidence is not None
+        assert recovery_evidence.polarity == "MIXED"
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_unresolved_prompted_misconception_after_probe_still_creates_breakpoint(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, concept_key, concept_id = (
+            await _create_committed_response_session(
+                sessions,
+                with_probe=True,
+                candidate_transcript=(
+                    "The pointer can stay at mid because the loop will eventually terminate."
+                ),
+            )
+        )
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        provider = _SelectiveAssessmentProvider(
+            selector=_unit_kind_is("PROMPTED_RESPONSE"),
+            selected_output=lambda payload: _weakness_output_for_payload(
+                payload, concept_key=concept_key
+            ),
+        )
+        result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        ).evaluate(session_id)
+
+        assert len(result.units) == 1
+        assert len(result.units[0].breakpoint_ids) == 1
+        async with sessions() as session:
+            evidence = await session.scalar(
+                select(Evidence).where(Evidence.interview_session_id == session_id)
+            )
+            breakpoint = await session.scalar(
+                select(Breakpoint).where(Breakpoint.user_id == user_id)
+            )
+        assert evidence is not None
+        assert evidence.independence_level == "AFTER_PROBE"
+        assert breakpoint is not None
+        assert breakpoint.status == "OPEN"
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,

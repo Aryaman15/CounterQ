@@ -63,6 +63,25 @@ class AssessmentUnit:
         return serialize_assessment_input(self.input_payload)
 
 
+def is_successful_recovery_unit(unit: AssessmentUnit) -> bool:
+    """Return whether canonical execution facts show failure followed by success."""
+
+    if unit.kind != AssessmentUnitKind.EXECUTION_DEBUGGING:
+        return False
+    assessment_unit = unit.input_payload.get("assessment_unit")
+    if not isinstance(assessment_unit, dict):
+        return False
+    execution = assessment_unit.get("execution")
+    if not isinstance(execution, dict) or execution.get("status") != "SUCCEEDED":
+        return False
+    previous_execution = execution.get("previous_failed_execution")
+    return (
+        isinstance(previous_execution, dict)
+        and isinstance(previous_execution.get("status"), str)
+        and previous_execution["status"] != "SUCCEEDED"
+    )
+
+
 class AssessmentInputBuilder:
     """Read-only deterministic projection from durable session facts to bounded units."""
 

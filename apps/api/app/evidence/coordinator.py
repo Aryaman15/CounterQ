@@ -41,7 +41,12 @@ from app.evidence.policy import (
 )
 from app.evidence.repository import EvidenceRepository
 from app.evidence.source_admission import evidence_source_admission
-from app.evidence.units import AssessmentInputBuilder, AssessmentSourceFact, AssessmentUnit
+from app.evidence.units import (
+    AssessmentInputBuilder,
+    AssessmentSourceFact,
+    AssessmentUnit,
+    is_successful_recovery_unit,
+)
 from app.evidence.validation import EvidenceValidationService
 from app.interviews.models import CandidateResponse, InterviewSession
 
@@ -375,6 +380,8 @@ class SessionEvidenceEvaluationCoordinator:
         assert interview is not None
         service = BreakpointService(session)
         if finding.breakpoint_effect == "WEAKNESS":
+            if is_successful_recovery_unit(unit):
+                return ()
             try:
                 result = await service.create_or_reinforce(
                     BreakpointCandidate(

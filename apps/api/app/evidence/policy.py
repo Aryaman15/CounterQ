@@ -4,7 +4,7 @@ from app.ai_gateway.provider import ReasoningPolicyDescriptor
 from app.evidence.assessment_schema import ASSESSMENT_OUTPUT_CONTRACT_VERSION
 
 ASSESSMENT_EVALUATOR_POLICY_KEY = "assessment_evaluator"
-ASSESSMENT_EVALUATOR_POLICY_VERSION = "v2"
+ASSESSMENT_EVALUATOR_POLICY_VERSION = "v3"
 ASSESSMENT_INPUT_CONTRACT_VERSION = "assessment-input.v2"
 
 ASSESSMENT_EVALUATOR_INSTRUCTIONS = """
@@ -28,6 +28,18 @@ not by itself self-correction. Only the supplied before/after and execution fact
 may support a correction finding. A supported independent correction can create
 positive or mixed debugging/correctness Evidence while preserving the earlier
 observed mistake.
+
+When the supplied unit canonically shows a failed state, candidate recovery
+behavior, and a final successful execution, you may create POSITIVE or MIXED
+correctness, debugging, or independence Evidence describing that recovery. You
+must not propose breakpoint_effect WEAKNESS for a technical boundary corrected
+within that same recovery episode. A WEAKNESS proposal represents an unresolved
+or persistent technical boundary, not merely a historical mistake. A failed
+execution by itself is not persistent weakness, and a recovered bug remains
+historical Evidence rather than a persistent diagnosis. This rule applies
+whether software supplies INDEPENDENT, AFTER_PROBE, or another independence
+level. Do not weaken WEAKNESS detection for unresolved direct code or a
+misconception that remains after a delivered Probe.
 
 Use actual delivered prompt text only when supplied. Never assume authorized
 intent or undisclosed interrupted wording was heard. Independence is a software

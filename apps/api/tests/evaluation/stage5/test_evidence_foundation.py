@@ -12,6 +12,7 @@ from app.evidence.assessment_schema import (
     AssessmentFinding,
 )
 from app.evidence.policy import (
+    ASSESSMENT_EVALUATOR_INSTRUCTIONS,
     ASSESSMENT_EVALUATOR_POLICY_KEY,
     ASSESSMENT_EVALUATOR_POLICY_VERSION,
     ASSESSMENT_INPUT_CONTRACT_VERSION,
@@ -67,16 +68,25 @@ def test_stage5_corpus_covers_twelve_frozen_acceptance_scenarios() -> None:
         "invalidation_removes_only_support",
     } == {fixture.fixture_id for fixture in fixtures}
     assert all("expected" not in fixture.model_input for fixture in fixtures)
+    recovery_fixtures = {
+        fixture.fixture_id: fixture
+        for fixture in fixtures
+        if fixture.fixture_id
+        in {"independent_self_correction", "debugging_failure_diagnosis_fix"}
+    }
+    assert all(not fixture.expected.breakpoint for fixture in recovery_fixtures.values())
 
 
 def test_assessment_policy_and_strict_output_contract_are_pinned() -> None:
     assert ASSESSMENT_EVALUATOR_POLICY_KEY == "assessment_evaluator"
-    assert ASSESSMENT_EVALUATOR_POLICY_VERSION == "v2"
+    assert ASSESSMENT_EVALUATOR_POLICY_VERSION == "v3"
     assert ASSESSMENT_INPUT_CONTRACT_VERSION == "assessment-input.v2"
     assert ASSESSMENT_OUTPUT_CONTRACT_VERSION == "v2"
     descriptor = assessment_evaluator_policy_descriptor()
     assert descriptor.configuration["input_contract_version"] == "assessment-input.v2"
     assert descriptor.configuration["output_contract_version"] == "v2"
+    assert "recovered bug remains" in ASSESSMENT_EVALUATOR_INSTRUCTIONS
+    assert "unresolved direct code" in ASSESSMENT_EVALUATOR_INSTRUCTIONS
     validate_strict_reasoning_schema(AssessmentAnalysisResult.model_json_schema())
 
 
