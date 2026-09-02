@@ -28,3 +28,5 @@ coverage/
 *.log
 tmp/stage4-examiner-eval.json
 apps/api/tmp/stage4-examiner-eval.json
+tmp/stage5-evidence-eval.json
+apps/api/tmp/stage5-evidence-eval.json

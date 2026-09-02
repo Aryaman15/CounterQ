@@ -17,6 +17,7 @@ from app.db.constants import (
     EVIDENCE_SOURCE_ROLES,
     EVIDENCE_STRENGTHS,
 )
+from app.evidence.breakpoints import BreakpointService
 from app.evidence.contracts import (
     CreateAssessmentCommand,
     EvidenceInvalidationResult,
@@ -236,6 +237,9 @@ class EvidenceValidationService:
         if evidence.validation_status == "INVALIDATED":
             assert evidence.invalidated_at is not None
             assert evidence.invalidation_reason is not None
+            await BreakpointService(self._session).recalculate_support_for_evidence(
+                evidence.id, recalculated_at=evidence.invalidated_at
+            )
             return EvidenceInvalidationResult(
                 evidence_id=evidence.id,
                 changed=False,
@@ -250,6 +254,11 @@ class EvidenceValidationService:
         evidence.invalidated_at = effective_time
         evidence.invalidation_reason = normalized_reason
         await self._session.flush()
+        # Historical links remain; current diagnosis support is recalculated in
+        # this same caller-owned transaction from active valid Evidence only.
+        await BreakpointService(self._session).recalculate_support_for_evidence(
+            evidence.id, recalculated_at=effective_time
+        )
         return EvidenceInvalidationResult(
             evidence_id=evidence.id,
             changed=True,
@@ -259,6 +268,14 @@ class EvidenceValidationService:
 
     @staticmethod
     def _validate_assessment_values(command: CreateAssessmentCommand) -> None:
+        if command.evaluation_key is not None and (
+            len(command.evaluation_key) != 71
+            or not command.evaluation_key.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in command.evaluation_key[7:])
+        ):
+            raise AssessmentValidationError(
+                "INVALID_EVALUATION_KEY", "Assessment evaluation key is malformed"
+            )
         if command.assessment_dimension not in ASSESSMENT_DIMENSIONS:
             raise AssessmentValidationError(
                 "INVALID_ASSESSMENT_DIMENSION", "Assessment dimension is not supported"

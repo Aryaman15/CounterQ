@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.evidence.responses import CandidateResponseMaterializer
 from app.interviews.floor import ConversationFloor
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
@@ -133,9 +134,7 @@ class RealtimeControlService:
     ) -> None:
         self._session = session
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._authorized_prompt_delivery_window_seconds = (
-            authorized_prompt_delivery_window_seconds
-        )
+        self._authorized_prompt_delivery_window_seconds = authorized_prompt_delivery_window_seconds
         self.floor = ConversationFloor()
 
     async def ensure_session_exists(self, session_id: UUID) -> InterviewSession:
@@ -201,6 +200,11 @@ class RealtimeControlService:
                 raise IdempotencyConflict(
                     "Candidate transcript idempotency key conflicts with existing transcript"
                 )
+            await CandidateResponseMaterializer(self._session).materialize(
+                interview_session_id=session_id,
+                event=accepted.event,
+                segment=segment,
+            )
             return TranscriptPersistenceResult(
                 event_id=accepted.event.id,
                 transcript_segment_id=segment.id,
@@ -226,6 +230,11 @@ class RealtimeControlService:
                 else None
             ),
             provider_segment_id=provider_segment_id,
+        )
+        await CandidateResponseMaterializer(self._session).materialize(
+            interview_session_id=session_id,
+            event=accepted.event,
+            segment=segment,
         )
         return TranscriptPersistenceResult(
             event_id=accepted.event.id,
@@ -676,9 +685,7 @@ class RealtimeControlService:
             select(InterviewerPromptDelivery)
             .where(InterviewerPromptDelivery.interview_session_id == session_id)
             .where(InterviewerPromptDelivery.interviewer_prompt_id == prompt_id)
-            .where(
-                InterviewerPromptDelivery.realtime_provider_event_id == provider_response_id
-            ),
+            .where(InterviewerPromptDelivery.realtime_provider_event_id == provider_response_id),
         )
         return cast(InterviewerPromptDelivery | None, delivery)
 
@@ -729,9 +736,7 @@ class RealtimeControlService:
         observations = ObservationRepository(self._session)
         snapshot = await observations.code_snapshot_for_event(event.id)
         if snapshot is None:
-            raise RealtimeControlConflict(
-                "Idempotent code event exists without CodeSnapshot"
-            )
+            raise RealtimeControlConflict("Idempotent code event exists without CodeSnapshot")
         diff = await observations.code_diff_for_event(event.id)
         observation = await ObservationEngine(self._session).project_event(event.id)
         return CodeSnapshotPersistenceResult(

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -315,6 +315,54 @@ class BreakpointService:
             )
         )
         await self._session.flush()
+
+    async def active_support_count(self, breakpoint_id: UUID) -> int:
+        """Count current qualifying support without erasing historical links."""
+
+        value = await self._session.scalar(
+            select(func.count())
+            .select_from(BreakpointEvidence)
+            .join(Evidence, Evidence.id == BreakpointEvidence.evidence_id)
+            .where(
+                BreakpointEvidence.breakpoint_id == breakpoint_id,
+                BreakpointEvidence.relationship.in_(("CREATED", "REINFORCED")),
+                Evidence.validation_status == "VALID",
+                Evidence.invalidated_at.is_(None),
+                Evidence.polarity.in_(("NEGATIVE", "MIXED")),
+                Evidence.strength.in_(QUALIFYING_EVIDENCE_STRENGTHS),
+                Evidence.confidence >= MIN_BREAKPOINT_EVIDENCE_CONFIDENCE,
+            )
+        )
+        return int(value or 0)
+
+    async def recalculate_support_for_evidence(
+        self, evidence_id: UUID, *, recalculated_at: datetime | None = None
+    ) -> tuple[UUID, ...]:
+        """Dismiss active diagnoses whose last valid qualifying support disappeared."""
+
+        breakpoint_ids = tuple(
+            await self._session.scalars(
+                select(BreakpointEvidence.breakpoint_id).where(
+                    BreakpointEvidence.evidence_id == evidence_id,
+                    BreakpointEvidence.relationship.in_(("CREATED", "REINFORCED")),
+                )
+            )
+        )
+        dismissed: list[UUID] = []
+        for breakpoint_id in breakpoint_ids:
+            breakpoint = await self._session.scalar(
+                select(Breakpoint).where(Breakpoint.id == breakpoint_id).with_for_update()
+            )
+            if breakpoint is None or breakpoint.status not in ACTIVE_BREAKPOINT_STATUSES:
+                continue
+            if await self.active_support_count(breakpoint.id) > 0:
+                continue
+            breakpoint.status = "DISMISSED"
+            breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
+            breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+            dismissed.append(breakpoint.id)
+        await self._session.flush()
+        return tuple(dismissed)
 
     async def _evidence_targets_boundary(
         self,

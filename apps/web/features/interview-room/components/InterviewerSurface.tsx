@@ -9,6 +9,14 @@ import type {
   DevelopmentAnalyzeAndAuthorizeResponse,
   DevelopmentAnalyzeLatestResponse,
 } from "../realtime/liveExaminer";
+import type {
+  DevelopmentCanonicalEvaluationSnapshot,
+  DevelopmentSessionEvaluationResponse,
+} from "../realtime/evidenceEvaluation";
+import {
+  evaluateDevelopmentEvidence,
+  fetchDevelopmentEvidenceSnapshot,
+} from "../realtime/evidenceEvaluation";
 import {
   DevelopmentExaminerRequestError,
   requestDevelopmentAnalyzeAndAuthorize,
@@ -39,6 +47,7 @@ type InterviewerSurfaceProps = {
   onDeliverAuthorizedPrompt: (promptId: string) => void;
   onOpenConversation: () => void;
   terminal?: boolean;
+  evaluationReady?: boolean;
 };
 
 export function InterviewerSurface({
@@ -59,11 +68,12 @@ export function InterviewerSurface({
   onDeliverAuthorizedPrompt,
   onOpenConversation,
   terminal = false,
+  evaluationReady = false,
 }: InterviewerSurfaceProps) {
   const connected = voiceState === "Listening" || voiceState === "Speaking" || voiceState === "Muted";
   const showTranscriptInspector =
     process.env.NODE_ENV !== "production" &&
-    (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0);
+    (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0 || evaluationReady);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [reasoningSmokePending, setReasoningSmokePending] = useState(false);
   const [reasoningSmokeResult, setReasoningSmokeResult] =
@@ -76,6 +86,12 @@ export function InterviewerSurface({
   const [analyzeAuthorizeResult, setAnalyzeAuthorizeResult] =
     useState<DevelopmentAnalyzeAndAuthorizeResponse | null>(null);
   const [liveExaminerError, setLiveExaminerError] = useState<string | null>(null);
+  const [evidencePending, setEvidencePending] = useState(false);
+  const [evidenceResult, setEvidenceResult] =
+    useState<DevelopmentSessionEvaluationResponse | null>(null);
+  const [evidenceSnapshot, setEvidenceSnapshot] =
+    useState<DevelopmentCanonicalEvaluationSnapshot | null>(null);
+  const [evidenceError, setEvidenceError] = useState<string | null>(null);
   const transcriptPopoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -159,6 +175,24 @@ export function InterviewerSurface({
       );
     } finally {
       setAnalyzeAuthorizePending(false);
+    }
+  };
+
+  const handleEvidenceEvaluation = async () => {
+    if (!canonicalDebug.sessionId || !evaluationReady || evidencePending) {
+      return;
+    }
+    setEvidencePending(true);
+    setEvidenceError(null);
+    try {
+      const result = await evaluateDevelopmentEvidence(canonicalDebug.sessionId);
+      const snapshot = await fetchDevelopmentEvidenceSnapshot(canonicalDebug.sessionId);
+      setEvidenceResult(result);
+      setEvidenceSnapshot(snapshot);
+    } catch {
+      setEvidenceError("Stage 5 evidence evaluation or snapshot request failed");
+    } finally {
+      setEvidencePending(false);
     }
   };
 
@@ -576,6 +610,51 @@ export function InterviewerSurface({
                           </>
                         ) : null}
                       </div>
+                    ) : null}
+                  </dd>
+                </div>
+                <div className="voice-dev-ai-gateway">
+                  <dt>STAGE 5 EVIDENCE</dt>
+                  <dd>
+                    <span>Completed Simulation sessions only</span>
+                    <button
+                      type="button"
+                      className="voice-control-button voice-dev-button"
+                      onClick={handleEvidenceEvaluation}
+                      disabled={!canonicalDebug.sessionId || !evaluationReady || evidencePending}
+                    >
+                      {evidencePending ? "Evaluating..." : "Evaluate Stage 5 evidence"}
+                    </button>
+                    {evidenceError ? (
+                      <span className="voice-dev-inline-error" role="status">
+                        {evidenceError}
+                      </span>
+                    ) : null}
+                    {evidenceResult ? (
+                      <div className="voice-dev-reasoning-result" aria-live="polite">
+                        <p>SESSION EVALUATION</p>
+                        <span>
+                          {evidenceResult.completed_units} completed;{" "}
+                          {evidenceResult.skipped_units} skipped; {evidenceResult.failed_units} failed
+                        </span>
+                        <span>
+                          {evidenceResult.units.reduce(
+                            (count, unit) => count + unit.assessment_ids.length,
+                            0,
+                          )}{" "}
+                          Assessments;{" "}
+                          {evidenceResult.units.reduce(
+                            (count, unit) => count + unit.evidence_ids.length,
+                            0,
+                          )}{" "}
+                          Evidence rows
+                        </span>
+                      </div>
+                    ) : null}
+                    {evidenceSnapshot ? (
+                      <pre className="voice-dev-evidence-snapshot">
+                        {JSON.stringify(evidenceSnapshot, null, 2)}
+                      </pre>
                     ) : null}
                   </dd>
                 </div>

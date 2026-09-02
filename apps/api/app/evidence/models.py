@@ -71,6 +71,10 @@ class Assessment(Base):
         CheckConstraint(_in_values("status", ASSESSMENT_STATUSES), name="status"),
         CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_unit_interval"),
         CheckConstraint("length(btrim(rationale)) > 0", name="rationale_nonempty"),
+        CheckConstraint(
+            "evaluation_key IS NULL OR evaluation_key ~ '^sha256:[0-9a-f]{64}$'",
+            name="evaluation_key_format",
+        ),
         ForeignKeyConstraint(
             ["interview_session_id", "candidate_response_id"],
             ["candidate_responses.interview_session_id", "candidate_responses.id"],
@@ -96,6 +100,13 @@ class Assessment(Base):
         ),
         UniqueConstraint("interview_session_id", "id", name="uq_assessments_session_id"),
         Index("ix_assessments_session_created_at", "interview_session_id", "created_at"),
+        Index(
+            "uq_assessments_session_evaluation_key",
+            "interview_session_id",
+            "evaluation_key",
+            unique=True,
+            postgresql_where=text("evaluation_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
@@ -118,6 +129,9 @@ class Assessment(Base):
     rationale: Mapped[str] = mapped_column(Text, nullable=False)
     confidence: Mapped[Decimal] = mapped_column(Numeric(5, 4), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Stable Stage 5B idempotency identity. It is derived from immutable factual
+    # provenance, evaluator policy, dimension, and canonical targets -- never prose.
+    evaluation_key: Mapped[str | None] = mapped_column(String(71))
     ai_invocation_id: Mapped[UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("ai_invocations.id"), nullable=False
     )

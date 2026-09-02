@@ -478,6 +478,7 @@ export function InterviewRoom({
         onDeliverAuthorizedPrompt={realtimeVoice.deliverAuthorizedPrompt}
         onOpenConversation={() => setConversationOpen(true)}
         terminal={Boolean(terminal) || realtimeVoice.completionPending}
+        evaluationReady={Boolean(terminal)}
       />
       <RecentConversationDrawer
         open={conversationOpen}

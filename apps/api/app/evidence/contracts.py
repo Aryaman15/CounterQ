@@ -23,6 +23,7 @@ class CreateAssessmentCommand:
     status: str
     ai_invocation_id: UUID
     ai_policy_version_id: UUID
+    evaluation_key: str | None = None
     candidate_response_id: UUID | None = None
     target_claim_id: UUID | None = None
     source_code_snapshot_id: UUID | None = None

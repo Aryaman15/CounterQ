@@ -21,6 +21,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/evidence/development/session-evaluation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Evaluate Session */
+        post: operations["evaluate_session_api_evidence_development_session_evaluation_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/evidence/development/session-evaluation/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Evaluation Snapshot */
+        get: operations["evaluation_snapshot_api_evidence_development_session_evaluation__interview_session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/examiner/development-analyze-and-authorize": {
         parameters: {
             query?: never;
@@ -326,6 +360,26 @@ export interface components {
             /** Status */
             status: string;
         };
+        /** DevelopmentCanonicalEvaluationSnapshot */
+        DevelopmentCanonicalEvaluationSnapshot: {
+            /** Assessments */
+            assessments: {
+                [key: string]: unknown;
+            }[];
+            /** Breakpoints */
+            breakpoints: {
+                [key: string]: unknown;
+            }[];
+            /** Evidence */
+            evidence: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+        };
         /** DevelopmentExaminerClaim */
         DevelopmentExaminerClaim: {
             /** Claim Type */
@@ -555,6 +609,47 @@ export interface components {
             stdout: string;
             /** Timed Out */
             timed_out: boolean;
+        };
+        /** DevelopmentSessionEvaluationRequest */
+        DevelopmentSessionEvaluationRequest: {
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+        };
+        /** DevelopmentSessionEvaluationResponse */
+        DevelopmentSessionEvaluationResponse: {
+            /** Completed Units */
+            completed_units: number;
+            /** Failed Units */
+            failed_units: number;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Skipped Units */
+            skipped_units: number;
+            /** Units */
+            units: components["schemas"]["DevelopmentUnitEvaluationResponse"][];
+        };
+        /** DevelopmentUnitEvaluationResponse */
+        DevelopmentUnitEvaluationResponse: {
+            /** Assessment Ids */
+            assessment_ids: string[];
+            /** Breakpoint Ids */
+            breakpoint_ids: string[];
+            /** Error Category */
+            error_category: string | null;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Status */
+            status: string;
+            /** Unit Key */
+            unit_key: string;
+            /** Unit Kind */
+            unit_kind: string;
         };
         /** ExecutionCaseResponse */
         ExecutionCaseResponse: {
@@ -808,6 +903,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DevelopmentReasoningSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluate_session_api_evidence_development_session_evaluation_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentSessionEvaluationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentSessionEvaluationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    evaluation_snapshot_api_evidence_development_session_evaluation__interview_session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentCanonicalEvaluationSnapshot"];
                 };
             };
             /** @description Validation Error */

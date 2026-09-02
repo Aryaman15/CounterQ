@@ -496,6 +496,47 @@
         "title": "DevelopmentAnalyzeLatestResponse",
         "type": "object"
       },
+      "DevelopmentCanonicalEvaluationSnapshot": {
+        "properties": {
+          "assessments": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Assessments",
+            "type": "array"
+          },
+          "breakpoints": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Breakpoints",
+            "type": "array"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "assessments",
+          "evidence",
+          "breakpoints"
+        ],
+        "title": "DevelopmentCanonicalEvaluationSnapshot",
+        "type": "object"
+      },
       "DevelopmentExaminerClaim": {
         "properties": {
           "claim_type": {
@@ -1234,6 +1275,119 @@
         "title": "DevelopmentRunResponse",
         "type": "object"
       },
+      "DevelopmentSessionEvaluationRequest": {
+        "properties": {
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id"
+        ],
+        "title": "DevelopmentSessionEvaluationRequest",
+        "type": "object"
+      },
+      "DevelopmentSessionEvaluationResponse": {
+        "properties": {
+          "completed_units": {
+            "title": "Completed Units",
+            "type": "integer"
+          },
+          "failed_units": {
+            "title": "Failed Units",
+            "type": "integer"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "skipped_units": {
+            "title": "Skipped Units",
+            "type": "integer"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/DevelopmentUnitEvaluationResponse"
+            },
+            "title": "Units",
+            "type": "array"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "completed_units",
+          "skipped_units",
+          "failed_units",
+          "units"
+        ],
+        "title": "DevelopmentSessionEvaluationResponse",
+        "type": "object"
+      },
+      "DevelopmentUnitEvaluationResponse": {
+        "properties": {
+          "assessment_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Assessment Ids",
+            "type": "array"
+          },
+          "breakpoint_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Breakpoint Ids",
+            "type": "array"
+          },
+          "error_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error Category"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "unit_key": {
+            "title": "Unit Key",
+            "type": "string"
+          },
+          "unit_kind": {
+            "title": "Unit Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit_key",
+          "unit_kind",
+          "status",
+          "assessment_ids",
+          "evidence_ids",
+          "breakpoint_ids",
+          "error_category"
+        ],
+        "title": "DevelopmentUnitEvaluationResponse",
+        "type": "object"
+      },
       "ExecutionCaseResponse": {
         "properties": {
           "actual_output": {
@@ -1847,6 +2001,90 @@
         "summary": "Development Reasoning Smoke",
         "tags": [
           "ai-gateway"
+        ]
+      }
+    },
+    "/api/evidence/development/session-evaluation": {
+      "post": {
+        "operationId": "evaluate_session_api_evidence_development_session_evaluation_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentSessionEvaluationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentSessionEvaluationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluate Session",
+        "tags": [
+          "evidence-development"
+        ]
+      }
+    },
+    "/api/evidence/development/session-evaluation/{interview_session_id}": {
+      "get": {
+        "operationId": "evaluation_snapshot_api_evidence_development_session_evaluation__interview_session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentCanonicalEvaluationSnapshot"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluation Snapshot",
+        "tags": [
+          "evidence-development"
         ]
       }
     },

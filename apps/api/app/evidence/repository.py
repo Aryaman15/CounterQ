@@ -42,6 +42,7 @@ class EvidenceRepository:
             rationale=command.rationale,
             confidence=command.confidence,
             status=command.status,
+            evaluation_key=command.evaluation_key,
             ai_invocation_id=command.ai_invocation_id,
             ai_policy_version_id=command.ai_policy_version_id,
         )
@@ -76,6 +77,17 @@ class EvidenceRepository:
 
     async def assessment(self, assessment_id: UUID) -> Assessment | None:
         value = await self._session.get(Assessment, assessment_id)
+        return cast(Assessment | None, value)
+
+    async def assessment_by_evaluation_key(
+        self, *, interview_session_id: UUID, evaluation_key: str
+    ) -> Assessment | None:
+        value = await self._session.scalar(
+            select(Assessment).where(
+                Assessment.interview_session_id == interview_session_id,
+                Assessment.evaluation_key == evaluation_key,
+            )
+        )
         return cast(Assessment | None, value)
 
     async def add_evidence(
