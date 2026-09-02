@@ -190,3 +190,51 @@ EXECUTION_RUN_STATUSES = (
 )
 
 TEST_RESULT_STATUSES = ("PASSED", "FAILED", "NOT_RUN")
+
+ASSESSMENT_DIMENSIONS = (
+    "CORRECTNESS",
+    "DEPTH",
+    "INDEPENDENCE",
+    "TRANSFER",
+    "EXPLANATION_QUALITY",
+)
+
+ASSESSMENT_STATUSES = ("PROPOSED", "VALIDATED", "REJECTED", "SUPERSEDED")
+
+EVIDENCE_POLARITIES = ("POSITIVE", "NEGATIVE", "MIXED")
+
+EVIDENCE_STRENGTHS = ("WEAK", "MODERATE", "STRONG")
+
+EVIDENCE_INDEPENDENCE_LEVELS = (
+    "INDEPENDENT",
+    "AFTER_PROBE",
+    "AFTER_LIGHT_GUIDANCE",
+    "AFTER_STRONG_HINT",
+    "DIRECTLY_TAUGHT",
+)
+
+EVIDENCE_VALIDATION_STATUSES = ("VALID", "REJECTED", "INVALIDATED")
+
+EVIDENCE_SOURCE_ROLES = ("PRIMARY", "SUPPORTING", "CONTRADICTING", "CONTEXT")
+
+BREAKPOINT_STATUSES = ("OPEN", "RETEST_PENDING", "IMPROVING", "RESOLVED", "DISMISSED")
+
+BREAKPOINT_EVIDENCE_RELATIONSHIPS = (
+    "CREATED",
+    "REINFORCED",
+    "CONTRADICTED",
+    "RESOLUTION_SUPPORT",
+)
+
+SKILL_DIMENSION_KEYS = (
+    "correctness",
+    "explanation_clarity",
+    "complexity_reasoning",
+    "edge_case_reasoning",
+    "trade_off_reasoning",
+    "follow_up_adaptability",
+    "debugging",
+    "constraint_adaptation",
+    "thinking_aloud",
+    "communication",
+)

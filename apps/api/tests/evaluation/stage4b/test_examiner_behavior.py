@@ -863,15 +863,17 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
         assert decision_count == 0
 
 
-def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
+def test_stage4b_policy_contract_is_unchanged_at_the_stage5a_boundary() -> None:
     assert LIVE_EXAMINER_POLICY_VERSION == "v10"
     assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert live_examiner_policy_descriptor().configuration["output_contract_version"] == "v2"
     assert len(PROBE_STRATEGY_POLICY) == 12
     assert set(CANDIDATE_LEVEL_DEPTH_POLICY) == {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
-    assert "evidence" not in Base.metadata.tables
-    assert "breakpoints" not in Base.metadata.tables
+    assert "evidence" in Base.metadata.tables
+    assert "breakpoints" in Base.metadata.tables
+    assert "session_reports" not in Base.metadata.tables
+    assert "concept_mastery" not in Base.metadata.tables
 
 
 def test_v10_policy_checks_one_distinct_frontier_before_waiting() -> None:

@@ -9,11 +9,11 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage3c_content_head() -> None:
+def test_alembic_configuration_has_stage5a_evaluation_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202608310111"
+    assert script.get_current_head() == "202609020112"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -29,7 +29,7 @@ def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
         command.upgrade(config, "head")
 
 
-def test_stage3a_table_boundary_is_explicit() -> None:
+def test_stage5a_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -38,12 +38,20 @@ def test_stage3a_table_boundary_is_explicit() -> None:
         "candidate_claims",
         "candidate_responses",
         "candidate_response_sources",
+        "assessment_sources",
+        "assessments",
+        "breakpoint_evidence",
+        "breakpoints",
         "code_diffs",
         "code_snapshots",
         "concept_aliases",
         "concept_relationships",
         "concepts",
         "examiner_decisions",
+        "evidence",
+        "evidence_concepts",
+        "evidence_skills",
+        "evidence_sources",
         "execution_runs",
         "interview_configurations",
         "interview_events",
@@ -56,15 +64,19 @@ def test_stage3a_table_boundary_is_explicit() -> None:
         "problem_concepts",
         "problems",
         "session_budgets",
+        "skill_dimensions",
         "transcript_segments",
         "test_results",
         "users",
     }.issubset(table_names)
     assert {
-        "assessments",
-        "breakpoints",
         "candidate_profiles",
-        "evidence",
+        "concept_mastery",
+        "countermap_edges",
+        "countermap_nodes",
+        "countermap_projections",
+        "retest_recommendations",
+        "session_reports",
     }.isdisjoint(table_names)
 
 

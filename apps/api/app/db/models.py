@@ -2,6 +2,17 @@
 
 from app.ai_gateway.models import AIInvocation, AIPolicyVersion
 from app.auth.models import User
+from app.evidence.models import (
+    Assessment,
+    AssessmentSource,
+    Breakpoint,
+    BreakpointEvidence,
+    Evidence,
+    EvidenceConcept,
+    EvidenceSkill,
+    EvidenceSource,
+    SkillDimension,
+)
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.execution.models import ExecutionRun, TestResult
 from app.interviews.models import (
@@ -28,6 +39,10 @@ from app.problems.models import (
 __all__ = [
     "AIPolicyVersion",
     "AIInvocation",
+    "Assessment",
+    "AssessmentSource",
+    "Breakpoint",
+    "BreakpointEvidence",
     "CandidateClaim",
     "CandidateResponse",
     "CandidateResponseSource",
@@ -37,6 +52,10 @@ __all__ = [
     "ConceptAlias",
     "ConceptRelationship",
     "ExaminerDecision",
+    "Evidence",
+    "EvidenceConcept",
+    "EvidenceSkill",
+    "EvidenceSource",
     "ExecutionRun",
     "InterviewConfiguration",
     "InterviewEvent",
@@ -49,6 +68,7 @@ __all__ = [
     "ProblemConcept",
     "ProblemVersion",
     "SessionBudget",
+    "SkillDimension",
     "TranscriptSegment",
     "TestResult",
     "User",
