@@ -42,6 +42,7 @@ from app.ai_gateway.structured_output import (
 from app.config.settings import Settings, create_settings, get_settings
 from app.db.session import build_engine, dispose_engine, get_session
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.examiner.policy import LIVE_EXAMINER_INSTRUCTIONS, live_examiner_policy_descriptor
 from app.interviews.dev_factory import DevelopmentInterview, create_development_interview
 from app.interviews.models import InterviewerPrompt, SessionBudget
 from app.main import create_app
@@ -347,6 +348,80 @@ async def test_policy_version_hash_reuse_and_conflict(db_session: AsyncSession) 
                 configuration=descriptor.configuration,
             ),
         )
+
+
+async def test_live_examiner_v9_and_v10_coexist_immutably_without_migration(
+    db_session: AsyncSession,
+) -> None:
+    current_descriptor = live_examiner_policy_descriptor()
+    old_configuration = {
+        **current_descriptor.configuration,
+        "policy_id": "live_examiner.v9",
+        "context_projection_version": "v2",
+    }
+    old_descriptor = ReasoningPolicyDescriptor(
+        policy_key=current_descriptor.policy_key,
+        version="v9",
+        instructions=LIVE_EXAMINER_INSTRUCTIONS,
+        configuration=old_configuration,
+        code_revision=current_descriptor.code_revision,
+    )
+
+    old_policy = await get_or_create_policy_version(db_session, old_descriptor)
+    old_snapshot = (
+        old_policy.id,
+        old_policy.prompt_hash,
+        dict(old_policy.configuration_json),
+        old_policy.code_revision,
+    )
+    current_policy = await get_or_create_policy_version(db_session, current_descriptor)
+    repeated_current_policy = await get_or_create_policy_version(
+        db_session,
+        current_descriptor,
+    )
+
+    assert current_descriptor.version == "v10"
+    assert current_descriptor.configuration["policy_id"] == "live_examiner.v10"
+    assert current_descriptor.configuration["context_projection_version"] == "v3"
+    assert current_policy.id != old_policy.id
+    assert repeated_current_policy.id == current_policy.id
+    assert old_policy.prompt_hash == current_policy.prompt_hash
+    assert old_policy.prompt_hash == policy_instruction_hash(LIVE_EXAMINER_INSTRUCTIONS)
+
+    with pytest.raises(PolicyVersionConflict):
+        await get_or_create_policy_version(
+            db_session,
+            ReasoningPolicyDescriptor(
+                policy_key=current_descriptor.policy_key,
+                version=current_descriptor.version,
+                instructions=current_descriptor.instructions,
+                configuration={
+                    **current_descriptor.configuration,
+                    "context_projection_version": "v2",
+                },
+                code_revision=current_descriptor.code_revision,
+            ),
+        )
+
+    persisted = (
+        await db_session.scalars(
+            select(AIPolicyVersion).where(
+                AIPolicyVersion.policy_key == current_descriptor.policy_key,
+                AIPolicyVersion.version.in_(("v9", "v10")),
+            )
+        )
+    ).all()
+    by_version = {policy_version.version: policy_version for policy_version in persisted}
+
+    assert set(by_version) == {"v9", "v10"}
+    assert by_version["v9"].configuration_json == old_configuration
+    assert by_version["v10"].configuration_json == current_descriptor.configuration
+    assert (
+        by_version["v9"].id,
+        by_version["v9"].prompt_hash,
+        dict(by_version["v9"].configuration_json),
+        by_version["v9"].code_revision,
+    ) == old_snapshot
 
 
 async def test_ai_invocation_lifecycle_success_budget_and_cost(tmp_path: Path) -> None:

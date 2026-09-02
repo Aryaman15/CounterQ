@@ -107,6 +107,21 @@ export function useRealtimeVoice(
   const pendingCodeSourceRef = useRef<string | null>(null);
   const autoRestoreAttemptedRef = useRef(false);
 
+  const disconnectVoice = useCallback(() => {
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    const client = clientRef.current;
+    clientRef.current = null;
+    client?.disconnect();
+    setErrorMessage(null);
+    setActivityState("Ready");
+    setIsMuted(false);
+    setPartialTranscript("");
+    setCurrentCounterQDeliveryText("");
+    transcriptDraftsRef.current.clear();
+    activeTranscriptKeyRef.current = null;
+  }, []);
+
   const voiceState = useMemo<VoicePresenceState>(() => {
     if (isMuted && activityState === "Listening") {
       return "Muted";
@@ -205,10 +220,7 @@ export function useRealtimeVoice(
       if (event.type === "terminal") {
         setTerminalSession(event.terminal);
         setCompletionPending(false);
-        clientRef.current?.disconnect();
-        setActivityState("Ready");
-        setIsMuted(false);
-        setCurrentCounterQDeliveryText("");
+        disconnectVoice();
         return;
       }
       if (event.type === "error") {
@@ -218,7 +230,7 @@ export function useRealtimeVoice(
     });
     controlClientRef.current = controlClient;
     return controlClient;
-  }, [controlClientFactory, developmentLanguage, terminalSession]);
+  }, [controlClientFactory, developmentLanguage, disconnectVoice, terminalSession]);
 
   const enableMicrophone = useCallback(async () => {
     if (terminalSession || completionPending) {
@@ -291,23 +303,23 @@ export function useRealtimeVoice(
     clientRef.current?.setMuted(false);
   }, []);
 
-  const disconnect = useCallback(() => {
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = null;
+  const dispose = useCallback(() => {
+    disconnectVoice();
     unsubscribeControlRef.current?.();
     unsubscribeControlRef.current = null;
-    clientRef.current?.disconnect();
-    clientRef.current = null;
-    controlClientRef.current?.disconnect();
+    const controlClient = controlClientRef.current;
     controlClientRef.current = null;
-    setErrorMessage(null);
-    setActivityState("Ready");
-    setIsMuted(false);
-    setPartialTranscript("");
-    setCurrentCounterQDeliveryText("");
-    transcriptDraftsRef.current.clear();
-    activeTranscriptKeyRef.current = null;
+    controlClient?.disconnect();
     pendingCodeSourceRef.current = null;
+    setLastFinalTranscript("");
+    setSessionDebug({
+      eventType: null,
+      sessionType: null,
+      transcriptionModel: null,
+      turnDetectionType: null,
+      createResponse: null,
+      interruptResponse: null,
+    });
     setCanonicalDebug(emptyCanonicalDebug());
     setServerDeadlineAt(null);
     setRestoredBootstrap(null);
@@ -316,7 +328,7 @@ export function useRealtimeVoice(
     setAcknowledgedCodeSource(null);
     setTerminalSession(null);
     setCompletionPending(false);
-  }, []);
+  }, [disconnectVoice]);
 
   const speakDevelopmentPhrase = useCallback(() => {
     controlClientRef.current?.requestDevelopmentPrompt();
@@ -378,7 +390,7 @@ export function useRealtimeVoice(
       });
   }, [ensureControlClient]);
 
-  useEffect(() => disconnect, [disconnect]);
+  useEffect(() => dispose, [dispose]);
 
   return {
     voiceState,
@@ -403,7 +415,7 @@ export function useRealtimeVoice(
     enableMicrophone,
     mute,
     unmute,
-    disconnect,
+    disconnect: disconnectVoice,
     speakDevelopmentPhrase,
     evaluateExaminerDecision,
     deliverAuthorizedPrompt,

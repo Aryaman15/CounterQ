@@ -716,6 +716,150 @@ describe("Interview Room demo", () => {
     expect(speakDevelopmentPhrase).not.toHaveBeenCalled();
   });
 
+  it("renders Examiner timeout suppression as neutral non-delivery without a policy gate", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          analysis: {
+            status: "SUPPRESSED",
+            source_kind: "CODE_SNAPSHOT_MEANINGFUL_CHANGE",
+            source_event_id: "event-2",
+            source_event_watermark: 18,
+            source_state_version: 3,
+            code_snapshot_id: "snapshot-3",
+            code_snapshot_version: 3,
+            ai_invocation_id: "invocation-timeout-1",
+            provider: "openai",
+            model: "gpt-5.6-terra",
+            latency_ms: 8000,
+            input_tokens: null,
+            cached_input_tokens: null,
+            output_tokens: null,
+            estimated_cost: null,
+            currency: null,
+            claims: [],
+            decision: null,
+            message:
+              "Live Examiner exceeded the usefulness window; no recommendation was delivered.",
+          },
+          policy_gate: null,
+          timing: {
+            analysis_completed_at: "2026-08-24T00:00:08Z",
+            gate_evaluated_at: null,
+            decision_deadline_at: null,
+            remaining_usefulness_seconds_at_analysis: null,
+            remaining_usefulness_seconds_at_gate: null,
+            authorized_at: null,
+            delivery_window_expires_at: null,
+            delivery_window_seconds: 12,
+            delivery_window_state: null,
+          },
+        }),
+      }),
+    );
+    const timeoutDiagnostics = {
+      ...observedCanonicalSession,
+      lastPolicyGate: {
+        decisionId: null,
+        disposition: null,
+        decisionStatus: null,
+        policyGateOutcome: null,
+        promptId: null,
+        promptKind: null,
+      },
+      lastDeliveryPermit: {
+        promptId: null,
+        status: null,
+        reason: null,
+      },
+    };
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={timeoutDiagnostics}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyze + authorize" }));
+
+    expect(await screen.findByText(/SUPPRESSED; source CODE_SNAPSHOT_MEANINGFUL_CHANGE/i))
+      .toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Examiner exceeded the realtime usefulness window. No prompt was delivered.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("No policy gate was run for this analysis result."))
+      .toBeInTheDocument();
+    expect(screen.queryByText(/LIVE EXAMINER FAILED/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Policy gate" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Deliver authorized prompt" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("shows the safe category and message for unrelated Examiner provider failures", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            detail: {
+              category: "PROVIDER_UNAVAILABLE",
+              message: "Reasoning provider is unavailable",
+            },
+          }),
+          { status: 503 },
+        ),
+      ),
+    );
+
+    render(
+      <InterviewerSurface
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript="partial"
+        lastFinalTranscript="final"
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dev transcript" }));
+    fireEvent.click(screen.getByRole("button", { name: "Analyze latest observation" }));
+
+    expect(await screen.findByText(/LIVE EXAMINER FAILED/i)).toHaveTextContent(
+      "PROVIDER_UNAVAILABLE: Reasoning provider is unavailable",
+    );
+  });
+
   it("shows a safe Live Examiner structured-output failure without retaining a decision", async () => {
     vi.stubGlobal(
       "fetch",

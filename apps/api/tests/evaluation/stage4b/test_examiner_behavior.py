@@ -864,7 +864,7 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
 
 
 def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
-    assert LIVE_EXAMINER_POLICY_VERSION == "v9"
+    assert LIVE_EXAMINER_POLICY_VERSION == "v10"
     assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert live_examiner_policy_descriptor().configuration["output_contract_version"] == "v2"
@@ -874,7 +874,7 @@ def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_
     assert "breakpoints" not in Base.metadata.tables
 
 
-def test_v9_policy_checks_one_distinct_frontier_before_waiting() -> None:
+def test_v10_policy_checks_one_distinct_frontier_before_waiting() -> None:
     assert "A diagnostic goal can be satisfied by the current candidate turn" in (
         LIVE_EXAMINER_INSTRUCTIONS
     )
@@ -928,7 +928,7 @@ def test_v9_policy_checks_one_distinct_frontier_before_waiting() -> None:
     assert "Do not synthesize a CandidateClaim" in LIVE_EXAMINER_INSTRUCTIONS
 
 
-def test_v9_candidate_level_changes_depth_not_probe_frequency() -> None:
+def test_v10_candidate_level_changes_depth_not_probe_frequency() -> None:
     assert CANDIDATE_LEVEL_DEPTH_POLICY["INTERN"] == (
         "core correctness",
         "basic invariant explanation",

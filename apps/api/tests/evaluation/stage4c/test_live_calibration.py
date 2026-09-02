@@ -643,7 +643,7 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
     assert metadata["report_schema_version"] == "stage4-examiner-calibration-report.v4"
     assert metadata["runner_version"] == "stage4c-live-runner.v4"
     assert metadata["policy_key"] == "live_examiner"
-    assert metadata["policy_version"] == "v9"
+    assert metadata["policy_version"] == "v10"
     assert metadata["output_contract_version"] == "v2"
     assert metadata["context_projection_version"] == "v3"
     assert metadata["fixture_count"] == 2

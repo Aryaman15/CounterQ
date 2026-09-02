@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.ai_gateway.gateway import policy_instruction_hash
 from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
@@ -472,15 +473,19 @@ def test_provider_schema_encodes_action_specific_probe_strategy_contract() -> No
     assert "proposed_probe_strategy" in probe["required"]
 
 
-def test_live_examiner_policy_v9_guides_ranking_strategies_depth_and_verification() -> None:
+def test_live_examiner_policy_v10_guides_ranking_strategies_depth_and_verification() -> None:
     descriptor = live_examiner_policy_descriptor()
 
     assert descriptor.policy_key == "live_examiner"
-    assert descriptor.version == "v9"
-    assert descriptor.configuration["policy_id"] == "live_examiner.v9"
+    assert descriptor.version == "v10"
+    assert descriptor.configuration["policy_id"] == "live_examiner.v10"
     assert descriptor.configuration["context_projection_version"] == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert descriptor.configuration["output_contract_version"] == "v2"
+    assert len(LIVE_EXAMINER_INSTRUCTIONS.encode("utf-8")) == 10_435
+    assert policy_instruction_hash(LIVE_EXAMINER_INSTRUCTIONS) == (
+        "sha256:efd8b6ce26892eb086b4f6f78ca2a06e601a59e0bae4df09cef990268a48d39d"
+    )
     assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS
     assert "not merely the topic" in LIVE_EXAMINER_INSTRUCTIONS
     assert "invalid absolute complexity guarantee" in LIVE_EXAMINER_INSTRUCTIONS
@@ -1291,6 +1296,167 @@ async def test_live_examiner_development_endpoint_blocks_production_and_returns_
     await dispose_engine()
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "/api/examiner/development-analyze-latest",
+        "/api/examiner/development-analyze-and-authorize",
+    ],
+)
+async def test_live_examiner_initial_timeout_is_safe_non_delivery_response(
+    tmp_path: Path,
+    endpoint: str,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V1,
+            sequence=1,
+            key="timeout-code-v1",
+        )
+        code = await add_code(
+            maker,
+            dev.interview_session.id,
+            source=CODE_V2,
+            sequence=2,
+            key="timeout-code-v2",
+        )
+        fake_provider = FakeExaminerProvider(
+            provider_error=ReasoningProviderError(
+                "TIMEOUT",
+                "Reasoning provider timed out",
+            )
+        )
+        local_settings = settings(tmp_path)
+        app = create_app()
+        app.dependency_overrides[get_settings] = lambda: local_settings
+        app.dependency_overrides[get_reasoning_provider_builder] = lambda: (
+            lambda _settings: fake_provider
+        )
+        app.dependency_overrides[get_live_examiner_coordinator_builder] = lambda: (
+            lambda _settings, _provider_builder: LiveExaminerCoordinator(
+                settings=local_settings,
+                sessionmaker=maker,
+                provider=fake_provider,
+                registry=LiveExaminerTaskRegistry(),
+            )
+        )
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post(
+                    endpoint,
+                    json={"interview_session_id": str(dev.interview_session.id)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        body = response.json()
+        analysis = body["analysis"] if "analysis" in body else body
+        if "analysis" in body:
+            assert body["policy_gate"] is None
+            assert body["timing"]["gate_evaluated_at"] is None
+
+        async with maker() as session:
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
+            )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocation = await session.scalar(
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert response.status_code == 200
+        assert analysis["status"] == "SUPPRESSED"
+        assert analysis["source_event_id"] == str(code.event_id)
+        assert analysis["source_event_watermark"] == code.server_sequence
+        assert analysis["source_state_version"] == code.interview_state_version
+        assert analysis["code_snapshot_id"] == str(code.snapshot_id)
+        assert analysis["code_snapshot_version"] == code.version_number
+        assert analysis["provider"] == "fake"
+        assert analysis["model"] == local_settings.reasoning_standard_model
+        assert analysis["claims"] == []
+        assert analysis["decision"] is None
+        assert analysis["message"] == (
+            "Live Examiner exceeded the usefulness window; no recommendation was delivered."
+        )
+        assert fake_provider.calls == 1
+        assert claim_count == 0 and decision_count == 0 and prompt_count == 0
+        assert budget is not None and budget.probes_used == 0
+        assert invocation is not None
+        assert invocation.status == "TIMED_OUT"
+        assert invocation.error_class == "TIMEOUT"
+        assert invocation.retry_count == 0
+        assert analysis["ai_invocation_id"] == str(invocation.id)
+
+
+async def test_live_examiner_unrelated_provider_failure_remains_operational_error(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        fake_provider = FakeExaminerProvider(
+            provider_error=ReasoningProviderError(
+                "PROVIDER_UNAVAILABLE",
+                "Reasoning provider is unavailable",
+            )
+        )
+        local_settings = settings(tmp_path)
+        app = create_app()
+        app.dependency_overrides[get_settings] = lambda: local_settings
+        app.dependency_overrides[get_reasoning_provider_builder] = lambda: (
+            lambda _settings: fake_provider
+        )
+        app.dependency_overrides[get_live_examiner_coordinator_builder] = lambda: (
+            lambda _settings, _provider_builder: LiveExaminerCoordinator(
+                settings=local_settings,
+                sessionmaker=maker,
+                provider=fake_provider,
+                registry=LiveExaminerTaskRegistry(),
+            )
+        )
+        transport = ASGITransport(app=app)
+        try:
+            async with AsyncClient(transport=transport, base_url="http://testserver") as client:
+                response = await client.post(
+                    "/api/examiner/development-analyze-latest",
+                    json={"interview_session_id": str(dev.interview_session.id)},
+                )
+        finally:
+            app.dependency_overrides.clear()
+
+        async with maker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == dev.interview_session.id
+                )
+            )
+
+        assert response.status_code == 503
+        assert response.json()["detail"] == {
+            "category": "PROVIDER_UNAVAILABLE",
+            "message": "Reasoning provider is unavailable",
+        }
+        assert fake_provider.calls == 1
+        assert invocation is not None and invocation.status == "FAILED"
+        assert invocation.error_class == "PROVIDER_UNAVAILABLE"
+
+
 async def test_live_examiner_invalid_structured_output_returns_safe_failure_and_recovers(
     tmp_path: Path,
 ) -> None:
@@ -1487,3 +1653,70 @@ async def test_live_examiner_invalid_strong_output_suppresses_preliminary_probe(
         assert budget is not None and budget.probes_used == 0
         assert [item.status for item in invocations] == ["SUCCEEDED", "FAILED"]
         assert invocations[1].error_class == "STRUCTURED_OUTPUT_INVALID"
+
+
+async def test_live_examiner_strong_timeout_suppresses_preliminary_probe(
+    tmp_path: Path,
+) -> None:
+    async with dev_context() as (maker, dev):
+        await add_transcript(maker, dev.interview_session.id)
+        preliminary = transcript_probe_output()
+        preliminary["decision"]["verification"] = {
+            "required": True,
+            "reason": "DIFFICULT_CODE_SEMANTICS",
+        }
+        fake_provider = FakeExaminerProvider(
+            output_sequence=[
+                preliminary,
+                ReasoningProviderError("TIMEOUT", "Strong verification timed out"),
+            ]
+        )
+        coordinator = LiveExaminerCoordinator(
+            settings=settings(tmp_path),
+            sessionmaker=maker,
+            provider=fake_provider,
+            registry=LiveExaminerTaskRegistry(),
+        )
+
+        result = await coordinator.analyze_latest(dev.interview_session.id)
+
+        async with maker() as session:
+            claim_count = await session.scalar(
+                select(func.count())
+                .select_from(CandidateClaim)
+                .where(CandidateClaim.interview_session_id == dev.interview_session.id)
+            )
+            decision_count = await session.scalar(
+                select(func.count())
+                .select_from(ExaminerDecision)
+                .where(ExaminerDecision.interview_session_id == dev.interview_session.id)
+            )
+            prompt_count = await session.scalar(
+                select(func.count())
+                .select_from(InterviewerPrompt)
+                .where(InterviewerPrompt.interview_session_id == dev.interview_session.id)
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.interview_session_id == dev.interview_session.id)
+                    .order_by(AIInvocation.started_at.asc())
+                )
+            )
+
+        assert result.status == "SUPPRESSED"
+        assert result.reasoning_tier == "STRONG"
+        assert result.claims == [] and result.decision is None
+        assert result.message == (
+            "Live Examiner exceeded the usefulness window; no recommendation was delivered."
+        )
+        assert fake_provider.calls == 2
+        assert len(invocations) == 2
+        assert result.preliminary_ai_invocation_id == invocations[0].id
+        assert result.ai_invocation_id == invocations[1].id
+        assert [item.status for item in invocations] == ["SUCCEEDED", "TIMED_OUT"]
+        assert invocations[1].error_class == "TIMEOUT"
+        assert [item.retry_count for item in invocations] == [0, 0]
+        assert claim_count == 0 and decision_count == 0 and prompt_count == 0
+        assert budget is not None and budget.probes_used == 0

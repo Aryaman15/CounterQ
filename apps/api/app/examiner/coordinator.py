@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -9,6 +10,7 @@ from decimal import Decimal
 from typing import Literal, cast
 from uuid import UUID
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -61,6 +63,8 @@ LiveExaminerStatus = Literal[
     "CANCELLED",
     "ERROR",
 ]
+
+logger = structlog.get_logger(__name__)
 
 
 class LiveExaminerError(Exception):
@@ -241,11 +245,60 @@ class LiveExaminerCoordinator:
         interview_session_id: UUID,
         source_event_id: UUID,
     ) -> LiveExaminerDebugResult:
+        started = time.perf_counter()
+        outcome = "ERROR"
+        try:
+            result = await self._execute_analysis(
+                interview_session_id=interview_session_id,
+                source_event_id=source_event_id,
+            )
+            outcome = result.status
+            return result
+        except asyncio.CancelledError:
+            outcome = "CANCELLED"
+            raise
+        finally:
+            logger.info(
+                "live_examiner_total_timing",
+                interview_session_id=str(interview_session_id),
+                source_event_id=str(source_event_id),
+                total_examiner_elapsed_ms=max(
+                    int((time.perf_counter() - started) * 1000),
+                    0,
+                ),
+                outcome=outcome,
+            )
+
+    async def _execute_analysis(
+        self,
+        *,
+        interview_session_id: UUID,
+        source_event_id: UUID,
+    ) -> LiveExaminerDebugResult:
         deadline_at = self._clock() + timedelta(
             seconds=self._settings.live_examiner_usefulness_seconds
         )
+        context_started = time.perf_counter()
         context = await self._build_context(source_event_id)
+        context_build_ms = max(int((time.perf_counter() - context_started) * 1000), 0)
+        lookup_started = time.perf_counter()
         existing = await self._existing_result(context)
+        existing_result_lookup_ms = max(
+            int((time.perf_counter() - lookup_started) * 1000),
+            0,
+        )
+        logger.info(
+            "live_examiner_preparation_timing",
+            interview_session_id=str(interview_session_id),
+            source_event_id=str(source_event_id),
+            context_build_ms=context_build_ms,
+            existing_result_lookup_ms=existing_result_lookup_ms,
+            usefulness_remaining_ms=max(
+                int((deadline_at - self._clock()).total_seconds() * 1000),
+                0,
+            ),
+            existing_result_found=existing is not None,
+        )
         if existing is not None:
             return existing
         if self._clock() >= deadline_at:
@@ -267,9 +320,11 @@ class LiveExaminerCoordinator:
         except StructuredOutputValidationFailure:
             return self._structured_output_error_result(context=context, tier=tier)
         except ReasoningProviderError as exc:
-            if exc.category != "STRUCTURED_OUTPUT_INVALID":
-                raise
-            return self._structured_output_error_result(context=context, tier=tier)
+            if exc.category == "STRUCTURED_OUTPUT_INVALID":
+                return self._structured_output_error_result(context=context, tier=tier)
+            if exc.category == "TIMEOUT":
+                return await self._timeout_result(context=context, tier=tier)
+            raise
         preliminary_invocation_id: UUID | None = None
         required_verification_reason = next_strong_verification_reason(tier, result.parsed)
         if required_verification_reason is not None:
@@ -311,13 +366,19 @@ class LiveExaminerCoordinator:
                     preliminary_invocation_id=preliminary_invocation_id,
                 )
             except ReasoningProviderError as exc:
-                if exc.category != "STRUCTURED_OUTPUT_INVALID":
-                    raise
-                return self._structured_output_error_result(
-                    context=context,
-                    tier="STRONG",
-                    preliminary_invocation_id=preliminary_invocation_id,
-                )
+                if exc.category == "STRUCTURED_OUTPUT_INVALID":
+                    return self._structured_output_error_result(
+                        context=context,
+                        tier="STRONG",
+                        preliminary_invocation_id=preliminary_invocation_id,
+                    )
+                if exc.category == "TIMEOUT":
+                    return await self._timeout_result(
+                        context=context,
+                        tier="STRONG",
+                        preliminary_invocation_id=preliminary_invocation_id,
+                    )
+                raise
             except ReasoningBudgetExceeded:
                 return self._unpersisted_result(
                     context=context,
@@ -495,6 +556,69 @@ class LiveExaminerCoordinator:
             message=(
                 "Live Examiner returned invalid structured output; no recommendation "
                 "was persisted."
+            ),
+            reasoning_tier=tier,
+            preliminary_ai_invocation_id=preliminary_invocation_id,
+        )
+
+    async def _timeout_result(
+        self,
+        *,
+        context: ExaminerContext,
+        tier: ExaminerReasoningTier,
+        preliminary_invocation_id: UUID | None = None,
+    ) -> LiveExaminerDebugResult:
+        route = reasoning_route_for_tier(
+            tier,
+            standard_effort=self._settings.reasoning_standard_effort,
+            strong_effort=self._settings.reasoning_strong_effort,
+        )
+        async with self._sessionmaker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation)
+                .where(
+                    AIInvocation.interview_session_id
+                    == context.observation.interview_session_id
+                )
+                .where(AIInvocation.purpose == route.purpose)
+                .where(AIInvocation.capability == route.capability)
+                .where(AIInvocation.status == "TIMED_OUT")
+                .where(AIInvocation.error_class == "TIMEOUT")
+                .order_by(AIInvocation.started_at.desc(), AIInvocation.created_at.desc())
+                .limit(1)
+            )
+        latency_ms = None
+        if invocation is not None and invocation.completed_at is not None:
+            latency_ms = max(
+                int((invocation.completed_at - invocation.started_at).total_seconds() * 1000),
+                0,
+            )
+        return LiveExaminerDebugResult(
+            status="SUPPRESSED",
+            source_kind=context.observation.kind,
+            source_event_id=context.observation.source_event_id,
+            source_event_watermark=context.observation.source_event_watermark,
+            source_state_version=context.observation.interview_state_version,
+            code_snapshot_id=context.observation.code_snapshot_id
+            or context.observation.associated_code_snapshot_id,
+            code_snapshot_version=context.observation.code_snapshot_version
+            or context.observation.associated_code_snapshot_version,
+            ai_invocation_id=invocation.id if invocation is not None else None,
+            provider=invocation.provider if invocation is not None else None,
+            model=invocation.model if invocation is not None else None,
+            latency_ms=latency_ms,
+            input_tokens=invocation.input_tokens if invocation is not None else None,
+            cached_input_tokens=(
+                invocation.cached_input_tokens if invocation is not None else None
+            ),
+            output_tokens=invocation.output_tokens if invocation is not None else None,
+            estimated_cost=invocation.estimated_cost if invocation is not None else None,
+            currency=invocation.currency if invocation is not None else None,
+            claims=[],
+            decision=None,
+            message=(
+                "Live Examiner exceeded the usefulness window; no recommendation "
+                "was delivered."
             ),
             reasoning_tier=tier,
             preliminary_ai_invocation_id=preliminary_invocation_id,

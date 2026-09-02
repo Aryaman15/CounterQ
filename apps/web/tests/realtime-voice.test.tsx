@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   RealtimeControlClient,
+  type CanonicalControlDebug,
+  type DevelopmentBootstrapResponse,
   type RealtimeControlEvent,
 } from "../features/interview-room/realtime/RealtimeControlClient";
 import {
@@ -183,21 +185,26 @@ class HookFakeClient {
   speakAuthorizedPrompt = vi.fn();
   interruptActiveOutputForCandidateSpeech = vi.fn();
   private readonly listeners = new Set<(event: RealtimeClientEvent) => void>();
+  unsubscribeCalls = 0;
   private connectImpl: () => Promise<void> = async () => {
     this.emit({ type: "connected", session: fakeSessionResponse });
   };
+  connect = vi.fn(async () => this.connectImpl());
 
   on(listener: (event: RealtimeClientEvent) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.unsubscribeCalls += 1;
+      this.listeners.delete(listener);
+    };
   }
 
   setConnectImpl(connectImpl: () => Promise<void>): void {
     this.connectImpl = connectImpl;
   }
 
-  async connect(): Promise<void> {
-    await this.connectImpl();
+  get listenerCount(): number {
+    return this.listeners.size;
   }
 
   emit(event: RealtimeClientEvent): void {
@@ -208,12 +215,14 @@ class HookFakeClient {
 }
 
 class HookFakeControlClient {
-  private connectImpl: () => Promise<typeof fakeDevelopmentBootstrap> = async () =>
+  private connectImpl: () => Promise<DevelopmentBootstrapResponse> = async () =>
     fakeDevelopmentBootstrap;
   connectDevelopmentInterview = vi.fn(() => this.connectImpl());
   startDevelopmentInterview = vi.fn(() => this.connectImpl());
   hasStoredDevelopmentSession = vi.fn(() => false);
-  restoreExistingDevelopmentInterview = vi.fn(async () => null);
+  restoreExistingDevelopmentInterview = vi.fn<
+    () => Promise<DevelopmentBootstrapResponse | null>
+  >(async () => null);
   disconnect = vi.fn(() => {
     this.emit({ type: "disconnected" });
   });
@@ -238,14 +247,22 @@ class HookFakeControlClient {
   noteRealtimeReconnected = vi.fn();
   sendCandidateCodeSnapshot = vi.fn();
   private readonly listeners = new Set<(event: RealtimeControlEvent) => void>();
+  unsubscribeCalls = 0;
 
-  setConnectImpl(connectImpl: () => Promise<typeof fakeDevelopmentBootstrap>): void {
+  setConnectImpl(connectImpl: () => Promise<DevelopmentBootstrapResponse>): void {
     this.connectImpl = connectImpl;
   }
 
   on(listener: (event: RealtimeControlEvent) => void): () => void {
     this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
+    return () => {
+      this.unsubscribeCalls += 1;
+      this.listeners.delete(listener);
+    };
+  }
+
+  get listenerCount(): number {
+    return this.listeners.size;
   }
 
   emit(event: RealtimeControlEvent): void {
@@ -272,7 +289,7 @@ const fakeSessionResponse = {
   },
 };
 
-const fakeDevelopmentBootstrap = {
+const fakeDevelopmentBootstrap: DevelopmentBootstrapResponse = {
   interview_session_id: "session-1",
   language: "cpp" as const,
   problem: {
@@ -312,6 +329,81 @@ const fakeDevelopmentBootstrap = {
   protocol_version: "counterq.realtime.control.v1" as const,
 };
 
+const fakeCanonicalDebug: CanonicalControlDebug = {
+  sessionId: "session-1",
+  controlConnected: true,
+  pendingDurableMessages: 2,
+  lastServerSequence: 8,
+  stateVersion: 3,
+  probeBudgetUsed: 1,
+  probeBudgetMax: 4,
+  lastCandidateFinal: {
+    providerItemId: "candidate-item-1",
+    eventId: "event-1",
+    transcriptSegmentId: "segment-1",
+    persistence: "ACKNOWLEDGED",
+  },
+  lastDelivery: {
+    promptId: null,
+    deliveryId: null,
+    deliveryState: null,
+    providerResponseId: null,
+    actualTranscriptId: null,
+    localPlaybackState: "NOT_STARTED",
+    canonicalState: null,
+    outputTranscriptState: "NONE",
+    pendingTerminalEvent: "NONE",
+    lifecycleEvents: [],
+  },
+  lastObservation: {
+    kind: "CANDIDATE_TRANSCRIPT_FINALIZED",
+    sourceEventId: "event-1",
+    sourceEventWatermark: 8,
+    stateVersion: 3,
+    stage: "IMPLEMENTATION",
+    triggerClass: "CANDIDATE_FINAL",
+  },
+  lastCode: {
+    snapshotId: "snapshot-1",
+    version: 2,
+    hashPrefix: "abc123",
+    diffId: "diff-1",
+    persistence: "ACKNOWLEDGED",
+  },
+  lastVoice: {
+    transcriptSegmentId: "segment-1",
+    associatedCodeSnapshotId: "snapshot-1",
+    associatedCodeSnapshotVersion: 2,
+  },
+  lastPolicyGate: {
+    decisionId: null,
+    disposition: null,
+    decisionStatus: null,
+    policyGateOutcome: null,
+    promptId: null,
+    promptKind: null,
+  },
+  lastDeliveryPermit: {
+    promptId: null,
+    status: null,
+    reason: null,
+  },
+};
+
+const fakeRestoredCodeSource = "class Solution { public: int answer = 1; };";
+
+const fakeActiveRestoredBootstrap: DevelopmentBootstrapResponse = {
+  ...fakeDevelopmentBootstrap,
+  restoration: "RESTORED" as const,
+  latest_code_snapshot: {
+    id: "snapshot-1",
+    version_number: 2,
+    language: "cpp",
+    source_code: fakeRestoredCodeSource,
+    content_hash: "hash-1",
+  },
+};
+
 function mediaStreamFor(track: FakeTrack): MediaStream {
   return {
     getAudioTracks: () => [track],
@@ -320,13 +412,17 @@ function mediaStreamFor(track: FakeTrack): MediaStream {
 }
 
 function renderRealtimeHarness(
-  client: HookFakeClient,
+  client: HookFakeClient | (() => HookFakeClient),
   controlClient = new HookFakeControlClient(),
 ) {
+  const voiceClientFactory = typeof client === "function" ? client : () => client;
+  const realtimeControlClientFactory = () => controlClient;
+
   function Harness() {
     const voice = useRealtimeVoice({
-      clientFactory: () => client as unknown as RealtimeVoiceClient,
-      controlClientFactory: () => controlClient as unknown as RealtimeControlClient,
+      clientFactory: () => voiceClientFactory() as unknown as RealtimeVoiceClient,
+      controlClientFactory: () =>
+        realtimeControlClientFactory() as unknown as RealtimeControlClient,
     });
     return (
       <div>
@@ -338,6 +434,12 @@ function renderRealtimeHarness(
         <p data-testid="session-transcription-model">{voice.sessionDebug.transcriptionModel}</p>
         <p data-testid="canonical-session">{voice.canonicalDebug.sessionId}</p>
         <p data-testid="pending-durable">{voice.canonicalDebug.pendingDurableMessages}</p>
+        <p data-testid="canonical-debug">{JSON.stringify(voice.canonicalDebug)}</p>
+        <p data-testid="restored-session">
+          {voice.restoredBootstrap?.interview_session_id ?? ""}
+        </p>
+        <p data-testid="server-deadline">{voice.serverDeadlineAt}</p>
+        <p data-testid="acknowledged-code">{voice.acknowledgedCodeSource}</p>
         {voice.errorMessage ? <p>{voice.errorMessage}</p> : null}
         <button type="button" onClick={() => void voice.enableMicrophone()}>
           enable
@@ -489,22 +591,49 @@ describe("Realtime voice foundation", () => {
     expect(screen.queryByText("Listening")).not.toBeInTheDocument();
   });
 
-  it("restores a stored interview on mount without enabling microphone", async () => {
+  it("restores the same stored active interview after remount without enabling microphone", async () => {
     const voiceClient = new HookFakeClient();
     const controlClient = new HookFakeControlClient();
     controlClient.hasStoredDevelopmentSession.mockReturnValue(true);
     controlClient.restoreExistingDevelopmentInterview.mockImplementation(async () => {
-      controlClient.emit({ type: "connected", bootstrap: fakeDevelopmentBootstrap });
-      return null;
+      controlClient.emit({ type: "connected", bootstrap: fakeActiveRestoredBootstrap });
+      return fakeActiveRestoredBootstrap;
     });
 
-    renderRealtimeHarness(voiceClient, controlClient);
+    const firstMount = renderRealtimeHarness(voiceClient, controlClient);
 
     await waitFor(() => {
       expect(controlClient.restoreExistingDevelopmentInterview).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Ready");
+    expect(screen.getByTestId("restored-session")).toHaveTextContent("session-1");
+    expect(screen.getByTestId("server-deadline")).toHaveTextContent(
+      fakeDevelopmentBootstrap.deadline_at,
+    );
+    expect(screen.getByTestId("acknowledged-code")).toHaveTextContent(
+      fakeRestoredCodeSource,
+    );
     expect(controlClient.connectDevelopmentInterview).not.toHaveBeenCalled();
+
+    firstMount.unmount();
+    expect(controlClient.disconnect).toHaveBeenCalledOnce();
+
+    const remountedControlClient = new HookFakeControlClient();
+    remountedControlClient.hasStoredDevelopmentSession.mockReturnValue(true);
+    remountedControlClient.restoreExistingDevelopmentInterview.mockImplementation(async () => {
+      remountedControlClient.emit({
+        type: "connected",
+        bootstrap: fakeActiveRestoredBootstrap,
+      });
+      return fakeActiveRestoredBootstrap;
+    });
+    renderRealtimeHarness(new HookFakeClient(), remountedControlClient);
+
+    await waitFor(() => {
+      expect(remountedControlClient.restoreExistingDevelopmentInterview).toHaveBeenCalledOnce();
+    });
+    expect(screen.getByTestId("restored-session")).toHaveTextContent("session-1");
+    expect(screen.getByTestId("voice-state")).toHaveTextContent("Ready");
   });
 
   it("shows Connecting while microphone enablement is in progress", async () => {
@@ -620,12 +749,37 @@ describe("Realtime voice foundation", () => {
     expect(client.setMuted).toHaveBeenCalledWith(false);
   });
 
-  it("disconnect resets mute state", async () => {
-    const client = new HookFakeClient();
-    renderRealtimeHarness(client);
+  it("disconnects voice only and reconnects it into the preserved interview", async () => {
+    const firstClient = new HookFakeClient();
+    const secondClient = new HookFakeClient();
+    const voiceFactory = vi
+      .fn<() => HookFakeClient>()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient);
+    const controlClient = new HookFakeControlClient();
+    controlClient.setConnectImpl(async () => {
+      controlClient.emit({ type: "connected", bootstrap: fakeActiveRestoredBootstrap });
+      return fakeActiveRestoredBootstrap;
+    });
+    renderRealtimeHarness(voiceFactory, controlClient);
     fireEvent.click(screen.getByRole("button", { name: "enable" }));
     await waitFor(() => {
       expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+    act(() => {
+      controlClient.emit({ type: "debug_updated", debug: fakeCanonicalDebug });
+      firstClient.emit({
+        type: "transcript_delta",
+        text: "unfinished",
+        itemId: "candidate-item-2",
+        contentIndex: 0,
+      });
+      firstClient.emit({
+        type: "transcript_final",
+        text: "finalized reasoning",
+        itemId: "candidate-item-1",
+        contentIndex: 0,
+      });
     });
     fireEvent.click(screen.getByRole("button", { name: "mute" }));
     expect(screen.getByTestId("muted-state")).toHaveTextContent("true");
@@ -634,6 +788,35 @@ describe("Realtime voice foundation", () => {
 
     expect(screen.getByTestId("voice-state")).toHaveTextContent("Ready");
     expect(screen.getByTestId("muted-state")).toHaveTextContent("false");
+    expect(screen.getByTestId("partial-transcript")).toHaveTextContent("");
+    expect(screen.getByTestId("final-transcript")).toHaveTextContent("finalized reasoning");
+    expect(screen.getByTestId("canonical-session")).toHaveTextContent("session-1");
+    expect(screen.getByTestId("pending-durable")).toHaveTextContent("2");
+    expect(screen.getByTestId("canonical-debug").textContent).toBe(
+      JSON.stringify(fakeCanonicalDebug),
+    );
+    expect(screen.getByTestId("restored-session")).toHaveTextContent("session-1");
+    expect(screen.getByTestId("server-deadline")).toHaveTextContent(
+      fakeDevelopmentBootstrap.deadline_at,
+    );
+    expect(screen.getByTestId("acknowledged-code")).toHaveTextContent(
+      fakeRestoredCodeSource,
+    );
+    expect(firstClient.disconnect).toHaveBeenCalledOnce();
+    expect(firstClient.unsubscribeCalls).toBe(1);
+    expect(firstClient.listenerCount).toBe(0);
+    expect(controlClient.disconnect).not.toHaveBeenCalled();
+    expect(controlClient.listenerCount).toBe(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "enable" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
+    });
+    expect(voiceFactory).toHaveBeenCalledTimes(2);
+    expect(secondClient.connect).toHaveBeenCalledOnce();
+    expect(controlClient.connectDevelopmentInterview).toHaveBeenCalledTimes(2);
+    expect(controlClient.startDevelopmentInterview).not.toHaveBeenCalled();
+    expect(screen.getByTestId("restored-session")).toHaveTextContent("session-1");
   });
 
   it("exposes transcript deltas and finals without corrupting voice state", async () => {
@@ -879,17 +1062,25 @@ describe("Realtime voice foundation", () => {
     expect(controlClient.sendDeliveryInterrupted).not.toHaveBeenCalled();
   });
 
-  it("disconnects client resources on component cleanup", async () => {
+  it("fully disposes both clients and listeners exactly once on component cleanup", async () => {
     const client = new HookFakeClient();
-    const { unmount } = renderRealtimeHarness(client);
+    const controlClient = new HookFakeControlClient();
+    const { unmount } = renderRealtimeHarness(client, controlClient);
     fireEvent.click(screen.getByRole("button", { name: "enable" }));
     await waitFor(() => {
       expect(screen.getByTestId("voice-state")).toHaveTextContent("Listening");
     });
+    expect(client.listenerCount).toBe(1);
+    expect(controlClient.listenerCount).toBe(1);
 
     unmount();
 
-    expect(client.disconnect).toHaveBeenCalled();
+    expect(client.disconnect).toHaveBeenCalledOnce();
+    expect(controlClient.disconnect).toHaveBeenCalledOnce();
+    expect(client.unsubscribeCalls).toBe(1);
+    expect(controlClient.unsubscribeCalls).toBe(1);
+    expect(client.listenerCount).toBe(0);
+    expect(controlClient.listenerCount).toBe(0);
   });
 
   it("normalizes current GA response, interruption, speech, transcript, and audio events", () => {

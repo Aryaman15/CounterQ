@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -10,6 +11,7 @@ from decimal import Decimal
 from typing import TypeVar, cast
 from uuid import UUID
 
+import structlog
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -33,6 +35,7 @@ from app.config.settings import Settings
 from app.interviews.models import InterviewSession, SessionBudget
 
 T = TypeVar("T", bound=BaseModel)
+logger = structlog.get_logger(__name__)
 
 
 class AIGatewayError(Exception):
@@ -153,6 +156,7 @@ class AIGateway:
             metadata=metadata or {},
         )
 
+        preparation_started = time.perf_counter()
         prepared = await self._prepare_invocation(
             interview_session_id=interview_session_id,
             provider_name=self._provider.provider_name,
@@ -160,6 +164,10 @@ class AIGateway:
             capability=capability,
             purpose=purpose,
             policy=policy,
+        )
+        gateway_preparation_ms = max(
+            int((time.perf_counter() - preparation_started) * 1000),
+            0,
         )
         request = ReasoningRequest(
             **{
@@ -171,15 +179,54 @@ class AIGateway:
         if self._transaction_probe is not None and self._transaction_probe():
             raise RuntimeError("AI provider call attempted while database transaction is open")
 
+        usefulness_remaining_ms_at_dispatch = (
+            max(int((usefulness_deadline - datetime.now(UTC)).total_seconds() * 1000), 0)
+            if usefulness_deadline is not None
+            else None
+        )
+        provider_started = time.perf_counter()
+        provider_outcome = "COMPLETED"
         try:
-            provider_result = await asyncio.wait_for(
-                self._provider.reason_structured(
-                    request,
+            try:
+                provider_result = await asyncio.wait_for(
+                    self._provider.reason_structured(
+                        request,
+                        model=model,
+                        reasoning_effort=effort,
+                    ),
+                    timeout=request_timeout,
+                )
+            except asyncio.CancelledError:
+                provider_outcome = "CANCELLED"
+                raise
+            except TimeoutError:
+                provider_outcome = "TIMEOUT"
+                raise
+            except ReasoningProviderError as exc:
+                provider_outcome = exc.category
+                raise
+            except BaseException:
+                provider_outcome = "UNEXPECTED_ERROR"
+                raise
+            finally:
+                logger.info(
+                    "reasoning_provider_call_timing",
+                    interview_session_id=str(interview_session_id),
+                    ai_invocation_id=str(prepared.invocation_id),
+                    purpose=purpose,
+                    capability=capability,
+                    provider=self._provider.provider_name,
                     model=model,
-                    reasoning_effort=effort,
-                ),
-                timeout=request_timeout,
-            )
+                    gateway_preparation_ms=gateway_preparation_ms,
+                    provider_elapsed_ms=max(
+                        int((time.perf_counter() - provider_started) * 1000),
+                        0,
+                    ),
+                    usefulness_remaining_ms_at_dispatch=(
+                        usefulness_remaining_ms_at_dispatch
+                    ),
+                    outcome=provider_outcome,
+                )
         except asyncio.CancelledError:
             await asyncio.shield(
                 self._finish_failed_invocation(

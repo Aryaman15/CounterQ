@@ -703,7 +703,7 @@ def test_founder_strengthened_fixture_inputs_preserve_labels() -> None:
     assert merge.expectations.acceptable_strategies == ["EDGE_CASE", "FAILURE_MODE"]
 
 
-def test_v9_corpus_preserves_stage_appropriate_distinct_frontiers_and_restraint() -> None:
+def test_v10_corpus_preserves_stage_appropriate_distinct_frontiers_and_restraint() -> None:
     distinct_frontiers = {
         "two-sum-sort-tradeoff": (
             "NEW_GRAD",
@@ -797,7 +797,7 @@ def test_only_founder_approved_strategy_alternatives_are_present() -> None:
     }
 
 
-def test_v9_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
+def test_v10_finalized_turn_and_continuation_fixtures_preserve_ask_wait_semantics() -> None:
     for name in (
         "prior-context-neutral-ask",
         "container-water-ask-objective",

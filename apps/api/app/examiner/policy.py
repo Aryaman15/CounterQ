@@ -5,7 +5,7 @@ from app.examiner.analysis_schema import EXAMINER_OUTPUT_CONTRACT_VERSION
 from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
 
 LIVE_EXAMINER_POLICY_KEY = "live_examiner"
-LIVE_EXAMINER_POLICY_VERSION = "v9"
+LIVE_EXAMINER_POLICY_VERSION = "v10"
 LIVE_EXAMINER_EXPIRY_POLICY = "usefulness_deadline_8s_state_and_code_revalidated"
 
 PROBE_STRATEGY_POLICY: dict[str, str] = {

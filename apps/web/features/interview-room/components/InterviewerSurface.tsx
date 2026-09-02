@@ -137,12 +137,7 @@ export function InterviewerSurface({
       const result = await requestDevelopmentLiveExaminerAnalysis(canonicalDebug.sessionId);
       setLiveExaminerResult(result);
     } catch (error) {
-      setLiveExaminerError(
-        error instanceof DevelopmentExaminerRequestError &&
-          error.category === "STRUCTURED_OUTPUT_INVALID"
-          ? "Structured Examiner output was invalid. No decision was created."
-          : "Live Examiner analysis request failed",
-      );
+      setLiveExaminerError(formatLiveExaminerError(error, "Live Examiner analysis request failed"));
     } finally {
       setLiveExaminerPending(false);
     }
@@ -160,10 +155,7 @@ export function InterviewerSurface({
       setLiveExaminerResult(result.analysis);
     } catch (error) {
       setLiveExaminerError(
-        error instanceof DevelopmentExaminerRequestError &&
-          error.category === "STRUCTURED_OUTPUT_INVALID"
-          ? "Structured Examiner output was invalid. No decision was created."
-          : "Live Examiner analyze-and-authorize request failed",
+        formatLiveExaminerError(error, "Live Examiner analyze-and-authorize request failed"),
       );
     } finally {
       setAnalyzeAuthorizePending(false);
@@ -518,7 +510,7 @@ export function InterviewerSurface({
                             ) : null}
                           </>
                         ) : (
-                          <span>{liveExaminerResult.message ?? "No decision persisted"}</span>
+                          <span>{formatLiveExaminerResultMessage(liveExaminerResult)}</span>
                         )}
                         {analyzeAuthorizeResult ? (
                           <>
@@ -685,4 +677,25 @@ function formatSeconds(value: number | null | undefined): string {
     return "unknown";
   }
   return `${Math.max(0, value).toFixed(1)}s`;
+}
+
+function formatLiveExaminerError(error: unknown, fallback: string): string {
+  if (!(error instanceof DevelopmentExaminerRequestError)) {
+    return fallback;
+  }
+  if (error.category === "STRUCTURED_OUTPUT_INVALID") {
+    return "Structured Examiner output was invalid. No decision was created.";
+  }
+  return error.category ? `${error.category}: ${error.message}` : error.message;
+}
+
+function formatLiveExaminerResultMessage(result: DevelopmentAnalyzeLatestResponse): string {
+  if (
+    result.status === "SUPPRESSED" &&
+    result.message ===
+      "Live Examiner exceeded the usefulness window; no recommendation was delivered."
+  ) {
+    return "Examiner exceeded the realtime usefulness window. No prompt was delivered.";
+  }
+  return result.message ?? "No decision persisted";
 }
