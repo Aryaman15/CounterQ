@@ -94,6 +94,7 @@ class FakeReasoningProvider:
         error: ReasoningProviderError | None = None,
         delay_seconds: float = 0,
         assert_no_gateway_transaction: AIGateway | None = None,
+        estimated_cost: Decimal | None = Decimal("0.000520"),
     ) -> None:
         self.output_data = output_data or {
             "verdict": "NOT_GUARANTEED",
@@ -105,6 +106,7 @@ class FakeReasoningProvider:
         self.error = error
         self.delay_seconds = delay_seconds
         self.assert_no_gateway_transaction = assert_no_gateway_transaction
+        self.estimated_cost = estimated_cost
         self.calls = 0
         self.requests: list[ReasoningRequest] = []
         self.models: list[str] = []
@@ -142,7 +144,7 @@ class FakeReasoningProvider:
             ),
             latency_ms=42,
             retry_count=0,
-            estimated_cost=Decimal("0.000520"),
+            estimated_cost=self.estimated_cost,
             currency="USD",
         )
 
@@ -284,6 +286,27 @@ async def test_strict_structured_output_success_and_invalid_output_failure(
         assert diagnostic["ai_invocation_id"]
         assert "RAW_PRIVATE_PROVIDER_OUTPUT" not in str(diagnostic)
         assert "PRIVATE_CANDIDATE_INPUT" not in str(diagnostic)
+        async with maker() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == dev.interview_session.id,
+                    AIInvocation.error_class == "STRUCTURED_OUTPUT_INVALID",
+                )
+            )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+        assert invocation is not None
+        assert invocation.status == "FAILED"
+        assert invocation.provider_model_version == "gpt-5.6-terra-2026-08-24"
+        assert invocation.provider_request_id == "provider-request-1"
+        assert invocation.latency_ms == 42
+        assert invocation.input_tokens == 100
+        assert invocation.cached_input_tokens == 20
+        assert invocation.output_tokens == 30
+        assert invocation.retry_count == 0
+        assert invocation.estimated_cost == Decimal("0.000520")
+        assert invocation.currency == "USD"
+        assert budget is not None
+        assert budget.estimated_cost == Decimal("0.0005")
 
 
 def test_strict_reasoning_schema_contains_required_additional_properties() -> None:
@@ -511,10 +534,24 @@ async def test_provider_failure_and_timeout_update_invocation_status(tmp_path: P
             )
         async with maker() as session:
             invocation = await session.scalar(
-                select(AIInvocation).where(AIInvocation.error_class == "RATE_LIMIT")
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == dev.interview_session.id,
+                    AIInvocation.error_class == "RATE_LIMIT",
+                )
             )
+            budget = await session.get(SessionBudget, dev.interview_session.id)
         assert invocation is not None
         assert invocation.status == "FAILED"
+        assert invocation.provider_model_version is None
+        assert invocation.provider_request_id is None
+        assert invocation.latency_ms is None
+        assert invocation.input_tokens is None
+        assert invocation.cached_input_tokens is None
+        assert invocation.output_tokens is None
+        assert invocation.estimated_cost is None
+        assert invocation.currency is None
+        assert budget is not None
+        assert budget.estimated_cost == Decimal("0.0000")
 
     async for maker, dev in gateway_sessionmaker():
         provider = FakeReasoningProvider(delay_seconds=0.05)

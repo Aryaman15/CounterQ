@@ -278,8 +278,9 @@ class AIGateway:
                     for error in validation_errors
                 ],
             )
-            await self._finish_failed_invocation(
+            await self._finish_provider_completed_invocation(
                 prepared.invocation_id,
+                provider_result,
                 status="FAILED",
                 error_class="STRUCTURED_OUTPUT_INVALID",
             )
@@ -287,7 +288,12 @@ class AIGateway:
                 "Reasoning provider output failed schema validation"
             ) from exc
 
-        await self._finish_successful_invocation(prepared.invocation_id, provider_result)
+        await self._finish_provider_completed_invocation(
+            prepared.invocation_id,
+            provider_result,
+            status="SUCCEEDED",
+            error_class=None,
+        )
 
         return AIGatewayResult(
             invocation_id=prepared.invocation_id,
@@ -371,10 +377,13 @@ class AIGateway:
             finally:
                 self._active_transaction_count -= 1
 
-    async def _finish_successful_invocation(
+    async def _finish_provider_completed_invocation(
         self,
         invocation_id: UUID,
         provider_result: ProviderReasoningResult,
+        *,
+        status: str,
+        error_class: str | None,
     ) -> None:
         async with self._sessionmaker() as session:
             self._active_transaction_count += 1
@@ -383,8 +392,9 @@ class AIGateway:
                     invocation = await session.get(AIInvocation, invocation_id)
                     if invocation is None:
                         raise AIGatewayError("AI invocation disappeared before completion")
-                    invocation.status = "SUCCEEDED"
+                    invocation.status = status
                     invocation.completed_at = datetime.now(UTC)
+                    invocation.error_class = error_class
                     invocation.latency_ms = provider_result.latency_ms
                     invocation.provider_request_id = provider_result.provider_request_id
                     invocation.provider_model_version = provider_result.provider_model_version

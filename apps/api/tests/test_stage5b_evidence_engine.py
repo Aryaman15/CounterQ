@@ -4,6 +4,7 @@ import json
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
@@ -150,10 +151,15 @@ class _SelectiveAssessmentProvider(FakeReasoningProvider):
 
 
 class _SequencedAssessmentProvider(FakeReasoningProvider):
-    def __init__(self, outputs: list[dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        outputs: list[dict[str, Any]],
+        *,
+        estimated_cost: Decimal | None = Decimal("0.000520"),
+    ) -> None:
         if not outputs:
             raise ValueError("Sequenced provider requires at least one output")
-        super().__init__(output_data=outputs[0])
+        super().__init__(output_data=outputs[0], estimated_cost=estimated_cost)
         self._outputs = outputs
 
     async def reason_structured(
@@ -169,6 +175,18 @@ class _SequencedAssessmentProvider(FakeReasoningProvider):
             model=model,
             reasoning_effort=reasoning_effort,
         )
+
+
+def _assert_completed_provider_usage(invocation: AIInvocation) -> None:
+    assert invocation.provider_model_version == "gpt-5.6-terra-2026-08-24"
+    assert invocation.provider_request_id == "provider-request-1"
+    assert invocation.latency_ms == 42
+    assert invocation.input_tokens == 100
+    assert invocation.cached_input_tokens == 20
+    assert invocation.output_tokens == 30
+    assert invocation.retry_count == 0
+    assert invocation.estimated_cost == Decimal("0.000520")
+    assert invocation.currency == "USD"
 
 
 def _unit_kind_is(kind: str) -> Callable[[dict[str, Any]], bool]:
@@ -1848,19 +1866,101 @@ async def test_structured_output_retry_invalid_then_valid_persists_only_second_a
             breakpoint_count = await session.scalar(
                 select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
             )
+            budget = await session.get(SessionBudget, session_id)
         assert [(item.status, item.error_class) for item in invocations] == [
             ("FAILED", "STRUCTURED_OUTPUT_INVALID"),
             ("SUCCEEDED", None),
         ]
+        for invocation in invocations:
+            _assert_completed_provider_usage(invocation)
         assert len(assessments) == 1
         assert assessments[0].ai_invocation_id == invocations[1].id
         assert evidence_count == 1
         assert breakpoint_count == 1
+        assert budget is not None
+        assert budget.estimated_cost == Decimal("0.0010")
 
         repeated = await coordinator.evaluate(session_id)
         assert repeated.skipped_units == 1
         assert repeated.units[0].error_category == "ALREADY_EVALUATED"
         assert provider.calls == 2
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_schema_invalid_cost_can_block_stage5_retry_before_second_provider_call(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, concept_key, concept_id = await _create_committed_response_session(
+            sessions
+        )
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        async with sessions() as session, session.begin():
+            budget = await session.get(SessionBudget, session_id)
+            assert budget is not None
+            budget.hard_monetary_budget = Decimal("0.0050")
+
+        provider = _SequencedAssessmentProvider(
+            [
+                {"findings": [{"malformed": True}]},
+                _analysis_output(concept_key=concept_key),
+            ],
+            estimated_cost=Decimal("0.006000"),
+        )
+        result = await SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        ).evaluate(session_id)
+
+        assert result.failed_units == 1
+        assert result.units[0].error_category == "BUDGET_EXHAUSTED"
+        assert provider.calls == 1
+        async with sessions() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(AIInvocation.interview_session_id == session_id)
+                )
+            )
+            budget = await session.get(SessionBudget, session_id)
+            assessment_count = await session.scalar(
+                select(func.count())
+                .select_from(Assessment)
+                .where(Assessment.interview_session_id == session_id)
+            )
+            evidence_count = await session.scalar(
+                select(func.count())
+                .select_from(Evidence)
+                .where(Evidence.interview_session_id == session_id)
+            )
+            breakpoint_count = await session.scalar(
+                select(func.count()).select_from(Breakpoint).where(Breakpoint.user_id == user_id)
+            )
+        assert len(invocations) == 1
+        assert invocations[0].status == "FAILED"
+        assert invocations[0].error_class == "STRUCTURED_OUTPUT_INVALID"
+        assert invocations[0].estimated_cost == Decimal("0.006000")
+        assert invocations[0].input_tokens == 100
+        assert budget is not None
+        assert budget.estimated_cost == Decimal("0.0060")
+        assert budget.deep_reasoning_used == 1
+        assert assessment_count == 0
+        assert evidence_count == 0
+        assert breakpoint_count == 0
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,
@@ -2076,11 +2176,14 @@ async def test_malformed_output_exhausts_one_retry_and_provider_failure_does_not
         assert len(malformed_invocations) == 2
         assert malformed_budget is not None
         assert malformed_budget.deep_reasoning_used == 2
+        assert malformed_budget.estimated_cost == Decimal("0.0010")
         assert all(
             invocation.status == "FAILED"
             and invocation.error_class == "STRUCTURED_OUTPUT_INVALID"
             for invocation in malformed_invocations
         )
+        for invocation in malformed_invocations:
+            _assert_completed_provider_usage(invocation)
 
         provider.output_data = _analysis_output(concept_key=concept_key)
         provider.error = ReasoningProviderError("PROVIDER_UNAVAILABLE")
@@ -2139,6 +2242,7 @@ async def test_malformed_output_exhausts_one_retry_and_provider_failure_does_not
         assert later_evidence == 1
         assert later_budget is not None
         assert later_budget.deep_reasoning_used == 3
+        assert later_budget.estimated_cost == Decimal("0.0015")
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,
