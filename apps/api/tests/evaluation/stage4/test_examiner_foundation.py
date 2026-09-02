@@ -25,9 +25,44 @@ from app.examiner.context import (
     SOURCE_FRESHNESS_SEMANTICS,
     serialize_examiner_context,
 )
-from app.examiner.context_projection import LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION
+from app.examiner.context_projection import (
+    LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION,
+    project_interview_pack,
+)
+from app.examiner.frontier_policy import (
+    PROACTIVE_ENRICHMENT_STAGE_ELIGIBILITY,
+    filter_proactive_enrichment_strategies,
+)
 from app.examiner.models import CandidateClaim, ExaminerDecision
 from app.problems.content import InterviewPackContent
+
+# UTF-8 model-input sizes at projection v2 on main 66834443b4b38a1a4b083be8a9665290f55309c5.
+V2_FIXTURE_CONTEXT_BYTES = {
+    "two-sum-correct-wait": 7318,
+    "two-sum-hash-assumption": 6620,
+    "maximum-subarray-shallow-why": 6350,
+    "longest-substring-invariant-prove": 5541,
+    "valid-parentheses-counterexample": 6057,
+    "binary-search-linear-complexity": 4451,
+    "merge-intervals-touching-edge": 6587,
+    "two-sum-sort-tradeoff": 7344,
+    "valid-palindrome-alternative": 5972,
+    "two-sum-sort-index-choice": 7740,
+    "minimum-subarray-negative-mutation": 6445,
+    "course-schedule-cycle-failure": 6460,
+    "number-islands-transfer": 6143,
+    "longest-substring-self-correction": 5301,
+    "execution-failure-observe": 6609,
+    "weak-candidate-restraint": 5338,
+    "prior-context-neutral-ask": 6564,
+    "transcription-ambiguity-observe": 6844,
+    "stale-code-wait": 5517,
+    "stale-state-wait": 3552,
+    "two-sum-repeated-concept-wait": 6956,
+    "container-water-ask-objective": 4263,
+    "coin-change-incomplete-observe": 6227,
+    "rotated-search-duplicate-assumption-ask": 4580,
+}
 
 
 def decision_metadata() -> dict[str, object]:
@@ -93,6 +128,13 @@ def diagnostic_pack(name: str, *, state: str | None = None) -> dict[str, Any]:
     context = evaluation_context_json(evaluation_input)
     pack_context = cast(dict[str, object], context["interview_pack"])
     return cast(dict[str, Any], pack_context["diagnostic_pack"])
+
+
+def projected_opportunities(name: str) -> dict[str, dict[str, Any]]:
+    return {
+        item["id"]: item
+        for item in diagnostic_pack(name).get("probe_opportunities", [])
+    }
 
 
 def test_transcript_and_code_context_match_production_nested_shapes() -> None:
@@ -282,6 +324,108 @@ def test_compact_projection_excludes_heavy_reference_and_starter_payloads() -> N
     }
 
 
+def test_proactive_enrichment_stage_matrix_matches_frozen_strategy_semantics() -> None:
+    assert PROACTIVE_ENRICHMENT_STAGE_ELIGIBILITY == {
+        "TRADE_OFF": frozenset(
+            {
+                "APPROACH_DEFENSE",
+                "COMPLEXITY_EDGE_CASES",
+                "CONSTRAINT_MUTATION",
+                "FINAL_DEFENSE",
+            }
+        ),
+        "ALTERNATIVE": frozenset(
+            {
+                "APPROACH_DEFENSE",
+                "COMPLEXITY_EDGE_CASES",
+                "FINAL_DEFENSE",
+            }
+        ),
+        "CONSTRAINT_MUTATION": frozenset(
+            {"CONSTRAINT_MUTATION", "FINAL_DEFENSE"}
+        ),
+        "TRANSFER": frozenset({"CONSTRAINT_MUTATION", "FINAL_DEFENSE"}),
+    }
+
+
+def test_proactive_enrichment_filter_preserves_non_enrichment_diagnostics() -> None:
+    assert filter_proactive_enrichment_strategies(
+        ["TRADE_OFF", "ALTERNATIVE"],
+        interview_stage="IMPLEMENTATION",
+    ) == []
+    assert filter_proactive_enrichment_strategies(
+        ["ASSUMPTION_CHALLENGE", "CONSTRAINT_MUTATION"],
+        interview_stage="IMPLEMENTATION",
+    ) == ["ASSUMPTION_CHALLENGE"]
+    assert filter_proactive_enrichment_strategies(
+        ["ASSUMPTION_CHALLENGE", "CONSTRAINT_MUTATION"],
+        interview_stage="CONSTRAINT_MUTATION",
+    ) == ["ASSUMPTION_CHALLENGE", "CONSTRAINT_MUTATION"]
+    assert filter_proactive_enrichment_strategies(
+        ["TRANSFER"],
+        interview_stage="FINAL_DEFENSE",
+    ) == ["TRANSFER"]
+
+
+def test_projection_filters_mixed_strategy_opportunities_without_mutating_source() -> None:
+    probe_opportunities = [
+        {
+            "id": "pure_enrichment",
+            "concept_keys": ["sorting"],
+            "diagnostic_goal": "Compare approaches.",
+            "relevant_strategies": ["TRADE_OFF", "ALTERNATIVE"],
+        },
+        {
+            "id": "mixed_diagnostic",
+            "concept_keys": ["invariant"],
+            "diagnostic_goal": "Test the current assumption.",
+            "relevant_strategies": ["ASSUMPTION_CHALLENGE", "CONSTRAINT_MUTATION"],
+        },
+        {
+            "id": "correctness_diagnostic",
+            "concept_keys": ["invariant"],
+            "diagnostic_goal": "Defend the invariant.",
+            "relevant_strategies": ["PROVE"],
+        },
+    ]
+    projected = project_interview_pack(
+        {
+            "interview_pack_version_id": "test-pack",
+            "schema_version": "interview-pack.v1",
+            "review_status": "REVIEWED",
+            "pack": {
+                "version": "v1",
+                "probe_opportunities": probe_opportunities,
+            },
+        },
+        candidate_level="NEW_GRAD",
+        interview_stage="IMPLEMENTATION",
+    )
+    diagnostic_pack = cast(dict[str, Any], projected["diagnostic_pack"])
+    assert diagnostic_pack["probe_opportunities"] == [
+        {
+            "id": "mixed_diagnostic",
+            "concept_keys": ["invariant"],
+            "diagnostic_goal": "Test the current assumption.",
+            "relevant_strategies": ["ASSUMPTION_CHALLENGE"],
+        },
+        {
+            "id": "correctness_diagnostic",
+            "concept_keys": ["invariant"],
+            "diagnostic_goal": "Defend the invariant.",
+            "relevant_strategies": ["PROVE"],
+        },
+    ]
+    assert probe_opportunities[0]["relevant_strategies"] == [
+        "TRADE_OFF",
+        "ALTERNATIVE",
+    ]
+    assert probe_opportunities[1]["relevant_strategies"] == [
+        "ASSUMPTION_CHALLENGE",
+        "CONSTRAINT_MUTATION",
+    ]
+
+
 def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_families() -> None:
     implementation = diagnostic_pack("two-sum-sort-index-choice")
     assert {"expected_approaches", "alternative_approaches", "invariants"} <= set(
@@ -298,6 +442,24 @@ def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_fami
     assert "tradeoffs" not in implementation_alternate
     assert "time_complexity" not in implementation_alternate
 
+    satisfied = fixture("two-sum-correct-wait")
+    assert satisfied.input.state == "IMPLEMENTATION"
+    satisfied_pack = diagnostic_pack("two-sum-correct-wait")
+    assert {"expected_approaches", "alternative_approaches", "invariants"} <= set(
+        satisfied_pack
+    )
+    satisfied_opportunities = projected_opportunities("two-sum-correct-wait")
+    assert "compare_sort_tradeoff" not in satisfied_opportunities
+    assert satisfied_opportunities["prove_complement_history"][
+        "relevant_strategies"
+    ] == ["PROVE", "COUNTEREXAMPLE"]
+    stored_opportunities = cast(
+        list[dict[str, Any]], satisfied.input.interview_pack["probe_opportunities"]
+    )
+    assert "compare_sort_tradeoff" in {
+        opportunity["id"] for opportunity in stored_opportunities
+    }
+
     defense = diagnostic_pack("two-sum-sort-tradeoff")
     assert {"expected_approaches", "alternative_approaches", "invariants"} <= set(defense)
     assert "complexity_expectations" in defense
@@ -307,6 +469,15 @@ def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_fami
     assert [item["id"] for item in defense["relevant_followups"]] == [
         "sort_index_tradeoff"
     ]
+    assert projected_opportunities("two-sum-sort-tradeoff")["compare_sort_tradeoff"][
+        "relevant_strategies"
+    ] == ["TRADE_OFF", "ALTERNATIVE"]
+
+    palindrome = fixture("valid-palindrome-alternative")
+    assert palindrome.input.state == "APPROACH_DEFENSE"
+    assert projected_opportunities("valid-palindrome-alternative")[
+        "copy_space_tradeoff"
+    ]["relevant_strategies"] == ["TRADE_OFF", "ALTERNATIVE"]
 
     complexity = diagnostic_pack("two-sum-hash-assumption")
     assert "complexity_expectations" in complexity
@@ -323,6 +494,9 @@ def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_fami
     assert "constraint_mutations" in mutation
     assert "complexity_expectations" not in mutation
     assert "failure_modes" not in mutation
+    assert projected_opportunities("minimum-subarray-negative-mutation")[
+        "challenge_negative_assumption"
+    ]["relevant_strategies"] == ["ASSUMPTION_CHALLENGE", "CONSTRAINT_MUTATION"]
 
     transfer = diagnostic_pack("number-islands-transfer")
     transfer_opportunities = [
@@ -344,8 +518,18 @@ def test_stage_aware_projection_preserves_alternates_and_selects_diagnostic_fami
     ]
 
 
-def test_evaluation_and_production_use_the_exact_same_projection() -> None:
-    item = fixture("two-sum-sort-tradeoff").input
+@pytest.mark.parametrize(
+    "fixture_id",
+    [
+        "two-sum-correct-wait",
+        "two-sum-sort-tradeoff",
+        "valid-palindrome-alternative",
+        "minimum-subarray-negative-mutation",
+        "number-islands-transfer",
+    ],
+)
+def test_evaluation_and_production_use_the_exact_same_projection(fixture_id: str) -> None:
+    item = fixture(fixture_id).input
     evaluation = evaluation_context_json(item)
     production = serialize_examiner_context(
         trusted_policy=cast(dict[str, object], evaluation["trusted_policy"]),
@@ -365,10 +549,18 @@ def test_evaluation_and_production_use_the_exact_same_projection() -> None:
     assert production == evaluation
 
 
-def test_v2_fixture_context_has_deterministic_size_headroom() -> None:
-    sizes = [len(model_input_json(item.input).encode("utf-8")) for item in load_fixtures()]
-    assert max(sizes) < 9_000
-    assert sum(sizes) / len(sizes) < 7_000
+def test_v3_fixture_context_does_not_grow_from_v2_baseline() -> None:
+    sizes = {
+        item.fixture_id: len(model_input_json(item.input).encode("utf-8"))
+        for item in load_fixtures()
+    }
+    assert set(sizes) == set(V2_FIXTURE_CONTEXT_BYTES)
+    assert all(
+        size <= V2_FIXTURE_CONTEXT_BYTES[fixture_id]
+        for fixture_id, size in sizes.items()
+    )
+    assert sum(sizes.values()) <= sum(V2_FIXTURE_CONTEXT_BYTES.values())
+    assert max(sizes.values()) <= max(V2_FIXTURE_CONTEXT_BYTES.values())
 
 
 def test_input_cannot_receive_expectations_or_sentinel() -> None:

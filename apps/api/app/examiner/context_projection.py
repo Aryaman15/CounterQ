@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from typing import cast
 
+from app.examiner.frontier_policy import filter_proactive_enrichment_strategies
+
 LIVE_EXAMINER_CONTEXT_PROJECTION_KEY = "live_examiner_context"
-LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION = "v2"
+LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION = "v3"
 
 _APPROACH_FIELDS = (
     "approach_id",
@@ -247,6 +249,11 @@ def project_interview_pack(
     for key in diagnostic_families:
         fields = _DIAGNOSTIC_FIELDS[key]
         items = _project_items(pack.get(key), fields)
+        if key == "probe_opportunities":
+            items = _filter_probe_opportunities(
+                items,
+                interview_stage=interview_stage,
+            )
         if items:
             diagnostic[key] = items
 
@@ -283,6 +290,26 @@ def _project_items(value: object, fields: tuple[str, ...]) -> list[dict[str, obj
         for item in value
         if isinstance(item, dict)
     ]
+
+
+def _filter_probe_opportunities(
+    opportunities: list[dict[str, object]],
+    *,
+    interview_stage: str,
+) -> list[dict[str, object]]:
+    filtered: list[dict[str, object]] = []
+    for opportunity in opportunities:
+        raw_strategies = opportunity.get("relevant_strategies")
+        if not isinstance(raw_strategies, list):
+            continue
+        strategies = filter_proactive_enrichment_strategies(
+            [strategy for strategy in raw_strategies if isinstance(strategy, str)],
+            interview_stage=interview_stage,
+        )
+        if not strategies:
+            continue
+        filtered.append({**opportunity, "relevant_strategies": strategies})
+    return filtered
 
 
 def _applies(value: object, expected: str) -> bool:

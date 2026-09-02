@@ -478,7 +478,7 @@ def test_live_examiner_policy_v9_guides_ranking_strategies_depth_and_verificatio
     assert descriptor.policy_key == "live_examiner"
     assert descriptor.version == "v9"
     assert descriptor.configuration["policy_id"] == "live_examiner.v9"
-    assert descriptor.configuration["context_projection_version"] == "v2"
+    assert descriptor.configuration["context_projection_version"] == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert descriptor.configuration["output_contract_version"] == "v2"
     assert "primary uncertainty" in LIVE_EXAMINER_INSTRUCTIONS

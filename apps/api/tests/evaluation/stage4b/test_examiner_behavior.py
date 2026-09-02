@@ -697,7 +697,7 @@ async def test_fast_medium_and_single_strong_escalation_preserve_provenance(
         medium_input = json.loads(medium.calls[0][0].input_content)
         assert medium_input["context_projection"] == {
             "key": "live_examiner_context",
-            "version": "v2",
+            "version": "v3",
         }
         assert "reference_solutions" not in json.dumps(medium_input)
         assert "starter_code" not in json.dumps(medium_input)
@@ -865,7 +865,7 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
 
 def test_stage4b_policy_contract_has_all_frozen_strategies_levels_and_no_stage5_tables() -> None:
     assert LIVE_EXAMINER_POLICY_VERSION == "v9"
-    assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v2"
+    assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
     assert live_examiner_policy_descriptor().configuration["output_contract_version"] == "v2"
     assert len(PROBE_STRATEGY_POLICY) == 12

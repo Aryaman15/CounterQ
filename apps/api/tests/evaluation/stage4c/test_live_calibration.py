@@ -645,7 +645,7 @@ async def test_report_contains_per_call_data_and_operational_aggregates(
     assert metadata["policy_key"] == "live_examiner"
     assert metadata["policy_version"] == "v9"
     assert metadata["output_contract_version"] == "v2"
-    assert metadata["context_projection_version"] == "v2"
+    assert metadata["context_projection_version"] == "v3"
     assert metadata["fixture_count"] == 2
     assert len(metadata["canonical_corpus_sha256"]) == 64
     assert metadata["standard_model"] == "stage4c-standard"
