@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evidence.independence import IndependenceAttributionService
 from app.evidence.models import SkillDimension
+from app.evidence.policy import ASSESSMENT_INPUT_CONTRACT_VERSION
 from app.execution.models import ExecutionRun, TestResult
 from app.interviews.models import (
     CandidateResponse,
@@ -119,7 +120,7 @@ class AssessmentInputBuilder:
         concept_ids_by_key = await self._problem_concepts(problem.id)
         skill_ids_by_key = await self._skills()
         common = {
-            "input_contract_version": "assessment-input.v1",
+            "input_contract_version": ASSESSMENT_INPUT_CONTRACT_VERSION,
             "session": {
                 "id": str(interview.id),
                 "mode": configuration.mode,
@@ -276,12 +277,7 @@ class AssessmentInputBuilder:
             if not run_events:
                 continue
             execution_source_ids.update(event.id for event in run_events)
-            primary = (
-                events_by_id[previous_run.run_event_id]
-                if debugging_sequence and previous_run is not None
-                else events_by_id[run.run_event_id]
-            )
-            attribution = await self._independence.for_direct_event(primary)
+            attribution = await self._independence.for_event_window(run_events)
             facts = self._facts(
                 [
                     (event, "PRIMARY" if event.id == run.run_event_id else "SUPPORTING")
@@ -388,11 +384,7 @@ class AssessmentInputBuilder:
                 continue
             attribution = await self._independence.for_direct_event(event)
             diff = diffs_by_event.get(event.id)
-            kind = (
-                AssessmentUnitKind.SELF_CORRECTION
-                if diff is not None and attribution.level == "INDEPENDENT"
-                else AssessmentUnitKind.DIRECT_CODE
-            )
+            kind = AssessmentUnitKind.DIRECT_CODE
             facts = self._facts([(event, "PRIMARY")])
             previous_snapshot = (
                 snapshots_by_id.get(snapshot.parent_snapshot_id)
@@ -415,8 +407,8 @@ class AssessmentInputBuilder:
                             "current": _snapshot_json(snapshot),
                             "previous": _snapshot_json(previous_snapshot),
                             "diff": _diff_json(diff),
-                            "self_correction_is_candidate_revision_not_model_conclusion": kind
-                            == AssessmentUnitKind.SELF_CORRECTION,
+                            "candidate_revision_observed": diff is not None,
+                            "correction_status": "NOT_DETERMINED_BY_SOFTWARE",
                         },
                         "limitations": (
                             [] if attribution.resolved else ["INDEPENDENCE_UNRESOLVED"]

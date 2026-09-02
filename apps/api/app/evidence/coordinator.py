@@ -15,7 +15,6 @@ from app.ai_gateway.models import AIPolicyVersion
 from app.ai_gateway.provider import ReasoningProviderError
 from app.evidence.assessment_schema import AssessmentAnalysisResult, AssessmentFinding
 from app.evidence.breakpoints import (
-    ACTIVE_BREAKPOINT_STATUSES,
     BreakpointCandidate,
     BreakpointPolicyError,
     BreakpointService,
@@ -31,7 +30,6 @@ from app.evidence.contracts import (
 from app.evidence.models import (
     Assessment,
     AssessmentSource,
-    Breakpoint,
     BreakpointEvidence,
     Evidence,
 )
@@ -244,10 +242,12 @@ class SessionEvidenceEvaluationCoordinator:
             and len(selected) == len(finding.source_aliases)
             and _sources_admitted(selected)
         )
-        concepts_valid = bool(finding.concept_keys) and all(
-            key in unit.concept_ids_by_key for key in finding.concept_keys
-        )
+        concepts_valid = all(key in unit.concept_ids_by_key for key in finding.concept_keys)
         skills_valid = all(key in unit.skill_ids_by_key for key in finding.skill_dimension_keys)
+        targets_valid = bool(finding.concept_keys or finding.skill_dimension_keys)
+        breakpoint_targets_valid = finding.breakpoint_effect == "NONE" or (
+            len(finding.concept_keys) == 1 and len(finding.skill_dimension_keys) == 1
+        )
         evaluation_key = assessment_evaluation_key(
             unit=unit,
             finding=finding,
@@ -304,6 +304,8 @@ class SessionEvidenceEvaluationCoordinator:
             valid_selection
             and concepts_valid
             and skills_valid
+            and targets_valid
+            and breakpoint_targets_valid
             and response_valid
             and evaluator_valid
         ):
@@ -393,23 +395,16 @@ class SessionEvidenceEvaluationCoordinator:
             return (result.breakpoint_id,) if result.breakpoint_id is not None else ()
         if finding.breakpoint_effect not in ("CONTRADICTED", "RESOLUTION_SUPPORT"):
             return ()
-        active = list(
-            await session.scalars(
-                select(Breakpoint).where(
-                    Breakpoint.user_id == interview.user_id,
-                    Breakpoint.concept_id == concept_id,
-                    Breakpoint.skill_dimension_id == skill_id,
-                    Breakpoint.status.in_(ACTIVE_BREAKPOINT_STATUSES),
-                )
-            )
+        breakpoint_id = await service.link_evidence_to_active_boundary(
+            user_id=interview.user_id,
+            concept_id=concept_id,
+            skill_dimension_id=skill_id,
+            assessment_dimension=finding.assessment_dimension,
+            known_subtype=finding.breakpoint_subtype,
+            evidence_id=evidence_id,
+            relationship=finding.breakpoint_effect,
         )
-        for breakpoint in active:
-            await service.link_evidence(
-                breakpoint_id=breakpoint.id,
-                evidence_id=evidence_id,
-                relationship=finding.breakpoint_effect,
-            )
-        return tuple(breakpoint.id for breakpoint in active)
+        return (breakpoint_id,) if breakpoint_id is not None else ()
 
 
 def assessment_evaluation_key(

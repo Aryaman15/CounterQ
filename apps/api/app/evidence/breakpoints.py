@@ -316,6 +316,52 @@ class BreakpointService:
         )
         await self._session.flush()
 
+    async def link_evidence_to_active_boundary(
+        self,
+        *,
+        user_id: UUID,
+        concept_id: UUID,
+        skill_dimension_id: UUID,
+        assessment_dimension: str,
+        known_subtype: str | None,
+        evidence_id: UUID,
+        relationship: str,
+    ) -> UUID | None:
+        """Link rebuttal Evidence only to the exact normalized active boundary."""
+
+        concept = await self._session.get(Concept, concept_id)
+        skill = await self._session.get(SkillDimension, skill_dimension_id)
+        if (
+            concept is None
+            or concept.status != "ACTIVE"
+            or skill is None
+            or skill.status != "ACTIVE"
+        ):
+            raise BreakpointPolicyError("Canonical Breakpoint targets must exist and be active")
+        breakpoint_key = normalize_breakpoint_key(
+            concept_key=concept.canonical_key,
+            skill_key=skill.canonical_key,
+            assessment_dimension=assessment_dimension,
+            known_subtype=known_subtype,
+        )
+        breakpoint_id = await self._session.scalar(
+            select(Breakpoint.id).where(
+                Breakpoint.user_id == user_id,
+                Breakpoint.concept_id == concept_id,
+                Breakpoint.skill_dimension_id == skill_dimension_id,
+                Breakpoint.breakpoint_key == breakpoint_key,
+                Breakpoint.status.in_(ACTIVE_BREAKPOINT_STATUSES),
+            )
+        )
+        if breakpoint_id is None:
+            return None
+        await self.link_evidence(
+            breakpoint_id=breakpoint_id,
+            evidence_id=evidence_id,
+            relationship=relationship,
+        )
+        return breakpoint_id
+
     async def active_support_count(self, breakpoint_id: UUID) -> int:
         """Count current qualifying support without erasing historical links."""
 

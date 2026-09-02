@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,6 +19,7 @@ from app.ai_gateway.provider import ReasoningProviderError
 from app.auth.models import User
 from app.config.settings import create_settings, get_settings
 from app.db.session import build_engine
+from app.evidence.assessment_schema import AssessmentAnalysisResult, AssessmentFinding
 from app.evidence.breakpoints import (
     MEANINGFUL_TECHNICAL_BOUNDARY,
     BreakpointCandidate,
@@ -30,15 +32,19 @@ from app.evidence.models import (
     Breakpoint,
     BreakpointEvidence,
     Evidence,
+    EvidenceConcept,
+    EvidenceSkill,
     EvidenceSource,
 )
 from app.evidence.snapshot import canonical_evaluation_snapshot
-from app.evidence.units import AssessmentInputBuilder
+from app.evidence.units import AssessmentInputBuilder, AssessmentUnitKind
 from app.evidence.validation import EvidenceValidationService
+from app.execution.repository import ExecutionRepository
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import CandidateResponse, InterviewerPrompt, InterviewSession
+from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
 from app.main import create_app
 from app.observation.models import InterviewEvent
 from app.problems.models import Concept, ProblemConcept
@@ -62,7 +68,7 @@ def _client(sequence: int) -> dict[str, object]:
 
 def _analysis_output(
     *,
-    concept_key: str,
+    concept_key: str | None,
     dimension: str = "CORRECTNESS",
     polarity: str = "NEGATIVE",
     source_aliases: list[str] | None = None,
@@ -83,8 +89,8 @@ def _analysis_output(
                 ),
                 "proposed_strength": "STRONG",
                 "source_aliases": source_aliases or ["source_1"],
-                "concept_keys": [concept_key],
-                "skill_dimension_keys": skill_keys or ["correctness"],
+                "concept_keys": [concept_key] if concept_key is not None else [],
+                "skill_dimension_keys": ["correctness"] if skill_keys is None else skill_keys,
                 "boundary_kind": "MEANINGFUL_TECHNICAL_BOUNDARY" if weakness else "NONE",
                 "breakpoint_subtype": None,
                 "breakpoint_effect": "WEAKNESS" if weakness else "NONE",
@@ -137,7 +143,7 @@ async def _deliver(
     *,
     sequence: int,
     actual: str,
-) -> None:
+) -> UUID:
     start = await service.start_delivery(
         session_id=interview_id,
         message=CounterQDeliveryStartedMessage(
@@ -148,7 +154,7 @@ async def _deliver(
             provider_response_id=f"response-{sequence}",
         ),
     )
-    await service.complete_delivery(
+    completed = await service.complete_delivery(
         session_id=interview_id,
         message=CounterQDeliveryCompletedMessage(
             **_client(sequence + 1),
@@ -159,6 +165,63 @@ async def _deliver(
             transcript=actual,
         ),
     )
+    assert completed.event_id is not None
+    return completed.event_id
+
+
+async def _candidate_fact(
+    session: AsyncSession,
+    interview_id: UUID,
+    *,
+    event_type: str,
+    idempotency_key: str,
+    payload: dict[str, object] | None = None,
+    code_snapshot_id: UUID | None = None,
+) -> InterviewEvent:
+    accepted = await InterviewRuntime(session).accept_event(
+        AcceptEventCommand(
+            session_id=interview_id,
+            event_type=event_type,
+            source="NATIVE_RUNNER",
+            occurred_at=datetime.now(UTC),
+            idempotency_key=idempotency_key,
+            payload=payload or {},
+            code_snapshot_id=code_snapshot_id,
+        )
+    )
+    return accepted.event
+
+
+async def _completed_execution(
+    session: AsyncSession,
+    interview: InterviewSession,
+    *,
+    code_snapshot_id: UUID,
+    status: str,
+    idempotency_key: str,
+) -> InterviewEvent:
+    event = await _candidate_fact(
+        session,
+        interview.id,
+        event_type="RUN_CLICKED",
+        idempotency_key=f"{idempotency_key}:event",
+        payload={"trigger": "CANDIDATE_RUN"},
+        code_snapshot_id=code_snapshot_id,
+    )
+    run = await ExecutionRepository(session).add_run(
+        session_id=interview.id,
+        run_event_id=event.id,
+        code_snapshot_id=code_snapshot_id,
+        problem_version_id=interview.problem_version_id,
+        language="cpp",
+        started_at=datetime.now(UTC),
+        execution_provider="stage5-test-double",
+        idempotency_key=idempotency_key,
+    )
+    run.status = status
+    run.completed_at = datetime.now(UTC)
+    await session.flush()
+    return event
 
 
 async def _candidate_turn(
@@ -391,7 +454,7 @@ async def test_candidate_response_materialization_and_delivery_truth(
         interrupted_response
     )
     assert interrupted_attribution.level is None
-    assert interrupted_attribution.reason == ("INTERRUPTED_PROBE_WITHOUT_EXACT_DELIVERY_TRANSCRIPT")
+    assert interrupted_attribution.reason == "INTERRUPTED_PROBE_CAUSALITY_AMBIGUOUS"
     await InterviewCompletionService(db_session).complete(
         session_id=interview.id,
         reason="USER_ENDED",
@@ -411,7 +474,7 @@ async def test_ambiguous_direct_event_after_probe_has_no_independence_guess(
     dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
     service = RealtimeControlService(db_session)
     probe = await _prompt(db_session, dev.interview_session.id, kind="PROBE", text="Probe")
-    await _deliver(
+    delivery_event_id = await _deliver(
         service,
         dev.interview_session.id,
         probe,
@@ -435,6 +498,364 @@ async def test_ambiguous_direct_event_after_probe_has_no_independence_guess(
 
     assert attribution.level is None
     assert attribution.reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
+
+    event.causation_id = delivery_event_id
+    await db_session.flush()
+    linked = await IndependenceAttributionService(db_session).for_direct_event(event)
+    assert linked.level == "AFTER_PROBE"
+    assert linked.reason == "EXPLICIT_PROBE_CAUSAL_LINK"
+
+
+async def test_direct_event_after_interrupted_probe_is_unresolved(
+    db_session: AsyncSession,
+) -> None:
+    dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = RealtimeControlService(db_session)
+    probe = await _prompt(
+        db_session,
+        dev.interview_session.id,
+        kind="PROBE",
+        text="UNDISCLOSED INTERRUPTED PROBE REMAINDER",
+    )
+    started = await service.start_delivery(
+        session_id=dev.interview_session.id,
+        message=CounterQDeliveryStartedMessage(
+            **_client(1),
+            type="counterq_delivery_started",
+            interviewer_prompt_id=probe.id,
+            intended_text=probe.intent,
+            provider_response_id="direct-interrupted",
+        ),
+    )
+    await service.interrupt_delivery(
+        session_id=dev.interview_session.id,
+        message=CounterQDeliveryInterruptedMessage(
+            **_client(2),
+            type="counterq_delivery_interrupted",
+            interviewer_prompt_id=probe.id,
+            prompt_delivery_id=started.delivery_id,
+            provider_response_id="direct-interrupted",
+            confirmed_by="output_audio_buffer.cleared",
+        ),
+    )
+    code = await service.persist_candidate_code_snapshot(
+        session_id=dev.interview_session.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(3),
+            type="candidate_code_snapshot",
+            source_code="int answer = 1;",
+            language="cpp",
+            trigger="EDIT_BURST",
+        ),
+    )
+    event = await db_session.get(InterviewEvent, code.event_id)
+    assert event is not None
+
+    attribution = await IndependenceAttributionService(db_session).for_direct_event(event)
+
+    assert attribution.level is None
+    assert attribution.reason == "INTERRUPTED_PROBE_CAUSALITY_AMBIGUOUS"
+
+
+async def test_direct_code_after_probe_response_is_not_upgraded_to_independent(
+    db_session: AsyncSession,
+) -> None:
+    dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = RealtimeControlService(db_session)
+    probe = await _prompt(db_session, dev.interview_session.id, kind="PROBE", text="Probe")
+    await _deliver(
+        service,
+        dev.interview_session.id,
+        probe,
+        sequence=1,
+        actual="Why is the boundary monotonic?",
+    )
+    await _candidate_turn(
+        service,
+        dev.interview_session.id,
+        sequence=3,
+        provider_item_id="probe-response-before-code",
+        transcript="Moving backward would reintroduce invalid state.",
+    )
+    code = await service.persist_candidate_code_snapshot(
+        session_id=dev.interview_session.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(4),
+            type="candidate_code_snapshot",
+            source_code="left = max(left, last_seen + 1);",
+            language="cpp",
+            trigger="EDIT_BURST",
+        ),
+    )
+    event = await db_session.get(InterviewEvent, code.event_id)
+    assert event is not None
+
+    attribution = await IndependenceAttributionService(db_session).for_direct_event(event)
+
+    assert attribution.level is None
+    assert attribution.reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
+
+
+async def test_time_warning_does_not_become_response_prompt_or_erase_probe(
+    db_session: AsyncSession,
+) -> None:
+    ambiguous = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    ambiguous_service = RealtimeControlService(db_session)
+    probe = await _prompt(db_session, ambiguous.interview_session.id, kind="PROBE", text="Probe")
+    await _deliver(
+        ambiguous_service,
+        ambiguous.interview_session.id,
+        probe,
+        sequence=1,
+        actual="Which invariant justifies that update?",
+    )
+    warning = await _prompt(
+        db_session,
+        ambiguous.interview_session.id,
+        kind="TIME_WARNING",
+        text="Two minutes remain.",
+    )
+    await _deliver(
+        ambiguous_service,
+        ambiguous.interview_session.id,
+        warning,
+        sequence=3,
+        actual="Two minutes remain.",
+    )
+    ambiguous_event_id = await _candidate_turn(
+        ambiguous_service,
+        ambiguous.interview_session.id,
+        sequence=5,
+        provider_item_id="after-probe-warning",
+        transcript="I need to preserve the monotonic boundary.",
+    )
+    ambiguous_response = await db_session.scalar(
+        select(CandidateResponse)
+        .join(CandidateResponse.sources)
+        .where(CandidateResponse.sources.any(interview_event_id=ambiguous_event_id))
+    )
+    assert ambiguous_response is not None
+    assert ambiguous_response.interviewer_prompt_id is None
+    ambiguous_attribution = await IndependenceAttributionService(db_session).for_response(
+        ambiguous_response
+    )
+    assert ambiguous_attribution.level is None
+    assert ambiguous_attribution.reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
+
+    warning_only = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    warning_service = RealtimeControlService(db_session)
+    lone_warning = await _prompt(
+        db_session,
+        warning_only.interview_session.id,
+        kind="TIME_WARNING",
+        text="One minute remains.",
+    )
+    await _deliver(
+        warning_service,
+        warning_only.interview_session.id,
+        lone_warning,
+        sequence=1,
+        actual="One minute remains.",
+    )
+    independent_event_id = await _candidate_turn(
+        warning_service,
+        warning_only.interview_session.id,
+        sequence=3,
+        provider_item_id="after-warning-only",
+        transcript="I will finish the implementation.",
+    )
+    independent_response = await db_session.scalar(
+        select(CandidateResponse)
+        .join(CandidateResponse.sources)
+        .where(CandidateResponse.sources.any(interview_event_id=independent_event_id))
+    )
+    assert independent_response is not None
+    assert independent_response.interviewer_prompt_id is None
+    assert (
+        await IndependenceAttributionService(db_session).for_response(independent_response)
+    ).level == "INDEPENDENT"
+
+
+async def test_debugging_independence_uses_complete_failure_to_success_window(
+    db_session: AsyncSession,
+) -> None:
+    probed = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    failure = await _candidate_fact(
+        db_session,
+        probed.interview_session.id,
+        event_type="TEST_COMPLETED",
+        idempotency_key="debug-window-failed",
+        payload={"status": "FAILED"},
+    )
+    probe = await _prompt(db_session, probed.interview_session.id, kind="PROBE", text="Probe")
+    await _deliver(
+        RealtimeControlService(db_session),
+        probed.interview_session.id,
+        probe,
+        sequence=1,
+        actual="What caused that failing case?",
+    )
+    success = await _candidate_fact(
+        db_session,
+        probed.interview_session.id,
+        event_type="TEST_COMPLETED",
+        idempotency_key="debug-window-succeeded",
+        payload={"status": "SUCCEEDED"},
+    )
+    probed_attribution = await IndependenceAttributionService(db_session).for_event_window(
+        (failure, success)
+    )
+    assert probed_attribution.level is None
+    assert probed_attribution.reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
+
+    independent = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    independent_failure = await _candidate_fact(
+        db_session,
+        independent.interview_session.id,
+        event_type="TEST_COMPLETED",
+        idempotency_key="independent-debug-failed",
+        payload={"status": "FAILED"},
+    )
+    independent_success = await _candidate_fact(
+        db_session,
+        independent.interview_session.id,
+        event_type="TEST_COMPLETED",
+        idempotency_key="independent-debug-succeeded",
+        payload={"status": "SUCCEEDED"},
+    )
+    independent_attribution = await IndependenceAttributionService(db_session).for_event_window(
+        (independent_failure, independent_success)
+    )
+    assert independent_attribution.level == "INDEPENDENT"
+
+
+@pytest.mark.parametrize("with_probe", [False, True])
+async def test_assessment_builder_applies_debugging_window_independence(
+    db_session: AsyncSession,
+    with_probe: bool,
+) -> None:
+    dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    interview = dev.interview_session
+    service = RealtimeControlService(db_session)
+    previous = await service.persist_candidate_code_snapshot(
+        session_id=interview.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(1),
+            type="candidate_code_snapshot",
+            source_code="int answer = 0;",
+            language="cpp",
+            trigger="INITIAL_EDITOR_STATE",
+        ),
+    )
+    await _completed_execution(
+        db_session,
+        interview,
+        code_snapshot_id=previous.snapshot_id,
+        status="COMPILE_ERROR",
+        idempotency_key=f"builder-failed-{with_probe}",
+    )
+    if with_probe:
+        probe = await _prompt(db_session, interview.id, kind="PROBE", text="Probe")
+        await _deliver(
+            service,
+            interview.id,
+            probe,
+            sequence=2,
+            actual="What caused the failed execution?",
+        )
+    current = await service.persist_candidate_code_snapshot(
+        session_id=interview.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(4 if with_probe else 2),
+            type="candidate_code_snapshot",
+            source_code="int answer = 1;",
+            language="cpp",
+            trigger="EDIT_BURST",
+        ),
+    )
+    await _completed_execution(
+        db_session,
+        interview,
+        code_snapshot_id=current.snapshot_id,
+        status="SUCCEEDED",
+        idempotency_key=f"builder-succeeded-{with_probe}",
+    )
+    await InterviewCompletionService(db_session).complete(
+        session_id=interview.id,
+        reason="USER_ENDED",
+        expected_state_version=interview.state_version,
+        idempotency_key=f"builder-debug-complete-{with_probe}",
+    )
+
+    units = await AssessmentInputBuilder(db_session).build_completed_simulation(interview.id)
+    debugging = next(
+        unit
+        for unit in units
+        if unit.kind == AssessmentUnitKind.EXECUTION_DEBUGGING
+        and unit.source_code_snapshot_id == current.snapshot_id
+    )
+    assessment_unit = cast(dict[str, object], debugging.input_payload["assessment_unit"])
+    execution = cast(dict[str, object], assessment_unit["execution"])
+    previous_failed = cast(dict[str, object], execution["previous_failed_execution"])
+    previous_code = cast(dict[str, object], previous_failed["code_snapshot"])
+    current_code = cast(dict[str, object], execution["code_snapshot"])
+
+    assert previous_code["id"] == str(previous.snapshot_id)
+    assert current_code["id"] == str(current.snapshot_id)
+    assert any(
+        cast(dict[str, object], event)["code_diff"] is not None
+        for event in cast(list[object], execution["behavior_sequence"])
+    )
+    if with_probe:
+        assert debugging.independence_level is None
+        assert debugging.independence_reason == "DIRECT_EVENT_AFTER_PROBE_CAUSALITY_AMBIGUOUS"
+    else:
+        assert debugging.independence_level == "INDEPENDENT"
+
+
+async def test_ordinary_independent_code_diff_remains_direct_code(
+    db_session: AsyncSession,
+) -> None:
+    dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
+    service = RealtimeControlService(db_session)
+    await service.persist_candidate_code_snapshot(
+        session_id=dev.interview_session.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(1),
+            type="candidate_code_snapshot",
+            source_code="int answer = 0;",
+            language="cpp",
+            trigger="INITIAL_EDITOR_STATE",
+        ),
+    )
+    revision = await service.persist_candidate_code_snapshot(
+        session_id=dev.interview_session.id,
+        message=CandidateCodeSnapshotMessage(
+            **_client(2),
+            type="candidate_code_snapshot",
+            source_code="int answer = 1;",
+            language="cpp",
+            trigger="EDIT_BURST",
+        ),
+    )
+    await InterviewCompletionService(db_session).complete(
+        session_id=dev.interview_session.id,
+        reason="USER_ENDED",
+        expected_state_version=dev.interview_session.state_version,
+        idempotency_key="ordinary-revision-complete",
+    )
+
+    units = await AssessmentInputBuilder(db_session).build_completed_simulation(
+        dev.interview_session.id
+    )
+    unit = next(item for item in units if item.source_code_snapshot_id == revision.snapshot_id)
+    assessment_unit = cast(dict[str, object], unit.input_payload["assessment_unit"])
+    code = cast(dict[str, object], assessment_unit["code"])
+
+    assert unit.kind == AssessmentUnitKind.DIRECT_CODE
+    assert code["candidate_revision_observed"] is True
+    assert code["correction_status"] == "NOT_DETERMINED_BY_SOFTWARE"
+    assert "self_correction" not in unit.serialize().lower()
 
 
 async def test_invalidation_dismisses_breakpoint_when_only_support_disappears(
@@ -526,6 +947,100 @@ async def test_invalidation_keeps_breakpoint_with_other_active_support(
     assert breakpoint.resolution_reason == "SUPPORT_INVALIDATED"
 
 
+async def test_rebuttal_links_only_the_exact_normalized_breakpoint_boundary(
+    db_session: AsyncSession,
+) -> None:
+    fixture = await evidence_fixture(db_session)
+    negative = await validate_evidence(db_session, fixture)
+    service = BreakpointService(db_session)
+    base_candidate = BreakpointCandidate(
+        user_id=fixture.graph.user.id,
+        interview_session_id=fixture.graph.interview_session.id,
+        concept_id=fixture.concept.id,
+        skill_dimension_id=fixture.skill.id,
+        assessment_dimension="CORRECTNESS",
+        evidence_ids=(negative.id,),
+        boundary_kind=MEANINGFUL_TECHNICAL_BOUNDARY,
+        summary="One canonical target with distinct normalized boundaries.",
+        severity="HIGH",
+    )
+    fallback = await service.create_or_reinforce(base_candidate)
+    subtype = await service.create_or_reinforce(
+        replace(base_candidate, known_subtype="worst_case_complexity")
+    )
+    assert fallback.breakpoint_id is not None
+    assert subtype.breakpoint_id is not None
+    assert fallback.breakpoint_id != subtype.breakpoint_id
+    assert fallback.breakpoint_key != subtype.breakpoint_key
+
+    contradiction = await validate_evidence(
+        db_session,
+        fixture,
+        polarity="POSITIVE",
+        finding="The candidate now distinguishes average and worst-case behavior.",
+    )
+    resolution_support = await validate_evidence(
+        db_session,
+        fixture,
+        polarity="POSITIVE",
+        finding="A separate current demonstration supports the fallback boundary.",
+    )
+    unmatched = await validate_evidence(
+        db_session,
+        fixture,
+        polarity="POSITIVE",
+        finding="This valid Evidence has no matching active normalized boundary.",
+    )
+
+    contradicted_id = await service.link_evidence_to_active_boundary(
+        user_id=fixture.graph.user.id,
+        concept_id=fixture.concept.id,
+        skill_dimension_id=fixture.skill.id,
+        assessment_dimension="CORRECTNESS",
+        known_subtype="worst_case_complexity",
+        evidence_id=contradiction.id,
+        relationship="CONTRADICTED",
+    )
+    resolution_id = await service.link_evidence_to_active_boundary(
+        user_id=fixture.graph.user.id,
+        concept_id=fixture.concept.id,
+        skill_dimension_id=fixture.skill.id,
+        assessment_dimension="CORRECTNESS",
+        known_subtype=None,
+        evidence_id=resolution_support.id,
+        relationship="RESOLUTION_SUPPORT",
+    )
+    unmatched_id = await service.link_evidence_to_active_boundary(
+        user_id=fixture.graph.user.id,
+        concept_id=fixture.concept.id,
+        skill_dimension_id=fixture.skill.id,
+        assessment_dimension="CORRECTNESS",
+        known_subtype="left_pointer_monotonicity",
+        evidence_id=unmatched.id,
+        relationship="CONTRADICTED",
+    )
+
+    assert contradicted_id == subtype.breakpoint_id
+    assert resolution_id == fallback.breakpoint_id
+    assert unmatched_id is None
+    positive_links = list(
+        await db_session.scalars(
+            select(BreakpointEvidence).where(
+                BreakpointEvidence.evidence_id.in_(
+                    (contradiction.id, resolution_support.id, unmatched.id)
+                )
+            )
+        )
+    )
+    assert {
+        (link.breakpoint_id, link.evidence_id, link.relationship) for link in positive_links
+    } == {
+        (subtype.breakpoint_id, contradiction.id, "CONTRADICTED"),
+        (fallback.breakpoint_id, resolution_support.id, "RESOLUTION_SUPPORT"),
+    }
+    assert await db_session.get(Evidence, unmatched.id) is not None
+
+
 async def test_assessment_admission_rejects_fabricated_source_concept_and_skill(
     tmp_path: Path,
 ) -> None:
@@ -592,6 +1107,139 @@ async def test_assessment_admission_rejects_fabricated_source_concept_and_skill(
         assert statuses == ("REJECTED", "REJECTED", "REJECTED")
         assert evidence_count == 0
         assert breakpoint_count == 0
+    finally:
+        await _cleanup_committed_stage5_rows(
+            sessions,
+            user_ids=cleanup_user_ids,
+            concept_ids=cleanup_concept_ids,
+        )
+        await engine.dispose()
+
+
+async def test_concept_only_skill_only_and_combined_findings_become_evidence(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup_user_ids: set[UUID] = set()
+    cleanup_concept_ids: set[UUID] = set()
+    try:
+        session_id, user_id, concept_key, concept_id = await _create_committed_response_session(
+            sessions
+        )
+        cleanup_user_ids.add(user_id)
+        cleanup_concept_ids.add(concept_id)
+        concept_only = cast(
+            list[dict[str, Any]],
+            _analysis_output(
+                concept_key=concept_key,
+                dimension="CORRECTNESS",
+                skill_keys=[],
+            )["findings"],
+        )[0]
+        skill_only = cast(
+            list[dict[str, Any]],
+            _analysis_output(
+                concept_key=None,
+                dimension="EXPLANATION_QUALITY",
+                skill_keys=["explanation_clarity"],
+            )["findings"],
+        )[0]
+        concept_and_skill = cast(
+            list[dict[str, Any]],
+            _analysis_output(
+                concept_key=concept_key,
+                dimension="DEPTH",
+                skill_keys=["correctness"],
+            )["findings"],
+        )[0]
+        provider = FakeReasoningProvider(
+            output_data={"findings": [concept_only, skill_only, concept_and_skill]}
+        )
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        )
+
+        result = await coordinator.evaluate(session_id)
+
+        assert result.completed_units == 1
+        assert sum(len(unit.evidence_ids) for unit in result.units) == 3
+        async with sessions() as session:
+            unit = (await AssessmentInputBuilder(session).build_completed_simulation(session_id))[0]
+            invocation = await session.scalar(
+                select(AIInvocation)
+                .where(AIInvocation.interview_session_id == session_id)
+                .order_by(AIInvocation.started_at.desc())
+                .limit(1)
+            )
+        assert invocation is not None
+        no_target = AssessmentFinding.model_construct(
+            assessment_dimension="TRANSFER",
+            polarity="POSITIVE",
+            confidence=0.9,
+            technical_rationale="This bypasses model validation to exercise admission defense.",
+            evidence_finding="No canonical target was supplied.",
+            proposed_strength="MODERATE",
+            source_aliases=["source_1"],
+            concept_keys=[],
+            skill_dimension_keys=[],
+            boundary_kind="NONE",
+            breakpoint_subtype=None,
+            breakpoint_effect="NONE",
+            breakpoint_severity=None,
+        )
+        rejected = await coordinator._persist_result(
+            original_unit=unit,
+            analysis=AssessmentAnalysisResult.model_construct(findings=[no_target]),
+            invocation_id=invocation.id,
+            evaluator_policy_version_id=invocation.ai_policy_version_id,
+        )
+        assert rejected.evidence_ids == ()
+        async with sessions() as session:
+            assessments = list(
+                await session.scalars(
+                    select(Assessment).where(Assessment.interview_session_id == session_id)
+                )
+            )
+            evidence_rows = list(
+                await session.scalars(
+                    select(Evidence).where(Evidence.interview_session_id == session_id)
+                )
+            )
+            link_counts = {
+                evidence.evidence_type: (
+                    int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(EvidenceConcept)
+                            .where(EvidenceConcept.evidence_id == evidence.id)
+                        )
+                        or 0
+                    ),
+                    int(
+                        await session.scalar(
+                            select(func.count())
+                            .select_from(EvidenceSkill)
+                            .where(EvidenceSkill.evidence_id == evidence.id)
+                        )
+                        or 0
+                    ),
+                )
+                for evidence in evidence_rows
+            }
+        assert {assessment.status for assessment in assessments} == {"VALIDATED", "REJECTED"}
+        assert len(assessments) == 4
+        assert len(evidence_rows) == 3
+        assert link_counts == {
+            "CORRECTNESS": (1, 0),
+            "EXPLANATION_QUALITY": (0, 1),
+            "DEPTH": (1, 1),
+        }
     finally:
         await _cleanup_committed_stage5_rows(
             sessions,
@@ -744,6 +1392,8 @@ async def test_completed_simulation_e2e_is_idempotent_and_reconstructable(
 
         concept_key = f"stage5_e2e_{str(session_id).replace('-', '_')}"
         output = _analysis_output(concept_key=concept_key, weakness=True)
+        weakness_finding = cast(list[dict[str, Any]], output["findings"])[0]
+        weakness_finding["breakpoint_subtype"] = "left_pointer_monotonicity"
         provider = FakeReasoningProvider(output_data=output)
         settings = create_settings(env_file=tmp_path / ".env")
         gateway = AIGateway(settings=settings, sessionmaker=sessions, provider=provider)
@@ -853,6 +1503,8 @@ async def test_completed_simulation_e2e_is_idempotent_and_reconstructable(
         positive_output = _analysis_output(concept_key=concept_key, polarity="POSITIVE")
         positive_finding = cast(list[dict[str, Any]], positive_output["findings"])[0]
         positive_finding["breakpoint_effect"] = "CONTRADICTED"
+        positive_finding["boundary_kind"] = "MEANINGFUL_TECHNICAL_BOUNDARY"
+        positive_finding["breakpoint_subtype"] = "left_pointer_monotonicity"
         provider.output_data = positive_output
         contradiction = await coordinator.evaluate(later_session_id)
         assert contradiction.completed_units == 1

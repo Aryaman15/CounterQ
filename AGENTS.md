@@ -1326,11 +1326,6 @@ pnpm run eval:stage3d:execution-adversarial
 Evaluate the Stage 3D.2 session/request integrity gate:
 pnpm run eval:stage3d:integrity
 
-Evaluate the deterministic Stage 5 Evidence gate:
-pnpm run eval:stage5
-
-Run the opt-in Stage 5 live Assessment evaluator:
-pnpm run eval:stage5:live
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.

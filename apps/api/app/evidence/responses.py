@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.evidence.independence import RESPONSE_BEARING_PROMPT_KINDS
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
     CandidateResponse,
@@ -114,7 +115,11 @@ class CandidateResponseMaterializer:
         delivery_id = latest_prompt_event.payload.get("prompt_delivery_id")
         if not isinstance(delivery_id, str):
             return None
-        delivery = await self._session.get(InterviewerPromptDelivery, UUID(delivery_id))
+        try:
+            delivery_uuid = UUID(delivery_id)
+        except ValueError:
+            return None
+        delivery = await self._session.get(InterviewerPromptDelivery, delivery_uuid)
         if (
             delivery is None
             or delivery.interview_session_id != interview_session_id
@@ -122,7 +127,7 @@ class CandidateResponseMaterializer:
             or delivery.actual_transcript_segment_id is None
         ):
             return None
-        return cast(
-            InterviewerPrompt | None,
-            await self._session.get(InterviewerPrompt, delivery.interviewer_prompt_id),
-        )
+        prompt = await self._session.get(InterviewerPrompt, delivery.interviewer_prompt_id)
+        if prompt is None or prompt.kind not in RESPONSE_BEARING_PROMPT_KINDS:
+            return None
+        return cast(InterviewerPrompt, prompt)

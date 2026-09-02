@@ -7,7 +7,7 @@ from pydantic import Field, model_validator
 from app.ai_gateway.structured_output import StrictReasoningOutputModel
 from app.evidence.breakpoints import KNOWN_BREAKPOINT_SUBTYPES
 
-ASSESSMENT_OUTPUT_CONTRACT_VERSION = "v1"
+ASSESSMENT_OUTPUT_CONTRACT_VERSION = "v2"
 AssessmentDimension = Literal[
     "CORRECTNESS", "DEPTH", "INDEPENDENCE", "TRANSFER", "EXPLANATION_QUALITY"
 ]
@@ -39,7 +39,7 @@ class AssessmentFinding(StrictReasoningOutputModel):
     proposed_strength: EvidenceStrength
     source_aliases: list[str] = Field(min_length=1, max_length=8)
     concept_keys: list[str] = Field(max_length=4)
-    skill_dimension_keys: list[str] = Field(min_length=1, max_length=4)
+    skill_dimension_keys: list[str] = Field(max_length=4)
     boundary_kind: BoundaryKind
     breakpoint_subtype: BreakpointSubtype | None
     breakpoint_effect: BreakpointEffect
@@ -47,17 +47,24 @@ class AssessmentFinding(StrictReasoningOutputModel):
 
     @model_validator(mode="after")
     def validate_breakpoint_proposal(self) -> AssessmentFinding:
-        if self.breakpoint_effect == "WEAKNESS":
+        if not self.concept_keys and not self.skill_dimension_keys:
+            raise ValueError("A finding requires at least one canonical Concept or SkillDimension")
+        if self.breakpoint_effect != "NONE":
             if self.boundary_kind != "MEANINGFUL_TECHNICAL_BOUNDARY":
-                raise ValueError("Breakpoint weakness requires a meaningful boundary")
+                raise ValueError("Breakpoint effects require a meaningful technical boundary")
+            if len(self.concept_keys) != 1 or len(self.skill_dimension_keys) != 1:
+                raise ValueError(
+                    "Breakpoint effects require exactly one Concept and one SkillDimension"
+                )
+        elif self.breakpoint_subtype is not None:
+            raise ValueError("A breakpoint subtype requires a breakpoint effect")
+        if self.breakpoint_effect == "WEAKNESS":
             if self.breakpoint_severity is None:
                 raise ValueError("Breakpoint weakness requires severity")
             if self.polarity not in ("NEGATIVE", "MIXED"):
                 raise ValueError("Breakpoint weakness requires negative or mixed polarity")
         elif self.breakpoint_severity is not None:
             raise ValueError("Only a weakness proposal may include severity")
-        if self.breakpoint_subtype is not None and self.breakpoint_effect != "WEAKNESS":
-            raise ValueError("Only a weakness proposal may include a subtype")
         if self.breakpoint_effect in ("CONTRADICTED", "RESOLUTION_SUPPORT") and (
             self.polarity not in ("POSITIVE", "MIXED")
         ):

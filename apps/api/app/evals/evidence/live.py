@@ -16,11 +16,15 @@ from app.ai_gateway.provider_factory import build_reasoning_provider
 from app.config.settings import REPOSITORY_ROOT, Settings, create_settings
 from app.evals.evidence.harness import aggregate, empty_failure_score, load_fixtures, score_output
 from app.evals.evidence.schema import EvidenceEvaluationFixture, EvidenceEvaluationResult
-from app.evidence.assessment_schema import AssessmentAnalysisResult
+from app.evidence.assessment_schema import (
+    ASSESSMENT_OUTPUT_CONTRACT_VERSION,
+    AssessmentAnalysisResult,
+)
 from app.evidence.policy import (
     ASSESSMENT_EVALUATOR_INSTRUCTIONS,
     ASSESSMENT_EVALUATOR_POLICY_KEY,
     ASSESSMENT_EVALUATOR_POLICY_VERSION,
+    ASSESSMENT_INPUT_CONTRACT_VERSION,
     assessment_evaluator_policy_descriptor,
 )
 from app.evidence.units import serialize_assessment_input
@@ -125,6 +129,8 @@ async def run_live_evaluation(output_path: Path = LIVE_EVALUATION_OUTPUT) -> dic
             "runner_version": RUNNER_VERSION,
             "assessment_policy_key": ASSESSMENT_EVALUATOR_POLICY_KEY,
             "assessment_policy_version": ASSESSMENT_EVALUATOR_POLICY_VERSION,
+            "input_contract_version": ASSESSMENT_INPUT_CONTRACT_VERSION,
+            "output_contract_version": ASSESSMENT_OUTPUT_CONTRACT_VERSION,
             "model": settings.reasoning_standard_model,
             "capability": "STANDARD_REASONING",
             "reasoning_effort": settings.reasoning_standard_effort,
