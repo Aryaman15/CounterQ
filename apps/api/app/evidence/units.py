@@ -90,16 +90,45 @@ class AssessmentInputBuilder:
         self._independence = IndependenceAttributionService(session)
 
     async def build_completed_simulation(self, session_id: UUID) -> list[AssessmentUnit]:
+        return await self._build_session(
+            session_id,
+            required_mode="SIMULATION",
+            require_completed=True,
+        )
+
+    async def build_completed_session(self, session_id: UUID) -> list[AssessmentUnit]:
+        return await self._build_session(session_id, require_completed=True)
+
+    async def build_active_checkpoint(self, session_id: UUID) -> list[AssessmentUnit]:
+        return await self._build_session(session_id, required_mode="COACH", require_active=True)
+
+    async def build_for_revalidation(self, session_id: UUID) -> list[AssessmentUnit]:
+        return await self._build_session(session_id)
+
+    async def _build_session(
+        self,
+        session_id: UUID,
+        *,
+        required_mode: str | None = None,
+        require_completed: bool = False,
+        require_active: bool = False,
+    ) -> list[AssessmentUnit]:
         interview = await self._session.get(InterviewSession, session_id)
         if interview is None:
             raise ValueError("InterviewSession was not found")
         configuration = await self._session.get(
             InterviewConfiguration, interview.interview_configuration_id
         )
-        if configuration is None or configuration.mode != "SIMULATION":
-            raise ValueError("Stage 5 session evaluation requires SIMULATION mode")
-        if interview.status != "COMPLETED" or interview.completed_at is None:
+        if configuration is None or (
+            required_mode is not None and configuration.mode != required_mode
+        ):
+            raise ValueError("Assessment session mode is not eligible")
+        if require_completed and (
+            interview.status != "COMPLETED" or interview.completed_at is None
+        ):
             raise ValueError("Stage 5 session evaluation requires a completed interview")
+        if require_active and interview.status != "ACTIVE":
+            raise ValueError("Active Evidence checkpoint requires an active interview")
         problem = await self._session.get(ProblemVersion, interview.problem_version_id)
         pack = await self._session.get(InterviewPackVersion, interview.interview_pack_version_id)
         if problem is None or pack is None or pack.review_status != "REVIEWED":
@@ -167,6 +196,14 @@ class AssessmentInputBuilder:
             )
         )
         for response in responses:
+            if response.ended_at is None or response.completion_reason not in {
+                "COMPLETE",
+                "INTERRUPTED",
+                "SUPERSEDED",
+                "TIMEOUT",
+                "SPONTANEOUS",
+            }:
+                continue
             response_sources = list(
                 await self._session.scalars(
                     select(CandidateResponseSource)
@@ -254,6 +291,8 @@ class AssessmentInputBuilder:
             )
         )
         for run_index, run in enumerate(runs):
+            if run.status == "RUNNING":
+                continue
             previous_run = runs[run_index - 1] if run_index > 0 else None
             debugging_sequence = (
                 previous_run is not None
@@ -460,7 +499,7 @@ class AssessmentInputBuilder:
             select(InterviewerPromptDelivery)
             .where(
                 InterviewerPromptDelivery.interviewer_prompt_id == response.interviewer_prompt_id,
-                InterviewerPromptDelivery.delivery_state == "DELIVERED",
+                InterviewerPromptDelivery.delivery_state.in_(("DELIVERED", "PARTIALLY_DELIVERED")),
                 InterviewerPromptDelivery.actual_transcript_segment_id.is_not(None),
             )
             .order_by(InterviewerPromptDelivery.delivery_attempt.desc())
@@ -473,7 +512,10 @@ class AssessmentInputBuilder:
         if segment is None:
             return None
         event = await self._session.get(InterviewEvent, segment.interview_event_id)
-        if event is None or event.event_type != "COUNTERQ_UTTERANCE_DELIVERED":
+        if event is None or event.event_type not in {
+            "COUNTERQ_UTTERANCE_DELIVERED",
+            "CANDIDATE_INTERRUPTED_COUNTERQ",
+        }:
             return None
         return event, {
             "prompt_id": str(prompt.id),

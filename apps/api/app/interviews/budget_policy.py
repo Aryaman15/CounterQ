@@ -19,10 +19,7 @@ class BudgetAvailability:
 
 def interactive_deep_reasoning_limit(budget: SessionBudget) -> int:
     """Return the portion of the total deep-reasoning budget available live."""
-    return (
-        budget.max_deep_reasoning_calls
-        - budget.reserved_post_interview_deep_reasoning_calls
-    )
+    return budget.max_deep_reasoning_calls - budget.reserved_post_interview_deep_reasoning_calls
 
 
 def budget_availability(budget: SessionBudget) -> BudgetAvailability:
@@ -43,6 +40,26 @@ class ProbeBudgetSnapshot:
     probes_used: int
     outstanding_authorized_probes: int
     remaining_probes: int
+
+
+@dataclass(frozen=True)
+class AssistanceBudgetSnapshot:
+    max_assistance_interventions: int
+    assistance_interventions_used: int
+    outstanding_assistance_interventions: int
+    remaining_assistance_interventions: int
+    max_structural_hints: int
+    structural_hints_used: int
+    outstanding_structural_hints: int
+    remaining_structural_hints: int
+    max_direct_teaching_interventions: int
+    direct_teaching_interventions_used: int
+    outstanding_direct_teaching_interventions: int
+    remaining_direct_teaching_interventions: int
+    max_guided_retries: int
+    guided_retries_used: int
+    outstanding_guided_retries: int
+    remaining_guided_retries: int
 
 
 async def probe_budget_snapshot(
@@ -80,3 +97,96 @@ async def probe_budget_snapshot(
         outstanding_authorized_probes=outstanding,
         remaining_probes=remaining,
     )
+
+
+async def assistance_budget_snapshot(
+    session: AsyncSession,
+    session_id: object,
+    *,
+    for_update: bool = False,
+) -> AssistanceBudgetSnapshot | None:
+    """Count delivered usage plus outstanding authorization reservations."""
+
+    statement = select(SessionBudget).where(SessionBudget.session_id == session_id)
+    if for_update:
+        statement = statement.with_for_update()
+    budget = await session.scalar(statement)
+    if budget is None:
+        return None
+    total_reserved = await _outstanding_assistance(session, session_id)
+    structural_reserved = await _outstanding_assistance(
+        session, session_id, hint_level="STRUCTURAL_HINT"
+    )
+    teaching_reserved = await _outstanding_assistance(
+        session, session_id, hint_level="DIRECT_TEACHING"
+    )
+    retry_reserved = await _outstanding_assistance(session, session_id, guided_retry=True)
+    return AssistanceBudgetSnapshot(
+        max_assistance_interventions=budget.max_assistance_interventions,
+        assistance_interventions_used=budget.assistance_interventions_used,
+        outstanding_assistance_interventions=total_reserved,
+        remaining_assistance_interventions=max(
+            0,
+            budget.max_assistance_interventions
+            - budget.assistance_interventions_used
+            - total_reserved,
+        ),
+        max_structural_hints=budget.max_structural_hints,
+        structural_hints_used=budget.structural_hints_used,
+        outstanding_structural_hints=structural_reserved,
+        remaining_structural_hints=max(
+            0,
+            budget.max_structural_hints - budget.structural_hints_used - structural_reserved,
+        ),
+        max_direct_teaching_interventions=budget.max_direct_teaching_interventions,
+        direct_teaching_interventions_used=budget.direct_teaching_interventions_used,
+        outstanding_direct_teaching_interventions=teaching_reserved,
+        remaining_direct_teaching_interventions=max(
+            0,
+            budget.max_direct_teaching_interventions
+            - budget.direct_teaching_interventions_used
+            - teaching_reserved,
+        ),
+        max_guided_retries=budget.max_guided_retries,
+        guided_retries_used=budget.guided_retries_used,
+        outstanding_guided_retries=retry_reserved,
+        remaining_guided_retries=max(
+            0,
+            budget.max_guided_retries - budget.guided_retries_used - retry_reserved,
+        ),
+    )
+
+
+def assistance_capacity_available(
+    snapshot: AssistanceBudgetSnapshot,
+    *,
+    hint_level: str,
+    invites_guided_retry: bool,
+) -> bool:
+    if snapshot.remaining_assistance_interventions == 0:
+        return False
+    if hint_level == "STRUCTURAL_HINT" and snapshot.remaining_structural_hints == 0:
+        return False
+    if hint_level == "DIRECT_TEACHING" and snapshot.remaining_direct_teaching_interventions == 0:
+        return False
+    return not invites_guided_retry or snapshot.remaining_guided_retries > 0
+
+
+async def _outstanding_assistance(
+    session: AsyncSession,
+    session_id: object,
+    *,
+    hint_level: str | None = None,
+    guided_retry: bool = False,
+) -> int:
+    statement = (
+        select(func.count(InterviewerPrompt.id))
+        .where(InterviewerPrompt.interview_session_id == session_id)
+        .where(InterviewerPrompt.status == "AUTHORIZED")
+        .where(InterviewerPrompt.assistance_type.is_not(None))
+    )
+    if hint_level is not None:
+        statement = statement.where(InterviewerPrompt.hint_level == hint_level)
+    if guided_retry:
+        statement = statement.where(InterviewerPrompt.invites_guided_retry.is_(True))
+    return int((await session.execute(statement)).scalar_one())

@@ -1,6 +1,278 @@
 {
   "components": {
     "schemas": {
+      "AssistanceBudgetResponse": {
+        "properties": {
+          "assistance_interventions_used": {
+            "title": "Assistance Interventions Used",
+            "type": "integer"
+          },
+          "direct_teaching_interventions_used": {
+            "title": "Direct Teaching Interventions Used",
+            "type": "integer"
+          },
+          "guided_retries_used": {
+            "title": "Guided Retries Used",
+            "type": "integer"
+          },
+          "max_assistance_interventions": {
+            "title": "Max Assistance Interventions",
+            "type": "integer"
+          },
+          "max_direct_teaching_interventions": {
+            "title": "Max Direct Teaching Interventions",
+            "type": "integer"
+          },
+          "max_guided_retries": {
+            "title": "Max Guided Retries",
+            "type": "integer"
+          },
+          "max_structural_hints": {
+            "title": "Max Structural Hints",
+            "type": "integer"
+          },
+          "outstanding_assistance_interventions": {
+            "title": "Outstanding Assistance Interventions",
+            "type": "integer"
+          },
+          "outstanding_direct_teaching_interventions": {
+            "title": "Outstanding Direct Teaching Interventions",
+            "type": "integer"
+          },
+          "outstanding_guided_retries": {
+            "title": "Outstanding Guided Retries",
+            "type": "integer"
+          },
+          "outstanding_structural_hints": {
+            "title": "Outstanding Structural Hints",
+            "type": "integer"
+          },
+          "remaining_assistance_interventions": {
+            "title": "Remaining Assistance Interventions",
+            "type": "integer"
+          },
+          "remaining_direct_teaching_interventions": {
+            "title": "Remaining Direct Teaching Interventions",
+            "type": "integer"
+          },
+          "remaining_guided_retries": {
+            "title": "Remaining Guided Retries",
+            "type": "integer"
+          },
+          "remaining_structural_hints": {
+            "title": "Remaining Structural Hints",
+            "type": "integer"
+          },
+          "structural_hints_used": {
+            "title": "Structural Hints Used",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_assistance_interventions",
+          "assistance_interventions_used",
+          "outstanding_assistance_interventions",
+          "remaining_assistance_interventions",
+          "max_structural_hints",
+          "structural_hints_used",
+          "outstanding_structural_hints",
+          "remaining_structural_hints",
+          "max_direct_teaching_interventions",
+          "direct_teaching_interventions_used",
+          "outstanding_direct_teaching_interventions",
+          "remaining_direct_teaching_interventions",
+          "max_guided_retries",
+          "guided_retries_used",
+          "outstanding_guided_retries",
+          "remaining_guided_retries"
+        ],
+        "title": "AssistanceBudgetResponse",
+        "type": "object"
+      },
+      "CandidateAssistanceRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "CandidateAssistanceRequest",
+        "type": "object"
+      },
+      "CandidateAssistanceResponse": {
+        "properties": {
+          "assistance_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "METACOGNITIVE",
+                  "PROBLEM_NARROWING",
+                  "CONCEPTUAL_HINT",
+                  "STRUCTURAL_HINT",
+                  "DIRECT_TEACHING",
+                  "DEBUGGING_HINT",
+                  "CORRECTNESS_FEEDBACK"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistance Type"
+          },
+          "budget": {
+            "$ref": "#/components/schemas/AssistanceBudgetResponse"
+          },
+          "hint_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "METACOGNITIVE",
+                  "PROBLEM_NARROWING",
+                  "CONCEPTUAL_HINT",
+                  "STRUCTURAL_HINT",
+                  "DIRECT_TEACHING"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hint Level"
+          },
+          "interviewer_prompt_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interviewer Prompt Id"
+          },
+          "invites_guided_retry": {
+            "title": "Invites Guided Retry",
+            "type": "boolean"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "mode_policy_version": {
+            "const": "mode-policy.v1",
+            "title": "Mode Policy Version",
+            "type": "string"
+          },
+          "prompt_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "CLARIFICATION",
+                  "INSTRUCTION"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt Kind"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "request_event_id": {
+            "format": "uuid",
+            "title": "Request Event Id",
+            "type": "string"
+          },
+          "request_event_watermark": {
+            "title": "Request Event Watermark",
+            "type": "integer"
+          },
+          "source_code_snapshot_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Code Snapshot Id"
+          },
+          "status": {
+            "enum": [
+              "AUTHORIZED",
+              "REFUSED",
+              "ATTEMPT_REQUIRED",
+              "DEFERRED",
+              "DENIED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target_concept_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Concept Id"
+          },
+          "target_skill_dimension_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Skill Dimension Id"
+          }
+        },
+        "required": [
+          "status",
+          "reason",
+          "mode",
+          "mode_policy_version",
+          "request_event_id",
+          "request_event_watermark",
+          "interviewer_prompt_id",
+          "prompt_kind",
+          "assistance_type",
+          "hint_level",
+          "target_concept_id",
+          "target_skill_dimension_id",
+          "source_code_snapshot_id",
+          "invites_guided_retry",
+          "budget"
+        ],
+        "title": "CandidateAssistanceResponse",
+        "type": "object"
+      },
       "CandidateProblemDetail": {
         "properties": {
           "argument_schema": {
@@ -1585,6 +1857,21 @@
             ],
             "title": "Last Acknowledged Server Sequence"
           },
+          "mode": {
+            "anyOf": [
+              {
+                "enum": [
+                  "COACH",
+                  "SIMULATION"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
           "problem_version_id": {
             "anyOf": [
               {
@@ -1669,6 +1956,14 @@
                 "type": "null"
               }
             ]
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
           },
           "problem": {
             "$ref": "#/components/schemas/CandidateProblemDetail"
@@ -1757,6 +2052,7 @@
           "problem",
           "template",
           "configured_duration_seconds",
+          "mode",
           "current_stage",
           "session_status",
           "state_version",
@@ -2233,6 +2529,59 @@
         "summary": "Execution Health",
         "tags": [
           "execution"
+        ]
+      }
+    },
+    "/api/interviews/{interview_session_id}/assistance-requests": {
+      "post": {
+        "operationId": "request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateAssistanceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateAssistanceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Request Candidate Assistance",
+        "tags": [
+          "interviews"
         ]
       }
     },

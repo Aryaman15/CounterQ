@@ -32,6 +32,7 @@ from app.evidence.contracts import (
     EvidenceSourceInput,
     ValidateEvidenceCommand,
 )
+from app.evidence.independence import IndependenceAttributionService
 from app.evidence.models import (
     Assessment,
     AssessmentSource,
@@ -53,9 +54,11 @@ from app.evidence.units import (
     is_successful_recovery_unit,
 )
 from app.evidence.validation import EvidenceValidationService
-from app.interviews.models import CandidateResponse, InterviewSession
+from app.interviews.models import CandidateResponse, InterviewerPrompt, InterviewSession
+from app.observation.models import InterviewEvent
 
 UnitStatus = Literal["COMPLETED", "SKIPPED", "FAILED"]
+CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE = "candidate_response_assessment"
 
 
 @dataclass(frozen=True)
@@ -102,7 +105,7 @@ class SessionEvidenceEvaluationCoordinator:
     async def evaluate(self, interview_session_id: UUID) -> SessionEvaluationResult:
         # The read transaction is closed before any AI work begins.
         async with self._sessionmaker() as read_session:
-            units = await AssessmentInputBuilder(read_session).build_completed_simulation(
+            units = await AssessmentInputBuilder(read_session).build_completed_session(
                 interview_session_id
             )
             existing_results = {
@@ -189,6 +192,88 @@ class SessionEvidenceEvaluationCoordinator:
             results.append(result)
         return SessionEvaluationResult(interview_session_id, tuple(results))
 
+    async def evaluate_active_checkpoint(
+        self, interview_session_id: UUID
+    ) -> SessionEvaluationResult:
+        """Evaluate the newest stable Coach unit once, without schema retry.
+
+        This uses the frozen Assessment/Evidence pipeline and the live portion of
+        the reasoning budget. Partial responses and RUNNING executions never
+        become units in ``build_active_checkpoint``.
+        """
+
+        async with self._sessionmaker() as read_session:
+            units = await AssessmentInputBuilder(read_session).build_active_checkpoint(
+                interview_session_id
+            )
+            selected = units[-1:] if units else []
+            existing_results = {
+                unit.unit_key: result
+                for unit in selected
+                if (result := await _existing_unit_result(read_session, unit)) is not None
+            }
+        if not selected:
+            return SessionEvaluationResult(interview_session_id, ())
+        unit = selected[0]
+        existing = existing_results.get(unit.unit_key)
+        if existing is not None:
+            return SessionEvaluationResult(interview_session_id, (existing,))
+        if unit.independence_level is None:
+            return SessionEvaluationResult(
+                interview_session_id,
+                (
+                    UnitEvaluationResult(
+                        unit_key=unit.unit_key,
+                        unit_kind=unit.kind.value,
+                        status="SKIPPED",
+                        error_category="INDEPENDENCE_UNRESOLVED",
+                    ),
+                ),
+            )
+        try:
+            gateway_result = await self._gateway.reason_structured(
+                interview_session_id=interview_session_id,
+                capability="STANDARD_REASONING",
+                purpose=CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+                policy=assessment_evaluator_policy_descriptor(),
+                instructions=ASSESSMENT_EVALUATOR_INSTRUCTIONS,
+                input_content=unit.serialize(),
+                output_model=AssessmentAnalysisResult,
+                correlation_id=f"{unit.unit_key}:active-checkpoint",
+                metadata={
+                    "assessment_unit_key": unit.unit_key,
+                    "assessment_unit_kind": unit.kind.value,
+                    "active_checkpoint": True,
+                },
+            )
+        except (AIGatewayError, ReasoningProviderError) as exc:
+            return SessionEvaluationResult(
+                interview_session_id,
+                (
+                    UnitEvaluationResult(
+                        unit_key=unit.unit_key,
+                        unit_kind=unit.kind.value,
+                        status="FAILED",
+                        error_category=getattr(exc, "category", "AI_GATEWAY_ERROR"),
+                    ),
+                ),
+            )
+        try:
+            result = await self._persist_result(
+                original_unit=unit,
+                analysis=gateway_result.parsed,
+                invocation_id=gateway_result.invocation_id,
+                evaluator_policy_version_id=gateway_result.policy_version_id,
+            )
+        except Exception as exc:
+            result = UnitEvaluationResult(
+                unit_key=unit.unit_key,
+                unit_kind=unit.kind.value,
+                status="FAILED",
+                error_category=type(exc).__name__,
+            )
+        return SessionEvaluationResult(interview_session_id, (result,))
+
     async def _persist_result(
         self,
         *,
@@ -209,7 +294,7 @@ class SessionEvidenceEvaluationCoordinator:
                 )
                 if locked_session is None:
                     raise ValueError("InterviewSession disappeared during Assessment")
-                fresh_units = await AssessmentInputBuilder(session).build_completed_simulation(
+                fresh_units = await AssessmentInputBuilder(session).build_for_revalidation(
                     original_unit.interview_session_id
                 )
                 fresh_unit = next(
@@ -339,6 +424,7 @@ class SessionEvidenceEvaluationCoordinator:
 
         assessment.status = "VALIDATED"
         await session.flush()
+        independence_level = await _finding_independence_level(session, unit, finding)
         evidence_result = await validation.validate_into_evidence(
             ValidateEvidenceCommand(
                 interview_session_id=unit.interview_session_id,
@@ -347,7 +433,7 @@ class SessionEvidenceEvaluationCoordinator:
                 strength=finding.proposed_strength,
                 confidence=Decimal(str(finding.confidence)),
                 finding=finding.evidence_finding,
-                independence_level=cast(str, unit.independence_level),
+                independence_level=independence_level,
                 validation_policy_version_id=validation_policy_version_id,
                 sources=tuple(
                     EvidenceSourceInput(fact.event_id, fact.source_role) for fact in selected
@@ -380,6 +466,7 @@ class SessionEvidenceEvaluationCoordinator:
             unit=unit,
             finding=finding,
             evidence_id=evidence_result.evidence_id,
+            independence_level=independence_level,
         )
         return assessment.id, evidence_result.evidence_id, links
 
@@ -390,6 +477,7 @@ class SessionEvidenceEvaluationCoordinator:
         unit: AssessmentUnit,
         finding: AssessmentFinding,
         evidence_id: UUID,
+        independence_level: str,
     ) -> tuple[UUID, ...]:
         if not finding.concept_keys or not finding.skill_dimension_keys:
             return ()
@@ -420,6 +508,8 @@ class SessionEvidenceEvaluationCoordinator:
                 return ()
             return (result.breakpoint_id,) if result.breakpoint_id is not None else ()
         if finding.breakpoint_effect not in ("CONTRADICTED", "RESOLUTION_SUPPORT"):
+            return ()
+        if independence_level == "DIRECTLY_TAUGHT":
             return ()
         breakpoint_id = await service.link_evidence_to_active_boundary(
             user_id=interview.user_id,
@@ -496,6 +586,55 @@ async def _evaluator_policy_is_exact(session: AsyncSession, policy_id: UUID) -> 
         and policy.policy_key == ASSESSMENT_EVALUATOR_POLICY_KEY
         and policy.version == ASSESSMENT_EVALUATOR_POLICY_VERSION
     )
+
+
+async def _finding_independence_level(
+    session: AsyncSession,
+    unit: AssessmentUnit,
+    finding: AssessmentFinding,
+) -> str:
+    """Apply assistance contamination only when its persisted target matches."""
+
+    base = cast(str, unit.independence_level)
+    if unit.candidate_response_id is None or base not in {
+        "AFTER_LIGHT_GUIDANCE",
+        "AFTER_STRONG_HINT",
+        "DIRECTLY_TAUGHT",
+    }:
+        if unit.candidate_response_id is not None:
+            return base
+        events = list(
+            await session.scalars(
+                select(InterviewEvent).where(
+                    InterviewEvent.id.in_(fact.event_id for fact in unit.sources)
+                )
+            )
+        )
+        attribution = await IndependenceAttributionService(session).for_event_window(
+            events,
+            assistance_target_concept_ids={
+                unit.concept_ids_by_key[key] for key in finding.concept_keys
+            },
+            assistance_target_skill_ids={
+                unit.skill_ids_by_key[key] for key in finding.skill_dimension_keys
+            },
+        )
+        if attribution.level is None:
+            raise ValueError("Finding independence became unresolved after target matching")
+        return attribution.level
+    response = await session.get(CandidateResponse, unit.candidate_response_id)
+    if response is None or response.interviewer_prompt_id is None:
+        return base
+    prompt = await session.get(InterviewerPrompt, response.interviewer_prompt_id)
+    if prompt is None or prompt.assistance_type is None:
+        return base
+    concept_match = prompt.target_concept_id is None or prompt.target_concept_id in {
+        unit.concept_ids_by_key[key] for key in finding.concept_keys
+    }
+    skill_match = prompt.target_skill_dimension_id is None or prompt.target_skill_dimension_id in {
+        unit.skill_ids_by_key[key] for key in finding.skill_dimension_keys
+    }
+    return base if concept_match and skill_match else "INDEPENDENT"
 
 
 async def _existing_unit_result(

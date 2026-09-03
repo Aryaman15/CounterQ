@@ -35,6 +35,8 @@
     "eval:stage4:live": "uv run --directory apps/api python -m app.evals.examiner.live",
     "eval:stage5": "uv run --directory apps/api pytest tests/evaluation/stage5 tests/test_stage5b_evidence_engine.py -q",
     "eval:stage5:live": "uv run --directory apps/api python -m app.evals.evidence.live",
+    "eval:stage6a": "uv run --directory apps/api pytest tests/evaluation/stage6a tests/test_stage6a_assistance.py -q",
+    "eval:stage6a:live": "uv run --directory apps/api python -m app.evals.assistance.live",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",

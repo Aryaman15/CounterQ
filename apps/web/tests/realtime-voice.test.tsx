@@ -311,6 +311,7 @@ const fakeDevelopmentBootstrap: DevelopmentBootstrapResponse = {
   },
   template: "STANDARD_CODING_INTERVIEW",
   configured_duration_seconds: 1800,
+  mode: "SIMULATION",
   current_stage: "IMPLEMENTATION",
   session_status: "ACTIVE",
   state_version: 0,
@@ -1768,6 +1769,7 @@ describe("Realtime voice foundation", () => {
 
     client.noteProviderResponseCreated("resp-4", "assistant-item-4");
     client.sendDeliveryStarted("resp-4", "assistant-item-4");
+    client.noteOutputTranscriptDelta("resp-4", "Partial delivered wording.");
     const startMessage = lastSentControlMessage(socket, "counterq_delivery_started");
     client.sendDeliveryInterrupted("resp-4", "assistant-item-4", "output_audio_buffer.cleared", 640);
 
@@ -1790,6 +1792,7 @@ describe("Realtime voice foundation", () => {
       provider_item_id: "assistant-item-4",
       confirmed_by: "output_audio_buffer.cleared",
       audio_end_ms: 640,
+      transcript: "Partial delivered wording.",
     });
   });
 

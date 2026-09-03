@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import User
 from app.auth.repository import UserRepository
 from app.db.ids import uuid7
+from app.interviews.mode_policy import ModePolicy
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
 from app.interviews.repository import InterviewRepository
 from app.interviews.template_policy import InterviewTemplate, template_policy
@@ -38,6 +39,7 @@ async def create_development_interview(
     template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
     language: str = "cpp",
     now: datetime | None = None,
+    mode: str = "SIMULATION",
 ) -> DevelopmentInterview:
     created_at = now or datetime.now(UTC)
     policy = template_policy(template)
@@ -90,9 +92,7 @@ async def create_development_interview(
                 ),
             },
             "python": {
-                "display_signature": (
-                    "def lengthOfLongestSubstring(self, s: str) -> int"
-                ),
+                "display_signature": ("def lengthOfLongestSubstring(self, s: str) -> int"),
                 "starter_code": (
                     "class Solution:\n"
                     "    def lengthOfLongestSubstring(self, s: str) -> int:\n"
@@ -121,7 +121,7 @@ async def create_development_interview(
                 {"arguments": {"s": "pwwkew"}, "expected_output": 3},
             ],
             "custom_test_supported": True,
-        }
+        },
     }
     pack_version = await problems.add_interview_pack_version(
         problem_version=problem_version,
@@ -136,7 +136,7 @@ async def create_development_interview(
     )
     interviews = InterviewRepository(session)
     configuration = await interviews.add_configuration(
-        mode="SIMULATION",
+        mode=mode,
         level="NEW_GRAD",
         language=language,
         configured_duration_seconds=policy.configured_duration_seconds,
@@ -153,6 +153,7 @@ async def create_development_interview(
         started_at=created_at,
         deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
     )
+    assistance_budget = ModePolicy().assistance_budget(mode)
     budget = await interviews.add_budget(
         session_id=interview_session.id,
         max_duration_seconds=policy.configured_duration_seconds,
@@ -166,6 +167,10 @@ async def create_development_interview(
         soft_monetary_budget=Decimal("2.5000"),
         hard_monetary_budget=Decimal("5.0000"),
         realtime_reserved_budget=Decimal("1.2500"),
+        max_assistance_interventions=assistance_budget.max_assistance_interventions,
+        max_structural_hints=assistance_budget.max_structural_hints,
+        max_direct_teaching_interventions=(assistance_budget.max_direct_teaching_interventions),
+        max_guided_retries=assistance_budget.max_guided_retries,
     )
     return DevelopmentInterview(
         template=template,
@@ -188,6 +193,7 @@ async def create_curated_development_interview(
     state_version: int = 0,
     template: InterviewTemplate = "STANDARD_CODING_INTERVIEW",
     now: datetime | None = None,
+    mode: str = "SIMULATION",
 ) -> DevelopmentInterview:
     curated = CuratedProblemService(session)
     problem_version = await curated.candidate_problem(problem_version_id)
@@ -208,7 +214,7 @@ async def create_curated_development_interview(
     )
     interviews = InterviewRepository(session)
     configuration = await interviews.add_configuration(
-        mode="SIMULATION",
+        mode=mode,
         level="NEW_GRAD",
         language=language,
         configured_duration_seconds=policy.configured_duration_seconds,
@@ -225,6 +231,7 @@ async def create_curated_development_interview(
         started_at=created_at,
         deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
     )
+    assistance_budget = ModePolicy().assistance_budget(mode)
     budget = await interviews.add_budget(
         session_id=interview_session.id,
         max_duration_seconds=policy.configured_duration_seconds,
@@ -238,6 +245,10 @@ async def create_curated_development_interview(
         soft_monetary_budget=Decimal("2.5000"),
         hard_monetary_budget=Decimal("5.0000"),
         realtime_reserved_budget=Decimal("1.2500"),
+        max_assistance_interventions=assistance_budget.max_assistance_interventions,
+        max_structural_hints=assistance_budget.max_structural_hints,
+        max_direct_teaching_interventions=(assistance_budget.max_direct_teaching_interventions),
+        max_guided_retries=assistance_budget.max_guided_retries,
     )
     return DevelopmentInterview(
         template=template,

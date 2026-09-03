@@ -5,11 +5,16 @@ import { useEffect, useMemo, useState } from "react";
 
 type CatalogItem = components["schemas"]["CuratedCatalogItem"];
 type Language = "cpp" | "python" | "java";
+type InterviewMode = "COACH" | "SIMULATION";
 
 type InterviewSetupProps = {
   busy: boolean;
   error: string | null;
-  onStart: (problemVersionId: string, language: Language) => Promise<void>;
+  onStart: (
+    problemVersionId: string,
+    language: Language,
+    mode: InterviewMode,
+  ) => Promise<void>;
 };
 
 const languageLabels: Record<Language, string> = {
@@ -24,6 +29,7 @@ export function InterviewSetup({ busy, error, onStart }: InterviewSetupProps) {
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [problemVersionId, setProblemVersionId] = useState("");
   const [language, setLanguage] = useState<Language | "">("");
+  const [mode, setMode] = useState<InterviewMode>("SIMULATION");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -60,7 +66,7 @@ export function InterviewSetup({ busy, error, onStart }: InterviewSetupProps) {
         <div className="setup-heading">
           <p className="panel-kicker">CounterQ interview setup</p>
           <h1 id="setup-title">Choose the problem you want to defend.</h1>
-          <p>Simulation · New Grad · reviewed curated content</p>
+          <p>{mode === "COACH" ? "Coach" : "Simulation"} · New Grad · reviewed curated content</p>
         </div>
 
         {loading ? <p role="status">Loading curated problems…</p> : null}
@@ -102,11 +108,33 @@ export function InterviewSetup({ busy, error, onStart }: InterviewSetupProps) {
                   <span>{languageLabels[itemLanguage]}</span>
                 </label>
               ))}
+              <div role="group" aria-label="Interview mode">
+                <label>
+                  <input
+                    type="radio"
+                    name="interview-mode"
+                    value="SIMULATION"
+                    checked={mode === "SIMULATION"}
+                    onChange={() => setMode("SIMULATION")}
+                  />
+                  <span>Simulation</span>
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="interview-mode"
+                    value="COACH"
+                    checked={mode === "COACH"}
+                    onChange={() => setMode("COACH")}
+                  />
+                  <span>Coach</span>
+                </label>
+              </div>
               <button
                 type="button"
                 className="start-interview-button"
                 disabled={!problemVersionId || !language || busy}
-                onClick={() => void onStart(problemVersionId, language as Language)}
+                onClick={() => void onStart(problemVersionId, language as Language, mode)}
               >
                 {busy ? "Starting…" : "Start Interview"}
               </button>

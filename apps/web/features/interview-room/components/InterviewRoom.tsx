@@ -78,6 +78,7 @@ export function InterviewRoom({
     realtimeVoice.isRestoring,
   );
   const terminal = realtimeVoice.terminalSession;
+  const interviewMode = realtimeVoice.restoredBootstrap?.mode ?? fixture.mode;
   const problemView = useMemo(() => {
     if (!candidateProblem) {
       return {
@@ -302,9 +303,10 @@ export function InterviewRoom({
   const startInterview = useCallback(async (
     problemVersionId: string,
     language: "cpp" | "python" | "java",
+    mode: "COACH" | "SIMULATION",
   ) => {
     setSelectedLanguage(language);
-    await realtimeVoice.startInterview(problemVersionId, language);
+    await realtimeVoice.startInterview(problemVersionId, language, mode);
   }, [realtimeVoice]);
 
   const updateWidthFromClientX = useCallback(
@@ -384,7 +386,7 @@ export function InterviewRoom({
       data-reduced-motion={prefersReducedMotion ? "reduce" : "no-preference"}
     >
       <InterviewHeader
-        mode={fixture.mode}
+        mode={interviewMode}
         remainingLabel={terminal ? "00:00" : remainingLabel}
         voiceState={realtimeVoice.voiceState}
         onEndInterview={() => setEndDialogOpen(true)}
@@ -461,6 +463,7 @@ export function InterviewRoom({
       </div>
 
       <InterviewerSurface
+        mode={interviewMode}
         voiceState={realtimeVoice.voiceState}
         isMuted={realtimeVoice.isMuted}
         voiceError={realtimeVoice.errorMessage}

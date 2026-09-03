@@ -199,6 +199,7 @@ async def create_realtime_development_interview(
                     problem_version_id=request.problem_version_id,
                     initial_stage="IMPLEMENTATION",
                     language=request.language,
+                    mode=request.mode or "SIMULATION",
                 )
                 interview_session_id = dev.interview_session.id
             else:
@@ -232,6 +233,7 @@ async def create_realtime_development_interview(
         problem=restored.problem,
         template=restored.template,
         configured_duration_seconds=interview.configuration.configured_duration_seconds,
+        mode=cast(Literal["COACH", "SIMULATION"], interview.configuration.mode),
         current_stage=interview.current_stage,
         session_status=interview.status,
         state_version=interview.state_version,
@@ -665,6 +667,7 @@ async def _handle_durable_control_message(
             interviewer_prompt_id=delivery_result.prompt_id,
             prompt_delivery_id=delivery_result.delivery_id,
             delivery_state=delivery_result.delivery_state,
+            actual_transcript_segment_id=delivery_result.transcript_segment_id,
             interview_event_id=delivery_result.event_id,
             server_sequence=delivery_result.server_sequence,
             interview_state_version=delivery_result.interview_state_version,

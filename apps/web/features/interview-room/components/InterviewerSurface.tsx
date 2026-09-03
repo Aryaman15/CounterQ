@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { History, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
+import { History, Lightbulb, Mic, MicOff, PlugZap, Volume2 } from "lucide-react";
 
 import type { DeliveredInterviewerTurn, VoicePresenceState } from "../models/candidate-visible";
 import type { CanonicalControlDebug } from "../realtime/RealtimeControlClient";
@@ -25,11 +25,16 @@ import {
 import type { DevelopmentReasoningSmokeResponse } from "../realtime/reasoningSmoke";
 import { requestDevelopmentReasoningSmoke } from "../realtime/reasoningSmoke";
 import { CODE_EDIT_BURST_IDLE_MS } from "../realtime/useCodeObservationCollector";
+import {
+  requestCoachAssistance,
+  type CandidateAssistanceResponse,
+} from "../realtime/coachAssistance";
 import type { RealtimeSessionDebug } from "../realtime/useRealtimeVoice";
 import { renderDeliveredText } from "./deliveredText";
 import { VoicePresence } from "./VoicePresence";
 
 type InterviewerSurfaceProps = {
+  mode?: "COACH" | "SIMULATION";
   voiceState: VoicePresenceState;
   isMuted: boolean;
   voiceError: string | null;
@@ -51,6 +56,7 @@ type InterviewerSurfaceProps = {
 };
 
 export function InterviewerSurface({
+  mode = "SIMULATION",
   voiceState,
   isMuted,
   voiceError,
@@ -92,6 +98,10 @@ export function InterviewerSurface({
   const [evidenceSnapshot, setEvidenceSnapshot] =
     useState<DevelopmentCanonicalEvaluationSnapshot | null>(null);
   const [evidenceError, setEvidenceError] = useState<string | null>(null);
+  const [assistancePending, setAssistancePending] = useState(false);
+  const [assistanceResult, setAssistanceResult] =
+    useState<CandidateAssistanceResponse | null>(null);
+  const [assistanceError, setAssistanceError] = useState<string | null>(null);
   const transcriptPopoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -196,6 +206,23 @@ export function InterviewerSurface({
     }
   };
 
+  const handleAssistanceRequest = async () => {
+    if (!canonicalDebug.sessionId || assistancePending || mode !== "COACH") return;
+    setAssistancePending(true);
+    setAssistanceError(null);
+    try {
+      const result = await requestCoachAssistance(canonicalDebug.sessionId);
+      setAssistanceResult(result);
+      if (result.interviewer_prompt_id) {
+        onDeliverAuthorizedPrompt(result.interviewer_prompt_id);
+      }
+    } catch {
+      setAssistanceError("Hint request is temporarily unavailable.");
+    } finally {
+      setAssistancePending(false);
+    }
+  };
+
   return (
     <section className="interviewer-surface" aria-labelledby="current-question-title">
       <div className="interviewer-presence">
@@ -238,7 +265,24 @@ export function InterviewerSurface({
               </button>
             </>
           )}
+          {mode === "COACH" ? (
+            <button
+              type="button"
+              className="voice-control-button"
+              onClick={() => void handleAssistanceRequest()}
+              disabled={!connected || terminal || assistancePending || !canonicalDebug.sessionId}
+            >
+              <Lightbulb size={14} aria-hidden="true" />
+              <span>{assistancePending ? "Checking…" : "Ask for a hint"}</span>
+            </button>
+          ) : null}
         </div>
+        {assistanceResult ? (
+          <p className="voice-control-note" role="status">
+            {candidateAssistanceStatus(assistanceResult)}
+          </p>
+        ) : null}
+        {assistanceError ? <p className="voice-error" role="alert">{assistanceError}</p> : null}
         {voiceError ? <p className="voice-error">{voiceError}</p> : null}
       </div>
       <div className="active-prompt">
@@ -324,6 +368,30 @@ export function InterviewerSurface({
                           canonicalDebug.controlConnected ? "connected" : "disconnected"
                         }; pending ${canonicalDebug.pendingDurableMessages}`
                       : "No canonical session yet"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Coach assistance</dt>
+                  <dd>
+                    {assistanceResult
+                      ? `${assistanceResult.status}; type ${assistanceResult.assistance_type ?? "none"}; ` +
+                        `level ${assistanceResult.hint_level ?? "none"}; ` +
+                        `prompt ${assistanceResult.interviewer_prompt_id ?? "none"}; ` +
+                        `target ${assistanceResult.target_concept_id ?? "none"}/` +
+                        `${assistanceResult.target_skill_dimension_id ?? "none"}; ` +
+                        `watermark ${assistanceResult.request_event_watermark}; snapshot ` +
+                        `${assistanceResult.source_code_snapshot_id ?? "none"}; total ` +
+                        `${assistanceResult.budget.assistance_interventions_used}/` +
+                        `${assistanceResult.budget.max_assistance_interventions}; structural ` +
+                        `${assistanceResult.budget.structural_hints_used}/` +
+                        `${assistanceResult.budget.max_structural_hints}; teaching ` +
+                        `${assistanceResult.budget.direct_teaching_interventions_used}/` +
+                        `${assistanceResult.budget.max_direct_teaching_interventions}; guided ` +
+                        `${assistanceResult.budget.guided_retries_used}/` +
+                        `${assistanceResult.budget.max_guided_retries}; delivery ` +
+                        `${canonicalDebug.lastDelivery.deliveryState ?? "none"}; attribution ` +
+                        `${assistanceAttributionLevel(assistanceResult.hint_level)}`
+                      : `Mode ${mode}; no assistance request`}
                   </dd>
                 </div>
                 <div>
@@ -796,4 +864,19 @@ function formatLiveExaminerResultMessage(result: DevelopmentAnalyzeLatestRespons
     return "Examiner exceeded the realtime usefulness window. No prompt was delivered.";
   }
   return result.message ?? "No decision persisted";
+}
+
+function candidateAssistanceStatus(result: CandidateAssistanceResponse): string {
+  if (result.status === "AUTHORIZED") return "Hint authorized for delivery.";
+  if (result.status === "ATTEMPT_REQUIRED") return "Show a meaningful attempt first.";
+  if (result.status === "DEFERRED") return "Keep working on the current step before escalating.";
+  if (result.status === "REFUSED") return "Technical hints are unavailable in Simulation.";
+  return "A hint is not available at this point in the interview.";
+}
+
+function assistanceAttributionLevel(hintLevel: string | null): string {
+  if (hintLevel === "STRUCTURAL_HINT") return "AFTER_STRONG_HINT";
+  if (hintLevel === "DIRECT_TEACHING") return "DIRECTLY_TAUGHT";
+  if (hintLevel) return "AFTER_LIGHT_GUIDANCE";
+  return "none";
 }

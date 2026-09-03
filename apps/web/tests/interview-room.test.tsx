@@ -8,6 +8,7 @@ import {
   InterviewRoom,
 } from "../features/interview-room/components/InterviewRoom";
 import { InterviewerSurface } from "../features/interview-room/components/InterviewerSurface";
+import { InterviewHeader } from "../features/interview-room/components/InterviewHeader";
 import {
   demoInterviewFixture,
   hiddenInternalFixtureFields,
@@ -248,6 +249,129 @@ describe("Interview Room demo", () => {
     expect(screen.queryByText("IMPLEMENTATION")).not.toBeInTheDocument();
     expect(screen.queryByText("APPROACH_DEFENSE")).not.toBeInTheDocument();
     expect(screen.queryByText("CONSTRAINT_MUTATION")).not.toBeInTheDocument();
+  });
+
+  it("shows Coach mode and exposes an accessible, candidate-safe hint path", async () => {
+    const onDeliverAuthorizedPrompt = vi.fn();
+    let resolveRequest: (value: Response) => void = () => undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockReturnValue(
+        new Promise<Response>((resolve) => {
+          resolveRequest = resolve;
+        }),
+      ),
+    );
+
+    const { unmount } = render(
+      <>
+        <InterviewHeader
+          mode="COACH"
+          remainingLabel="20:00"
+          voiceState="Listening"
+          onEndInterview={vi.fn()}
+        />
+        <InterviewerSurface
+          mode="COACH"
+          voiceState="Listening"
+          isMuted={false}
+          voiceError={null}
+          partialTranscript=""
+          lastFinalTranscript=""
+          sessionDebug={observedRealtimeSession}
+          canonicalDebug={observedCanonicalSession}
+          currentTurn={demoInterviewFixture.currentDeliveredTurn}
+          onEnableMicrophone={vi.fn()}
+          onMute={vi.fn()}
+          onUnmute={vi.fn()}
+          onDisconnectVoice={vi.fn()}
+          onSpeakDevelopmentPhrase={vi.fn()}
+          onEvaluateExaminerDecision={vi.fn()}
+          onDeliverAuthorizedPrompt={onDeliverAuthorizedPrompt}
+          onOpenConversation={vi.fn()}
+        />
+      </>,
+    );
+
+    expect(screen.getByText("COACH")).toBeInTheDocument();
+    const hintButton = screen.getByRole("button", { name: "Ask for a hint" });
+    hintButton.focus();
+    expect(hintButton).toHaveFocus();
+    fireEvent.click(hintButton);
+    expect(screen.getByRole("button", { name: "Checking…" })).toBeDisabled();
+
+    resolveRequest(
+      new Response(
+        JSON.stringify({
+          status: "ATTEMPT_REQUIRED",
+          reason: "MEANINGFUL_ATTEMPT_REQUIRED",
+          mode: "COACH",
+          mode_policy_version: "mode-policy.v1",
+          request_event_id: "01990a11-0000-7000-8000-000000000001",
+          request_event_watermark: 18,
+          interviewer_prompt_id: "01990a11-0000-7000-8000-000000000002",
+          prompt_kind: "CLARIFICATION",
+          assistance_type: null,
+          hint_level: null,
+          target_concept_id: null,
+          target_skill_dimension_id: null,
+          source_code_snapshot_id: null,
+          invites_guided_retry: false,
+          budget: {
+            max_assistance_interventions: 6,
+            assistance_interventions_used: 0,
+            outstanding_assistance_interventions: 0,
+            remaining_assistance_interventions: 6,
+            max_structural_hints: 2,
+            structural_hints_used: 0,
+            outstanding_structural_hints: 0,
+            remaining_structural_hints: 2,
+            max_direct_teaching_interventions: 1,
+            direct_teaching_interventions_used: 0,
+            outstanding_direct_teaching_interventions: 0,
+            remaining_direct_teaching_interventions: 1,
+            max_guided_retries: 2,
+            guided_retries_used: 0,
+            outstanding_guided_retries: 0,
+            remaining_guided_retries: 2,
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "Show a meaningful attempt first.",
+    );
+    expect(screen.queryByText("MEANINGFUL_ATTEMPT_REQUIRED")).not.toBeInTheDocument();
+    expect(screen.queryByText("METACOGNITIVE")).not.toBeInTheDocument();
+    expect(onDeliverAuthorizedPrompt).toHaveBeenCalledWith(
+      "01990a11-0000-7000-8000-000000000002",
+    );
+    unmount();
+
+    render(
+      <InterviewerSurface
+        mode="SIMULATION"
+        voiceState="Listening"
+        isMuted={false}
+        voiceError={null}
+        partialTranscript=""
+        lastFinalTranscript=""
+        sessionDebug={observedRealtimeSession}
+        canonicalDebug={observedCanonicalSession}
+        currentTurn={demoInterviewFixture.currentDeliveredTurn}
+        onEnableMicrophone={vi.fn()}
+        onMute={vi.fn()}
+        onUnmute={vi.fn()}
+        onDisconnectVoice={vi.fn()}
+        onSpeakDevelopmentPhrase={vi.fn()}
+        onEvaluateExaminerDecision={vi.fn()}
+        onDeliverAuthorizedPrompt={vi.fn()}
+        onOpenConversation={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Ask for a hint" })).not.toBeInTheDocument();
   });
 
   it("shows the deterministic problem statement, examples, constraints, and signature", () => {

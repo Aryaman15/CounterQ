@@ -46,6 +46,7 @@ const bootstrap: DevelopmentBootstrapResponse = {
   },
   template: "STANDARD_CODING_INTERVIEW",
   configured_duration_seconds: 1800,
+  mode: "SIMULATION",
   current_stage: "IMPLEMENTATION",
   session_status: "ACTIVE",
   state_version: 0,
@@ -145,8 +146,12 @@ describe("curated interview journey", () => {
     expect(labels[0]).toHaveAccessibleName(/Two Sum/);
     fireEvent.click(screen.getByRole("radio", { name: /Two Sum/ }));
     fireEvent.click(screen.getByRole("radio", { name: "Python 3" }));
+    expect(screen.getByRole("radio", { name: "Simulation" })).toBeChecked();
     fireEvent.click(screen.getByRole("button", { name: "Start Interview" }));
-    expect(onStart).toHaveBeenCalledWith("v1", "python");
+    expect(onStart).toHaveBeenLastCalledWith("v1", "python", "SIMULATION");
+    fireEvent.click(screen.getByRole("radio", { name: "Coach" }));
+    fireEvent.click(screen.getByRole("button", { name: "Start Interview" }));
+    expect(onStart).toHaveBeenLastCalledWith("v1", "python", "COACH");
   });
 
   it("renders exact bootstrap problem and starter, with immutable room language", async () => {

@@ -123,6 +123,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/interviews/{interview_session_id}/assistance-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Request Candidate Assistance */
+        post: operations["request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/problems/curated": {
         parameters: {
             query?: never;
@@ -212,6 +229,90 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AssistanceBudgetResponse */
+        AssistanceBudgetResponse: {
+            /** Assistance Interventions Used */
+            assistance_interventions_used: number;
+            /** Direct Teaching Interventions Used */
+            direct_teaching_interventions_used: number;
+            /** Guided Retries Used */
+            guided_retries_used: number;
+            /** Max Assistance Interventions */
+            max_assistance_interventions: number;
+            /** Max Direct Teaching Interventions */
+            max_direct_teaching_interventions: number;
+            /** Max Guided Retries */
+            max_guided_retries: number;
+            /** Max Structural Hints */
+            max_structural_hints: number;
+            /** Outstanding Assistance Interventions */
+            outstanding_assistance_interventions: number;
+            /** Outstanding Direct Teaching Interventions */
+            outstanding_direct_teaching_interventions: number;
+            /** Outstanding Guided Retries */
+            outstanding_guided_retries: number;
+            /** Outstanding Structural Hints */
+            outstanding_structural_hints: number;
+            /** Remaining Assistance Interventions */
+            remaining_assistance_interventions: number;
+            /** Remaining Direct Teaching Interventions */
+            remaining_direct_teaching_interventions: number;
+            /** Remaining Guided Retries */
+            remaining_guided_retries: number;
+            /** Remaining Structural Hints */
+            remaining_structural_hints: number;
+            /** Structural Hints Used */
+            structural_hints_used: number;
+        };
+        /** CandidateAssistanceRequest */
+        CandidateAssistanceRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** CandidateAssistanceResponse */
+        CandidateAssistanceResponse: {
+            /** Assistance Type */
+            assistance_type: ("METACOGNITIVE" | "PROBLEM_NARROWING" | "CONCEPTUAL_HINT" | "STRUCTURAL_HINT" | "DIRECT_TEACHING" | "DEBUGGING_HINT" | "CORRECTNESS_FEEDBACK") | null;
+            budget: components["schemas"]["AssistanceBudgetResponse"];
+            /** Hint Level */
+            hint_level: ("METACOGNITIVE" | "PROBLEM_NARROWING" | "CONCEPTUAL_HINT" | "STRUCTURAL_HINT" | "DIRECT_TEACHING") | null;
+            /** Interviewer Prompt Id */
+            interviewer_prompt_id: string | null;
+            /** Invites Guided Retry */
+            invites_guided_retry: boolean;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /**
+             * Mode Policy Version
+             * @constant
+             */
+            mode_policy_version: "mode-policy.v1";
+            /** Prompt Kind */
+            prompt_kind: ("CLARIFICATION" | "INSTRUCTION") | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Request Event Id
+             * Format: uuid
+             */
+            request_event_id: string;
+            /** Request Event Watermark */
+            request_event_watermark: number;
+            /** Source Code Snapshot Id */
+            source_code_snapshot_id: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "AUTHORIZED" | "REFUSED" | "ATTEMPT_REQUIRED" | "DEFERRED" | "DENIED";
+            /** Target Concept Id */
+            target_concept_id: string | null;
+            /** Target Skill Dimension Id */
+            target_skill_dimension_id: string | null;
+        };
         /** CandidateProblemDetail */
         CandidateProblemDetail: {
             /** Argument Schema */
@@ -705,6 +806,8 @@ export interface components {
             language?: ("cpp" | "python" | "java") | null;
             /** Last Acknowledged Server Sequence */
             last_acknowledged_server_sequence?: number | null;
+            /** Mode */
+            mode?: ("COACH" | "SIMULATION") | null;
             /** Problem Version Id */
             problem_version_id?: string | null;
             /**
@@ -744,6 +847,11 @@ export interface components {
             /** Last Server Sequence */
             last_server_sequence: number;
             latest_code_snapshot?: components["schemas"]["RestoredCodeSnapshotMessage"] | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
             problem: components["schemas"]["CandidateProblemDetail"];
             /**
              * Protocol Version
@@ -1097,6 +1205,41 @@ export interface operations {
                     "application/json": {
                         [key: string]: string;
                     };
+                };
+            };
+        };
+    };
+    request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateAssistanceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateAssistanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

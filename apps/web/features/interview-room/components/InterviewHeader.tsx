@@ -6,7 +6,7 @@ import type { VoicePresenceState } from "../models/candidate-visible";
 import { VoicePresence } from "./VoicePresence";
 
 type InterviewHeaderProps = {
-  mode: "SIMULATION";
+  mode: "COACH" | "SIMULATION";
   remainingLabel: string;
   voiceState: VoicePresenceState;
   onEndInterview: () => void;

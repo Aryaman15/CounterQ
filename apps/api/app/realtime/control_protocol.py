@@ -8,9 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from app.problems.contracts import CandidateLanguage, CandidateProblemDetail
 
-CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = (
-    "counterq.realtime.control.v1"
-)
+CONTROL_PROTOCOL_VERSION: Literal["counterq.realtime.control.v1"] = "counterq.realtime.control.v1"
 
 
 class RealtimeDevelopmentBootstrapRequest(BaseModel):
@@ -22,6 +20,7 @@ class RealtimeDevelopmentBootstrapRequest(BaseModel):
     last_acknowledged_server_sequence: int | None = Field(default=None, ge=0)
     problem_version_id: UUID | None = None
     language: CandidateLanguage | None = None
+    mode: Literal["COACH", "SIMULATION"] | None = None
 
     @model_validator(mode="after")
     def validate_creation_or_restoration(self) -> RealtimeDevelopmentBootstrapRequest:
@@ -31,9 +30,13 @@ class RealtimeDevelopmentBootstrapRequest(BaseModel):
                     "problem_version_id and language are required to create an interview"
                 )
         elif self.interview_session_id is not None and (
-            self.problem_version_id is not None or self.language is not None
+            self.problem_version_id is not None
+            or self.language is not None
+            or self.mode is not None
         ):
-            raise ValueError("Problem and language cannot be changed while restoring a session")
+            raise ValueError(
+                "Problem, language, and mode cannot be changed while restoring a session"
+            )
         return self
 
 
@@ -66,6 +69,7 @@ class RealtimeDevelopmentBootstrapResponse(BaseModel):
     problem: CandidateProblemDetail
     template: str
     configured_duration_seconds: int
+    mode: Literal["COACH", "SIMULATION"]
     current_stage: str
     session_status: str
     state_version: int
@@ -200,6 +204,7 @@ class CounterQDeliveryInterruptedMessage(ClientMessageBase):
     provider_item_id: str | None = Field(default=None, max_length=256)
     confirmed_by: str = Field(min_length=1, max_length=128)
     audio_end_ms: int | None = Field(default=None, ge=0)
+    transcript: str | None = None
     interrupted_at: datetime | None = None
     idempotency_key: str | None = Field(default=None, max_length=128)
 

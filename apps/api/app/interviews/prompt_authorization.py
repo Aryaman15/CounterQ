@@ -12,15 +12,18 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.evidence.models import Evidence, EvidenceConcept, EvidenceSkill
 from app.examiner.models import CandidateClaim, ExaminerDecision
-from app.interviews.budget_policy import probe_budget_snapshot
+from app.interviews.budget_policy import assistance_budget_snapshot, probe_budget_snapshot
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
+    InterviewConfiguration,
     InterviewerPrompt,
     InterviewerPromptDelivery,
     InterviewSession,
     SessionBudget,
 )
+from app.interviews.runtime import InterviewRuntime
 from app.observation.models import CodeSnapshot, InterviewEvent
 from app.observation.repository import ObservationRepository
 
@@ -278,6 +281,17 @@ class PromptAuthorizationService:
                     status=outcome if outcome in {"STALE", "EXPIRED", "SUPERSEDED"} else "REJECTED",
                     reason=reason,
                 )
+        if prompt.assistance_type is not None:
+            rejection = await self._assistance_delivery_rejection_outcome(prompt)
+            if rejection is not None:
+                outcome, reason = rejection
+                prompt.status = outcome if outcome in {"STALE", "EXPIRED"} else "REJECTED"
+                await self._session.flush()
+                return PromptDeliveryPermit(
+                    prompt_id=prompt.id,
+                    status=outcome if outcome in {"STALE", "EXPIRED"} else "REJECTED",
+                    reason=reason,
+                )
 
         return PromptDeliveryPermit(
             prompt_id=prompt.id,
@@ -299,6 +313,152 @@ class PromptAuthorizationService:
         if budget is None:
             return
         budget.probes_used += 1
+
+    async def consume_assistance_budget_for_delivered_prompt(
+        self, prompt: InterviewerPrompt
+    ) -> None:
+        """Charge one meaningfully heard assistance prompt exactly once."""
+
+        if prompt.assistance_type is None or prompt.status in {
+            "DELIVERED",
+            "ANSWERED",
+            "INTERRUPTED",
+        }:
+            return
+        meaningful_delivery = await self._session.scalar(
+            select(InterviewerPromptDelivery.id)
+            .where(
+                InterviewerPromptDelivery.interviewer_prompt_id == prompt.id,
+                InterviewerPromptDelivery.actual_transcript_segment_id.is_not(None),
+                InterviewerPromptDelivery.delivery_state.in_(
+                    ("DELIVERED", "PARTIALLY_DELIVERED", "INTERRUPTED")
+                ),
+            )
+            .limit(1)
+        )
+        if meaningful_delivery is None:
+            return
+        budget = await self._session.scalar(
+            select(SessionBudget)
+            .where(SessionBudget.session_id == prompt.interview_session_id)
+            .with_for_update()
+        )
+        if budget is None:
+            raise PromptAuthorizationError("SessionBudget is unavailable")
+        if budget.assistance_interventions_used >= budget.max_assistance_interventions:
+            raise PromptAuthorizationError("Assistance budget is exhausted")
+        budget.assistance_interventions_used += 1
+        if prompt.hint_level == "STRUCTURAL_HINT":
+            if budget.structural_hints_used >= budget.max_structural_hints:
+                raise PromptAuthorizationError("Structural hint budget is exhausted")
+            budget.structural_hints_used += 1
+        if prompt.hint_level == "DIRECT_TEACHING":
+            if (
+                budget.direct_teaching_interventions_used
+                >= budget.max_direct_teaching_interventions
+            ):
+                raise PromptAuthorizationError("Direct teaching budget is exhausted")
+            budget.direct_teaching_interventions_used += 1
+        if prompt.invites_guided_retry:
+            if budget.guided_retries_used >= budget.max_guided_retries:
+                raise PromptAuthorizationError("Guided retry budget is exhausted")
+            budget.guided_retries_used += 1
+
+    async def _assistance_delivery_rejection_outcome(
+        self, prompt: InterviewerPrompt
+    ) -> tuple[str, str] | None:
+        interview = await self._lock_session(prompt.interview_session_id)
+        now = self._clock()
+        if interview.status != "ACTIVE":
+            return ("STALE", "InterviewSession is no longer active.")
+        if now >= interview.deadline_at:
+            return ("EXPIRED", "InterviewSession deadline has been reached.")
+        configuration = await self._session.get(
+            InterviewConfiguration, interview.interview_configuration_id
+        )
+        if configuration is None or configuration.mode != "COACH":
+            return ("REJECTED", "Technical assistance is unavailable in Simulation.")
+        timing = await InterviewRuntime(self._session, clock=self._clock).time_policy(interview.id)
+        if timing is None or timing.pressure in {"DEFENSE_RESERVED", "WRAP_ONLY"}:
+            return ("EXPIRED", "Protected closeout time suppresses new assistance.")
+        if interview.current_stage not in {
+            "PROBLEM_UNDERSTANDING",
+            "APPROACH_DISCOVERY",
+            "APPROACH_DEFENSE",
+            "IMPLEMENTATION",
+            "TESTING_DEBUGGING",
+            "COMPLEXITY_EDGE_CASES",
+            "CONSTRAINT_MUTATION",
+        }:
+            return ("STALE", "Assistance is no longer legal in the current stage.")
+        if prompt.target_event_id is None or prompt.source_event_watermark is None:
+            return ("STALE", "Assistance provenance is incomplete.")
+        event = await self._session.get(InterviewEvent, prompt.target_event_id)
+        if (
+            event is None
+            or event.interview_session_id != interview.id
+            or event.event_type != "CANDIDATE_ASSISTANCE_REQUESTED"
+        ):
+            return ("STALE", "Assistance target event is unavailable.")
+        if prompt.source_event_watermark != event.server_sequence:
+            return ("STALE", "Assistance watermark does not match its request event.")
+        if event.code_snapshot_id != prompt.source_code_snapshot_id:
+            return ("STALE", "Assistance code provenance does not match its request event.")
+        latest_candidate_progress = await self._session.scalar(
+            select(InterviewEvent.id)
+            .where(
+                InterviewEvent.interview_session_id == interview.id,
+                InterviewEvent.server_sequence > prompt.source_event_watermark,
+                InterviewEvent.source.in_(("CANDIDATE_VOICE", "NATIVE_EDITOR", "NATIVE_RUNNER")),
+            )
+            .limit(1)
+        )
+        if latest_candidate_progress is not None:
+            return ("STALE", "New candidate progress superseded the assistance target.")
+        if prompt.source_code_snapshot_id is not None:
+            latest_snapshot = await ObservationRepository(self._session).latest_code_snapshot(
+                interview.id
+            )
+            if latest_snapshot is None or latest_snapshot.id != prompt.source_code_snapshot_id:
+                return ("STALE", "Candidate code changed after assistance authorization.")
+        if prompt.target_concept_id is not None or prompt.target_skill_dimension_id is not None:
+            evidence_statement = select(Evidence.id).where(
+                Evidence.interview_session_id == interview.id,
+                Evidence.validation_status == "VALID",
+                Evidence.invalidated_at.is_(None),
+                Evidence.polarity.in_(("NEGATIVE", "MIXED")),
+            )
+            if prompt.target_concept_id is not None:
+                evidence_statement = evidence_statement.join(
+                    EvidenceConcept,
+                    EvidenceConcept.evidence_id == Evidence.id,
+                ).where(EvidenceConcept.concept_id == prompt.target_concept_id)
+            if prompt.target_skill_dimension_id is not None:
+                evidence_statement = evidence_statement.join(
+                    EvidenceSkill,
+                    EvidenceSkill.evidence_id == Evidence.id,
+                ).where(EvidenceSkill.skill_dimension_id == prompt.target_skill_dimension_id)
+            if await self._session.scalar(evidence_statement.limit(1)) is None:
+                return ("STALE", "The targeted diagnostic gap is no longer active.")
+        budget = await assistance_budget_snapshot(self._session, interview.id, for_update=True)
+        if budget is None:
+            return ("REJECTED", "SessionBudget is unavailable.")
+        if budget.assistance_interventions_used >= budget.max_assistance_interventions:
+            return ("REJECTED", "Assistance budget is exhausted.")
+        if (
+            prompt.hint_level == "STRUCTURAL_HINT"
+            and budget.structural_hints_used >= budget.max_structural_hints
+        ):
+            return ("REJECTED", "Structural hint budget is exhausted.")
+        if (
+            prompt.hint_level == "DIRECT_TEACHING"
+            and budget.direct_teaching_interventions_used
+            >= budget.max_direct_teaching_interventions
+        ):
+            return ("REJECTED", "Direct teaching budget is exhausted.")
+        if prompt.invites_guided_retry and budget.guided_retries_used >= budget.max_guided_retries:
+            return ("REJECTED", "Guided retry budget is exhausted.")
+        return None
 
     async def _durable_rejection_outcome(
         self,
@@ -434,8 +594,7 @@ class PromptAuthorizationService:
         if (
             decision.action != "PROBE"
             or decision.target_claim_id is None
-            or decision.proposed_probe_strategy
-            not in CONSEQUENTIAL_CLAIM_CHALLENGE_STRATEGIES
+            or decision.proposed_probe_strategy not in CONSEQUENTIAL_CLAIM_CHALLENGE_STRATEGIES
         ):
             return None
         claim = await self._session.get(CandidateClaim, decision.target_claim_id)
@@ -488,8 +647,7 @@ class PromptAuthorizationService:
             same_code_source = (
                 decision.target_code_snapshot_id is not None
                 and previous_decision is not None
-                and previous_decision.target_code_snapshot_id
-                == decision.target_code_snapshot_id
+                and previous_decision.target_code_snapshot_id == decision.target_code_snapshot_id
                 and previous_decision.target_event_id == decision.target_event_id
             )
             if same_claim or same_code_source:
@@ -668,7 +826,7 @@ _CANDIDATE_META_PREFIXES = (
 
 
 def _candidate_safe_claim(claim: str) -> str:
-    value = claim.strip().strip('"\'')
+    value = claim.strip().strip("\"'")
     previous = None
     while value != previous:
         previous = value

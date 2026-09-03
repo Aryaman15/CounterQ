@@ -9,6 +9,7 @@ from app.db.registry import register_orm_models
 from app.evidence.routes import router as evidence_router
 from app.examiner.routes import router as examiner_router
 from app.execution.routes import router as execution_router
+from app.interviews.routes import router as interviews_router
 from app.problems.routes import router as curated_problem_router
 from app.realtime.routes import router as realtime_router
 
@@ -35,6 +36,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_gateway_router)
     app.include_router(examiner_router)
     app.include_router(execution_router)
+    app.include_router(interviews_router)
     app.include_router(evidence_router)
     app.include_router(curated_problem_router)
     app.include_router(realtime_router)

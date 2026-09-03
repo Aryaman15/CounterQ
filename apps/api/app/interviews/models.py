@@ -24,6 +24,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 from app.db.constants import (
+    ASSISTANCE_HINT_LEVELS,
+    ASSISTANCE_TRIGGERS,
+    ASSISTANCE_TYPES,
     DELIVERY_STATES,
     INTERVIEW_LEVELS,
     INTERVIEW_MODES,
@@ -193,6 +196,40 @@ class SessionBudget(Base):
         CheckConstraint("deep_reasoning_used >= 0", name="deep_reasoning_used_nonnegative"),
         CheckConstraint("strong_reasoning_used >= 0", name="strong_reasoning_used_nonnegative"),
         CheckConstraint("vision_used >= 0", name="vision_used_nonnegative"),
+        CheckConstraint(
+            "max_assistance_interventions >= 0",
+            name="max_assistance_interventions_nonnegative",
+        ),
+        CheckConstraint(
+            "assistance_interventions_used >= 0 AND "
+            "assistance_interventions_used <= max_assistance_interventions",
+            name="assistance_interventions_used_within_max",
+        ),
+        CheckConstraint(
+            "max_structural_hints >= 0",
+            name="max_structural_hints_nonnegative",
+        ),
+        CheckConstraint(
+            "structural_hints_used >= 0 AND structural_hints_used <= max_structural_hints",
+            name="structural_hints_used_within_max",
+        ),
+        CheckConstraint(
+            "max_direct_teaching_interventions >= 0",
+            name="max_direct_teaching_interventions_nonnegative",
+        ),
+        CheckConstraint(
+            "direct_teaching_interventions_used >= 0 AND "
+            "direct_teaching_interventions_used <= max_direct_teaching_interventions",
+            name="direct_teaching_interventions_used_within_max",
+        ),
+        CheckConstraint(
+            "max_guided_retries >= 0",
+            name="max_guided_retries_nonnegative",
+        ),
+        CheckConstraint(
+            "guided_retries_used >= 0 AND guided_retries_used <= max_guided_retries",
+            name="guided_retries_used_within_max",
+        ),
         CheckConstraint("soft_monetary_budget >= 0", name="soft_monetary_budget_nonnegative"),
         CheckConstraint("hard_monetary_budget >= 0", name="hard_monetary_budget_nonnegative"),
         CheckConstraint(
@@ -225,6 +262,30 @@ class SessionBudget(Base):
     deep_reasoning_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     strong_reasoning_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     vision_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_assistance_interventions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    assistance_interventions_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    max_structural_hints: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    structural_hints_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    max_direct_teaching_interventions: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    direct_teaching_interventions_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    max_guided_retries: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
+    guided_retries_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default=text("0")
+    )
     estimated_cost: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -316,6 +377,37 @@ class InterviewerPrompt(Base):
             name="examiner_decision_matches_origin",
         ),
         CheckConstraint(_in_values("status", PROMPT_STATUSES), name="status"),
+        CheckConstraint(
+            f"assistance_type IS NULL OR {_in_values('assistance_type', ASSISTANCE_TYPES)}",
+            name="assistance_type",
+        ),
+        CheckConstraint(
+            f"hint_level IS NULL OR {_in_values('hint_level', ASSISTANCE_HINT_LEVELS)}",
+            name="hint_level",
+        ),
+        CheckConstraint(
+            f"assistance_trigger IS NULL OR "
+            f"{_in_values('assistance_trigger', ASSISTANCE_TRIGGERS)}",
+            name="assistance_trigger",
+        ),
+        CheckConstraint(
+            "source_event_watermark IS NULL OR source_event_watermark > 0",
+            name="assistance_watermark_positive",
+        ),
+        CheckConstraint(
+            "(assistance_type IS NOT NULL AND kind = 'INSTRUCTION' "
+            "AND hint_level IS NOT NULL AND assistance_trigger IS NOT NULL "
+            "AND source_event_watermark IS NOT NULL) OR "
+            "(assistance_type IS NULL AND hint_level IS NULL "
+            "AND assistance_trigger IS NULL AND source_event_watermark IS NULL "
+            "AND invites_guided_retry = false)",
+            name="assistance_matches_instruction",
+        ),
+        CheckConstraint(
+            "assistance_type IS NULL OR target_claim_id IS NOT NULL OR target_event_id IS NOT NULL "
+            "OR target_concept_id IS NOT NULL OR target_skill_dimension_id IS NOT NULL",
+            name="assistance_has_target",
+        ),
         ForeignKeyConstraint(
             ["interview_session_id", "examiner_decision_id"],
             ["examiner_decisions.interview_session_id", "examiner_decisions.id"],
@@ -336,6 +428,18 @@ class InterviewerPrompt(Base):
             ["candidate_claims.interview_session_id", "candidate_claims.id"],
             name="fk_interviewer_prompts_session_claim",
             ondelete="SET NULL (target_claim_id)",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "target_event_id"],
+            ["interview_events.interview_session_id", "interview_events.id"],
+            name="fk_interviewer_prompts_session_target_event",
+            ondelete="SET NULL (target_event_id)",
+        ),
+        ForeignKeyConstraint(
+            ["interview_session_id", "source_code_snapshot_id"],
+            ["code_snapshots.interview_session_id", "code_snapshots.id"],
+            name="fk_interviewer_prompts_session_code_snapshot",
+            ondelete="SET NULL (source_code_snapshot_id)",
         ),
         UniqueConstraint("interview_session_id", "id", name="uq_interviewer_prompts_session_id"),
     )
@@ -358,8 +462,21 @@ class InterviewerPrompt(Base):
         PgUUID(as_uuid=True),
         ForeignKey("candidate_claims.id", ondelete="SET NULL"),
     )
-    target_concept_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
-    target_skill_dimension_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    target_concept_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("concepts.id", ondelete="SET NULL")
+    )
+    target_skill_dimension_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("skill_dimensions.id", ondelete="SET NULL")
+    )
+    assistance_type: Mapped[str | None] = mapped_column(String(64))
+    hint_level: Mapped[str | None] = mapped_column(String(64))
+    assistance_trigger: Mapped[str | None] = mapped_column(String(64))
+    target_event_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    source_event_watermark: Mapped[int | None] = mapped_column(BigInteger)
+    source_code_snapshot_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True))
+    invites_guided_retry: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default=text("false")
+    )
     intent: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(64), nullable=False)
     authorized_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

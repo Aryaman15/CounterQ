@@ -77,6 +77,10 @@ class InterviewRepository:
         soft_monetary_budget: Decimal,
         hard_monetary_budget: Decimal,
         realtime_reserved_budget: Decimal,
+        max_assistance_interventions: int = 0,
+        max_structural_hints: int = 0,
+        max_direct_teaching_interventions: int = 0,
+        max_guided_retries: int = 0,
     ) -> SessionBudget:
         budget = SessionBudget(
             session_id=session_id,
@@ -91,6 +95,10 @@ class InterviewRepository:
             soft_monetary_budget=soft_monetary_budget,
             hard_monetary_budget=hard_monetary_budget,
             realtime_reserved_budget=realtime_reserved_budget,
+            max_assistance_interventions=max_assistance_interventions,
+            max_structural_hints=max_structural_hints,
+            max_direct_teaching_interventions=max_direct_teaching_interventions,
+            max_guided_retries=max_guided_retries,
         )
         self._session.add(budget)
         await self._session.flush()

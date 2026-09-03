@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.interviews.mode_policy import independence_for_hint_level, strongest_independence
 from app.interviews.models import (
     CandidateResponse,
     CandidateResponseSource,
@@ -15,7 +16,9 @@ from app.interviews.models import (
 )
 from app.observation.models import InterviewEvent, TranscriptSegment
 
-RESPONSE_BEARING_PROMPT_KINDS = frozenset(("BASE_QUESTION", "CLARIFICATION", "PROBE"))
+RESPONSE_BEARING_PROMPT_KINDS = frozenset(
+    ("BASE_QUESTION", "CLARIFICATION", "PROBE", "INSTRUCTION")
+)
 _PROMPT_LIFECYCLE_EVENT_TYPES = (
     "COUNTERQ_UTTERANCE_DELIVERED",
     "CANDIDATE_INTERRUPTED_COUNTERQ",
@@ -41,7 +44,7 @@ class _PromptInfluence:
 
 
 class IndependenceAttributionService:
-    """Attribute Simulation independence from canonical delivery/causality only."""
+    """Attribute independence from canonical delivery and causality truth only."""
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -61,8 +64,15 @@ class IndependenceAttributionService:
         if delivered is None:
             return IndependenceAttribution(None, "PROMPT_DELIVERY_UNPROVED")
         prompt, _delivery, _event = delivered
-        if prompt.kind not in RESPONSE_BEARING_PROMPT_KINDS:
+        if not is_response_bearing_prompt(prompt):
             return IndependenceAttribution(None, "NON_RESPONSE_BEARING_PROMPT_ASSOCIATION")
+        if prompt.assistance_type is not None:
+            if prompt.hint_level is None:
+                return IndependenceAttribution(None, "ASSISTANCE_LEVEL_UNAVAILABLE")
+            return IndependenceAttribution(
+                independence_for_hint_level(prompt.hint_level),
+                "ACTUAL_ASSISTANCE_DELIVERY",
+            )
         if prompt.kind == "PROBE":
             return IndependenceAttribution("AFTER_PROBE", "ACTUAL_DIAGNOSTIC_PROBE_DELIVERY")
         return IndependenceAttribution("INDEPENDENT", "NON_PROBE_INTERVIEWER_CONTEXT")
@@ -75,6 +85,8 @@ class IndependenceAttributionService:
         events: tuple[InterviewEvent, ...] | list[InterviewEvent],
         *,
         include_previous_response_context: bool = True,
+        assistance_target_concept_ids: set[UUID] | None = None,
+        assistance_target_skill_ids: set[UUID] | None = None,
     ) -> IndependenceAttribution:
         """Attribute the complete candidate behavior window, not only its first event."""
 
@@ -92,7 +104,30 @@ class IndependenceAttributionService:
             end_sequence=ordered[-1].server_sequence,
             include_previous_response_context=include_previous_response_context,
         )
+        assistance = [
+            interaction
+            for interaction in interactions
+            if interaction.prompt.assistance_type is not None
+            and interaction.prompt.hint_level is not None
+            and (not interaction.interrupted or interaction.delivery.actual_transcript_segment_id)
+            and _assistance_target_matches(
+                interaction.prompt,
+                concept_ids=assistance_target_concept_ids,
+                skill_ids=assistance_target_skill_ids,
+            )
+        ]
         probes = [interaction for interaction in interactions if interaction.prompt.kind == "PROBE"]
+        assistance_levels = [
+            independence_for_hint_level(cast(str, interaction.prompt.hint_level))
+            for interaction in assistance
+        ]
+        if assistance_levels:
+            if probes:
+                assistance_levels.append("AFTER_PROBE")
+            return IndependenceAttribution(
+                strongest_independence(assistance_levels),
+                "STRONGEST_ACTUAL_PROMPT_INFLUENCE",
+            )
         if not probes:
             reason = (
                 "PRIOR_RESPONSE_BEARING_PROMPT_WAS_NOT_PROBE"
@@ -165,7 +200,7 @@ class IndependenceAttributionService:
         influences: list[_PromptInfluence] = []
         for lifecycle_event in lifecycle_events:
             influence = await self._prompt_influence_from_event(lifecycle_event)
-            if influence is not None and influence.prompt.kind in RESPONSE_BEARING_PROMPT_KINDS:
+            if influence is not None and is_response_bearing_prompt(influence.prompt):
                 influences.append(influence)
         return influences
 
@@ -229,7 +264,7 @@ class IndependenceAttributionService:
             select(InterviewerPromptDelivery)
             .where(
                 InterviewerPromptDelivery.interviewer_prompt_id == prompt_id,
-                InterviewerPromptDelivery.delivery_state == "DELIVERED",
+                InterviewerPromptDelivery.delivery_state.in_(("DELIVERED", "PARTIALLY_DELIVERED")),
                 InterviewerPromptDelivery.actual_transcript_segment_id.is_not(None),
             )
             .order_by(InterviewerPromptDelivery.delivery_attempt.desc())
@@ -245,8 +280,8 @@ class IndependenceAttributionService:
         if (
             event is None
             or prompt is None
-            or event.event_type != "COUNTERQ_UTTERANCE_DELIVERED"
-            or event.source != "COUNTERQ_VOICE"
+            or event.event_type
+            not in {"COUNTERQ_UTTERANCE_DELIVERED", "CANDIDATE_INTERRUPTED_COUNTERQ"}
         ):
             return None
         return prompt, delivery, event
@@ -273,3 +308,24 @@ class IndependenceAttributionService:
         if prompt is None or segment is None or segment.interview_event_id != event.id:
             return None
         return prompt, delivery, event
+
+
+def is_response_bearing_prompt(prompt: InterviewerPrompt) -> bool:
+    if prompt.kind == "INSTRUCTION":
+        return prompt.assistance_type is not None
+    return prompt.kind in RESPONSE_BEARING_PROMPT_KINDS
+
+
+def _assistance_target_matches(
+    prompt: InterviewerPrompt,
+    *,
+    concept_ids: set[UUID] | None,
+    skill_ids: set[UUID] | None,
+) -> bool:
+    if concept_ids is not None and prompt.target_concept_id is not None:
+        if prompt.target_concept_id not in concept_ids:
+            return False
+    if skill_ids is not None and prompt.target_skill_dimension_id is not None:
+        if prompt.target_skill_dimension_id not in skill_ids:
+            return False
+    return True

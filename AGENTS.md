@@ -1483,11 +1483,13 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 5B — End-to-End Evidence Engine + Breakpoints
+Stage 6A — ModePolicy + Coach Assistance Foundation
 
 Current Goal:
-Connect completed Simulation facts to Assessment, deterministic Evidence
-validation, and Breakpoints, then prove the frozen Stage 5 acceptance gate.
+Implement the shared Coach/Simulation ModePolicy, bounded target-scoped
+assistance, pre-assistance canonical Evidence checkpoint, assistance-aware
+Evidence attribution, and one minimal real Coach browser path without beginning
+Session Report.
 ```
 
 Update only this small section as implementation progresses.

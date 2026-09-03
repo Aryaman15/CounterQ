@@ -42,6 +42,7 @@ export type RealtimeVoiceControls = {
   startInterview: (
     problemVersionId: string,
     language: "cpp" | "python" | "java",
+    mode?: "COACH" | "SIMULATION",
   ) => Promise<DevelopmentBootstrapResponse>;
   enableMicrophone: () => Promise<void>;
   mute: () => void;
@@ -266,11 +267,12 @@ export function useRealtimeVoice(
   const startInterview = useCallback(async (
     problemVersionId: string,
     language: "cpp" | "python" | "java",
+    mode: "COACH" | "SIMULATION" = "SIMULATION",
   ) => {
     setErrorMessage(null);
     setIsRestoring(true);
     try {
-      return await ensureControlClient().startDevelopmentInterview(problemVersionId, language);
+      return await ensureControlClient().startDevelopmentInterview(problemVersionId, language, mode);
     } catch (error) {
       setIsRestoring(false);
       const message = error instanceof Error ? error.message : "CounterQ could not start the interview.";

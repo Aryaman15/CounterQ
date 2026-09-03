@@ -485,7 +485,9 @@ class RealtimeControlService:
         await ensure_no_active_delivery(self._session, session_id)
         delivery_attempt = await self._next_delivery_attempt(prompt.id)
         intended_text = (
-            prompt.intent if prompt.origin == "EXAMINER_DECISION" else message.intended_text
+            prompt.intent
+            if prompt.origin == "EXAMINER_DECISION" or prompt.assistance_type is not None
+            else message.intended_text
         )
         delivery = await InterviewInteractionRepository(self._session).add_delivery(
             interview_session_id=session_id,
@@ -573,6 +575,13 @@ class RealtimeControlService:
                 self._authorized_prompt_delivery_window_seconds
             ),
         ).consume_probe_budget_for_delivered_prompt(prompt)
+        await PromptAuthorizationService(
+            self._session,
+            clock=self._clock,
+            authorized_prompt_delivery_window_seconds=(
+                self._authorized_prompt_delivery_window_seconds
+            ),
+        ).consume_assistance_budget_for_delivered_prompt(prompt)
         prompt.status = "DELIVERED"
         self.floor = self.floor.release()
         await self._session.flush()
@@ -630,7 +639,34 @@ class RealtimeControlService:
                 client_sequence=message.client_sequence,
             ),
         )
-        delivery.delivery_state = "INTERRUPTED"
+        if message.transcript and message.transcript.strip():
+            segment = await self._segment_for_event(accepted.event.id)
+            if segment is None:
+                segment = await ObservationRepository(self._session).add_transcript_segment(
+                    session_id=session_id,
+                    event_id=accepted.event.id,
+                    speaker="COUNTERQ",
+                    sequence=accepted.event.server_sequence,
+                    started_at=delivery.started_at,
+                    ended_at=message.interrupted_at or self._clock(),
+                    text=message.transcript,
+                    interview_stage=interview.current_stage,
+                    interview_state_version=interview.state_version,
+                    delivery_state="PARTIALLY_DELIVERED",
+                    provider_segment_id=message.provider_item_id or message.provider_response_id,
+                )
+            delivery.actual_transcript_segment_id = segment.id
+            delivery.delivery_state = "PARTIALLY_DELIVERED"
+            delivery.completed_at = message.interrupted_at or self._clock()
+            await PromptAuthorizationService(
+                self._session,
+                clock=self._clock,
+                authorized_prompt_delivery_window_seconds=(
+                    self._authorized_prompt_delivery_window_seconds
+                ),
+            ).consume_assistance_budget_for_delivered_prompt(prompt)
+        else:
+            delivery.delivery_state = "INTERRUPTED"
         delivery.interrupted_at = message.interrupted_at or self._clock()
         prompt.status = "INTERRUPTED"
         self.floor = self.floor.candidate_speech_started()
@@ -641,6 +677,7 @@ class RealtimeControlService:
             delivery_id=delivery.id,
             delivery_state=delivery.delivery_state,
             event_id=accepted.event.id,
+            transcript_segment_id=delivery.actual_transcript_segment_id,
             server_sequence=accepted.event.server_sequence,
             interview_state_version=accepted.event.interview_state_version,
             created=accepted.created,

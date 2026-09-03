@@ -269,6 +269,7 @@ export class RealtimeControlClient {
   async startDevelopmentInterview(
     problemVersionId: string,
     language: "cpp" | "python" | "java",
+    mode: "COACH" | "SIMULATION" = "SIMULATION",
   ): Promise<DevelopmentBootstrapResponse> {
     if (this.bootstrap || this.hasStoredDevelopmentSession()) {
       throw new Error("An existing development interview must be restored first.");
@@ -278,6 +279,7 @@ export class RealtimeControlClient {
       allowCreate: true,
       problemVersionId,
       language,
+      mode,
     });
     if (!created || !this.bootstrap) {
       throw new Error("CounterQ could not create the curated interview session.");
@@ -291,10 +293,12 @@ export class RealtimeControlClient {
     allowCreate,
     problemVersionId,
     language,
+    mode,
   }: {
     allowCreate: boolean;
     problemVersionId?: string;
     language?: "cpp" | "python" | "java";
+    mode?: "COACH" | "SIMULATION";
   }): Promise<boolean> {
     const storedSessionId = this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY) ?? null;
     const request = async (interviewSessionId: string | null) => {
@@ -308,7 +312,7 @@ export class RealtimeControlClient {
           last_acknowledged_server_sequence: this.debug.lastServerSequence,
           ...(interviewSessionId
             ? {}
-            : { problem_version_id: problemVersionId, language }),
+            : { problem_version_id: problemVersionId, language, mode }),
         }),
       });
       return response;
@@ -624,6 +628,7 @@ export class RealtimeControlClient {
       provider_item_id: terminal.providerItemId,
       confirmed_by: terminal.confirmedBy,
       audio_end_ms: terminal.audioEndMs,
+      transcript: this.activeDelivery.outputTranscript.trim() || undefined,
       idempotency_key: `counterq-interrupted:${this.activeDelivery.deliveryId}:${terminal.providerResponseId}`,
     });
   }
