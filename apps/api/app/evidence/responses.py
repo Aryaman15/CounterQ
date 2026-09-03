@@ -11,8 +11,10 @@ from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.models import (
     CandidateResponse,
     CandidateResponseSource,
+    InterviewConfiguration,
     InterviewerPrompt,
     InterviewerPromptDelivery,
+    InterviewSession,
 )
 from app.observation.models import InterviewEvent, TranscriptSegment
 
@@ -53,6 +55,11 @@ class CandidateResponseMaterializer:
             interview_session_id=interview_session_id,
             candidate_server_sequence=event.server_sequence,
         )
+        if prompt is None:
+            prompt = await self._continued_coach_assistance_prompt(
+                interview_session_id=interview_session_id,
+                candidate_event=event,
+            )
         repository = InterviewInteractionRepository(self._session)
         response = await repository.add_response(
             interview_session_id=interview_session_id,
@@ -131,3 +138,183 @@ class CandidateResponseMaterializer:
         if prompt is None or not is_response_bearing_prompt(prompt):
             return None
         return cast(InterviewerPrompt, prompt)
+
+    async def _continued_coach_assistance_prompt(
+        self,
+        *,
+        interview_session_id: UUID,
+        candidate_event: InterviewEvent,
+    ) -> InterviewerPrompt | None:
+        """Continue only the immediately preceding proved Coach assistance chain."""
+
+        mode = await self._session.scalar(
+            select(InterviewConfiguration.mode)
+            .join(
+                InterviewSession,
+                InterviewSession.interview_configuration_id == InterviewConfiguration.id,
+            )
+            .where(InterviewSession.id == interview_session_id)
+        )
+        if mode != "COACH":
+            return None
+
+        previous_event = await self._session.scalar(
+            select(InterviewEvent)
+            .where(
+                InterviewEvent.interview_session_id == interview_session_id,
+                InterviewEvent.event_type == "TRANSCRIPT_FINALIZED",
+                InterviewEvent.source == "CANDIDATE_VOICE",
+                InterviewEvent.server_sequence < candidate_event.server_sequence,
+            )
+            .order_by(InterviewEvent.server_sequence.desc())
+            .limit(1)
+        )
+        if (
+            previous_event is None
+            or previous_event.interview_state_version
+            != candidate_event.interview_state_version
+        ):
+            return None
+
+        previous_response = await self._session.scalar(
+            select(CandidateResponse)
+            .join(
+                CandidateResponseSource,
+                CandidateResponseSource.candidate_response_id == CandidateResponse.id,
+            )
+            .where(
+                CandidateResponse.interview_session_id == interview_session_id,
+                CandidateResponseSource.interview_event_id == previous_event.id,
+            )
+            .limit(1)
+        )
+        if (
+            previous_response is None
+            or previous_response.interviewer_prompt_id is None
+            or previous_response.completion_reason == "SPONTANEOUS"
+        ):
+            return None
+
+        prompt = await self._session.get(
+            InterviewerPrompt, previous_response.interviewer_prompt_id
+        )
+        if (
+            prompt is None
+            or prompt.interview_session_id != interview_session_id
+            or prompt.kind != "INSTRUCTION"
+            or prompt.assistance_type is None
+            or prompt.hint_level is None
+        ):
+            return None
+        if not await self._has_proved_assistance_delivery_before(
+            interview_session_id=interview_session_id,
+            prompt_id=prompt.id,
+            server_sequence=previous_event.server_sequence,
+        ):
+            return None
+        if await self._has_newer_response_bearing_delivery(
+            interview_session_id=interview_session_id,
+            after_sequence=previous_event.server_sequence,
+            before_sequence=candidate_event.server_sequence,
+        ):
+            return None
+        return cast(InterviewerPrompt, prompt)
+
+    async def _has_proved_assistance_delivery_before(
+        self,
+        *,
+        interview_session_id: UUID,
+        prompt_id: UUID,
+        server_sequence: int,
+    ) -> bool:
+        deliveries = list(
+            await self._session.scalars(
+                select(InterviewerPromptDelivery)
+                .where(
+                    InterviewerPromptDelivery.interview_session_id
+                    == interview_session_id,
+                    InterviewerPromptDelivery.interviewer_prompt_id == prompt_id,
+                    InterviewerPromptDelivery.delivery_state.in_(
+                        ("DELIVERED", "PARTIALLY_DELIVERED")
+                    ),
+                    InterviewerPromptDelivery.actual_transcript_segment_id.is_not(None),
+                )
+                .order_by(InterviewerPromptDelivery.delivery_attempt.desc())
+            )
+        )
+        for delivery in deliveries:
+            segment = await self._session.get(
+                TranscriptSegment, delivery.actual_transcript_segment_id
+            )
+            if segment is None or segment.interview_session_id != interview_session_id:
+                continue
+            event = await self._session.get(InterviewEvent, segment.interview_event_id)
+            if (
+                event is not None
+                and event.interview_session_id == interview_session_id
+                and event.server_sequence < server_sequence
+                and self._delivery_matches_event(delivery, event)
+            ):
+                return True
+        return False
+
+    async def _has_newer_response_bearing_delivery(
+        self,
+        *,
+        interview_session_id: UUID,
+        after_sequence: int,
+        before_sequence: int,
+    ) -> bool:
+        lifecycle_events = list(
+            await self._session.scalars(
+                select(InterviewEvent)
+                .where(
+                    InterviewEvent.interview_session_id == interview_session_id,
+                    InterviewEvent.server_sequence > after_sequence,
+                    InterviewEvent.server_sequence < before_sequence,
+                    InterviewEvent.event_type.in_(
+                        ("COUNTERQ_UTTERANCE_DELIVERED", "CANDIDATE_INTERRUPTED_COUNTERQ")
+                    ),
+                )
+                .order_by(InterviewEvent.server_sequence)
+            )
+        )
+        for event in lifecycle_events:
+            delivery_id = event.payload.get("prompt_delivery_id")
+            if not isinstance(delivery_id, str):
+                continue
+            try:
+                delivery_uuid = UUID(delivery_id)
+            except ValueError:
+                continue
+            delivery = await self._session.get(InterviewerPromptDelivery, delivery_uuid)
+            if (
+                delivery is None
+                or delivery.interview_session_id != interview_session_id
+                or delivery.actual_transcript_segment_id is None
+                or not self._delivery_matches_event(delivery, event)
+            ):
+                continue
+            segment = await self._session.get(
+                TranscriptSegment, delivery.actual_transcript_segment_id
+            )
+            if segment is None or segment.interview_event_id != event.id:
+                continue
+            prompt = await self._session.get(
+                InterviewerPrompt, delivery.interviewer_prompt_id
+            )
+            if prompt is not None and is_response_bearing_prompt(prompt):
+                return True
+        return False
+
+    @staticmethod
+    def _delivery_matches_event(
+        delivery: InterviewerPromptDelivery, event: InterviewEvent
+    ) -> bool:
+        return (
+            delivery.delivery_state == "DELIVERED"
+            and event.event_type == "COUNTERQ_UTTERANCE_DELIVERED"
+        ) or (
+            delivery.delivery_state == "PARTIALLY_DELIVERED"
+            and event.event_type == "CANDIDATE_INTERRUPTED_COUNTERQ"
+        )

@@ -34,6 +34,13 @@ class AssessmentUnitKind(StrEnum):
     COMBINED_SPEECH_CODE = "COMBINED_SPEECH_CODE"
 
 
+def _is_initial_editor_baseline(event: InterviewEvent) -> bool:
+    return (
+        event.event_type == "CODE_SNAPSHOT_CREATED"
+        and event.payload.get("trigger") == "INITIAL_EDITOR_STATE"
+    )
+
+
 @dataclass(frozen=True)
 class AssessmentSourceFact:
     alias: str
@@ -435,6 +442,7 @@ class AssessmentInputBuilder:
                 or event.id in execution_source_ids
                 or event.event_type not in {"CODE_SNAPSHOT_CREATED", "MEANINGFUL_CODE_CHANGE"}
                 or event.source != "NATIVE_EDITOR"
+                or _is_initial_editor_baseline(event)
             ):
                 continue
             snapshot = snapshots_by_event.get(event.id)

@@ -31,7 +31,7 @@ from app.evidence.coordinator import (
     _finding_independence_level,
 )
 from app.evidence.independence import IndependenceAttributionService
-from app.evidence.models import Breakpoint, BreakpointEvidence, Evidence, SkillDimension
+from app.evidence.models import Assessment, Breakpoint, BreakpointEvidence, Evidence, SkillDimension
 from app.evidence.units import (
     AssessmentInputBuilder,
     AssessmentSourceFact,
@@ -50,10 +50,13 @@ from app.interviews.assistance_wording import (
     CoachAssistanceWordingService,
 )
 from app.interviews.budget_policy import assistance_budget_snapshot
+from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.interaction_repository import InterviewInteractionRepository
 from app.interviews.mode_policy import ModePolicy
 from app.interviews.models import (
+    CandidateResponse,
+    CandidateResponseSource,
     InterviewConfiguration,
     InterviewerPrompt,
     InterviewerPromptDelivery,
@@ -61,7 +64,13 @@ from app.interviews.models import (
     SessionBudget,
 )
 from app.interviews.prompt_authorization import PromptAuthorizationService
-from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
+from app.interviews.runtime import (
+    AcceptEventCommand,
+    InterviewRuntime,
+    TransitionCommand,
+)
+from app.interviews.state_machine import TransitionContext
+from app.observation.models import CodeSnapshot, InterviewEvent
 from app.observation.repository import ObservationRepository
 from app.problems.models import Concept, Problem, ProblemConcept
 from app.realtime.control_protocol import (
@@ -324,6 +333,368 @@ async def _persist_candidate_answer(
         ),
     )
     return result.server_sequence
+
+
+async def _candidate_response_at_sequence(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    server_sequence: int,
+) -> CandidateResponse:
+    response = await session.scalar(
+        select(CandidateResponse)
+        .join(
+            CandidateResponseSource,
+            CandidateResponseSource.candidate_response_id == CandidateResponse.id,
+        )
+        .join(
+            InterviewEvent,
+            InterviewEvent.id == CandidateResponseSource.interview_event_id,
+        )
+        .where(
+            CandidateResponse.interview_session_id == session_id,
+            InterviewEvent.server_sequence == server_sequence,
+        )
+    )
+    assert response is not None
+    return response
+
+
+async def _deliver_probe_prompt(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    suffix: str,
+) -> InterviewerPrompt:
+    prompt = await InterviewInteractionRepository(session).add_prompt(
+        interview_session_id=session_id,
+        origin="SYSTEM",
+        kind="PROBE",
+        probe_strategy="WHY",
+        intent="Why does that invariant hold?",
+        status="AUTHORIZED",
+        authorized_at=datetime.now(UTC),
+    )
+    service = RealtimeControlService(session)
+    started = await service.start_delivery(
+        session_id=session_id,
+        message=CounterQDeliveryStartedMessage(
+            type="counterq_delivery_started",
+            client_event_id=f"{suffix}-probe-start",
+            client_instance_id="stage6a-continuation-test",
+            client_sequence=1,
+            interviewer_prompt_id=prompt.id,
+            intended_text=prompt.intent,
+            provider_response_id=f"{suffix}-probe-response",
+        ),
+    )
+    await service.complete_delivery(
+        session_id=session_id,
+        message=CounterQDeliveryCompletedMessage(
+            type="counterq_delivery_completed",
+            client_event_id=f"{suffix}-probe-complete",
+            client_instance_id="stage6a-continuation-test",
+            client_sequence=2,
+            interviewer_prompt_id=prompt.id,
+            prompt_delivery_id=started.delivery_id,
+            provider_response_id=f"{suffix}-probe-response",
+            transcript=prompt.intent,
+        ),
+    )
+    return prompt
+
+
+async def test_consecutive_voice_turns_continue_same_delivered_coach_assistance(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode="COACH", initial_stage="IMPLEMENTATION"
+    )
+    prompt, _delivery_sequence = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="continued-metacognitive",
+        stage="IMPLEMENTATION",
+        level="METACOGNITIVE",
+    )
+
+    responses: list[CandidateResponse] = []
+    for index in range(3):
+        sequence = await _persist_candidate_answer(
+            db_session,
+            session_id=development.interview_session.id,
+            suffix=f"continued-answer-{index}",
+            client_sequence=index + 1,
+        )
+        responses.append(
+            await _candidate_response_at_sequence(
+                db_session,
+                session_id=development.interview_session.id,
+                server_sequence=sequence,
+            )
+        )
+
+    assert [response.interviewer_prompt_id for response in responses] == [prompt.id] * 3
+    assert [response.completion_reason for response in responses] == ["COMPLETE"] * 3
+    for response in responses:
+        attribution = await IndependenceAttributionService(db_session).for_response(response)
+        assert attribution.level == "AFTER_LIGHT_GUIDANCE"
+        assert attribution.reason == "ACTUAL_ASSISTANCE_DELIVERY"
+
+
+async def test_new_response_bearing_prompt_replaces_old_assistance_chain(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode="COACH", initial_stage="IMPLEMENTATION"
+    )
+    old_prompt, _ = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="old-assistance",
+        stage="IMPLEMENTATION",
+        level="METACOGNITIVE",
+    )
+    first_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="old-assistance-answer",
+        client_sequence=1,
+    )
+    new_prompt, _ = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="new-assistance",
+        stage="IMPLEMENTATION",
+        level="PROBLEM_NARROWING",
+    )
+    second_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="new-assistance-answer",
+        client_sequence=2,
+    )
+
+    first = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=first_sequence,
+    )
+    second = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=second_sequence,
+    )
+    assert first.interviewer_prompt_id == old_prompt.id
+    assert second.interviewer_prompt_id == new_prompt.id
+
+
+async def test_stage_and_spontaneous_boundaries_stop_assistance_continuation(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode="COACH", initial_stage="IMPLEMENTATION"
+    )
+    prompt, _ = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="bounded-assistance",
+        stage="IMPLEMENTATION",
+        level="METACOGNITIVE",
+    )
+    first_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="bounded-answer-a",
+        client_sequence=1,
+    )
+    first = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=first_sequence,
+    )
+    assert first.interviewer_prompt_id == prompt.id
+
+    await InterviewRuntime(db_session).transition(
+        TransitionCommand(
+            session_id=development.interview_session.id,
+            to_stage="TESTING_DEBUGGING",
+            trigger="MEANINGFUL_TESTING",
+            expected_state_version=development.interview_session.state_version,
+            occurred_at=datetime.now(UTC),
+            context=TransitionContext("MEANINGFUL_TESTING"),
+            idempotency_key="bounded-assistance-stage-change",
+        )
+    )
+    boundary_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="bounded-spontaneous-boundary",
+        client_sequence=2,
+    )
+    later_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="bounded-answer-after-spontaneous",
+        client_sequence=3,
+    )
+    boundary = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=boundary_sequence,
+    )
+    later = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=later_sequence,
+    )
+    assert boundary.interviewer_prompt_id is None
+    assert boundary.completion_reason == "SPONTANEOUS"
+    assert later.interviewer_prompt_id is None
+    assert later.completion_reason == "SPONTANEOUS"
+
+
+@pytest.mark.parametrize("mode", ["COACH", "SIMULATION"])
+async def test_probe_response_semantics_do_not_gain_continuation(
+    db_session: AsyncSession,
+    mode: str,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode=mode, initial_stage="IMPLEMENTATION"
+    )
+    prompt = await _deliver_probe_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix=f"{mode.lower()}-probe-chain",
+    )
+    first_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix=f"{mode.lower()}-probe-answer-a",
+        client_sequence=3,
+    )
+    second_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix=f"{mode.lower()}-probe-answer-b",
+        client_sequence=4,
+    )
+    first = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=first_sequence,
+    )
+    second = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=second_sequence,
+    )
+    assert first.interviewer_prompt_id == prompt.id
+    assert (
+        await IndependenceAttributionService(db_session).for_response(first)
+    ).level == "AFTER_PROBE"
+    assert second.interviewer_prompt_id is None
+    assert second.completion_reason == "SPONTANEOUS"
+
+
+async def test_continued_assistance_keeps_finding_level_target_scope(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode="COACH", initial_stage="IMPLEMENTATION"
+    )
+    target = Concept(
+        canonical_key=f"stage6a_continued_target_{development.interview_session.id.hex}",
+        display_name="Continued target",
+        category="algorithm",
+        status="ACTIVE",
+        description="Target for continued assistance",
+    )
+    unrelated = Concept(
+        canonical_key=f"stage6a_continued_unrelated_{development.interview_session.id.hex}",
+        display_name="Continued unrelated",
+        category="algorithm",
+        status="ACTIVE",
+        description="Unrelated finding target",
+    )
+    db_session.add_all([target, unrelated])
+    await db_session.flush()
+    db_session.add_all(
+        [
+            ProblemConcept(
+                problem_version_id=development.problem_version.id,
+                concept_id=concept.id,
+                relevance="CORE",
+                expected_importance="HIGH",
+                role="PRIMARY",
+            )
+            for concept in (target, unrelated)
+        ]
+    )
+    skill = await db_session.scalar(
+        select(SkillDimension).where(
+            SkillDimension.canonical_key == "complexity_reasoning"
+        )
+    )
+    assert skill is not None
+    prompt, _ = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="targeted-continuation",
+        stage="IMPLEMENTATION",
+        level="METACOGNITIVE",
+        target_concept_id=target.id,
+        target_skill_dimension_id=skill.id,
+    )
+    await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="targeted-continuation-a",
+        client_sequence=1,
+    )
+    second_sequence = await _persist_candidate_answer(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="targeted-continuation-b",
+        client_sequence=2,
+    )
+    response = await _candidate_response_at_sequence(
+        db_session,
+        session_id=development.interview_session.id,
+        server_sequence=second_sequence,
+    )
+    assert response.interviewer_prompt_id == prompt.id
+    units = await AssessmentInputBuilder(db_session).build_active_checkpoint(
+        development.interview_session.id
+    )
+    unit = next(item for item in units if item.candidate_response_id == response.id)
+    assert unit.independence_level == "AFTER_LIGHT_GUIDANCE"
+
+    def finding(concept_key: str) -> AssessmentFinding:
+        return AssessmentFinding(
+            assessment_dimension="CORRECTNESS",
+            polarity="POSITIVE",
+            confidence=0.9,
+            technical_rationale="The response supports the scoped finding.",
+            evidence_finding="The candidate explained the complexity boundary.",
+            proposed_strength="MODERATE",
+            source_aliases=["source_1"],
+            concept_keys=[concept_key],
+            skill_dimension_keys=[skill.canonical_key],
+            boundary_kind="NONE",
+            breakpoint_subtype=None,
+            breakpoint_effect="NONE",
+            breakpoint_severity=None,
+        )
+
+    assert (
+        await _finding_independence_level(db_session, unit, finding(target.canonical_key))
+        == "AFTER_LIGHT_GUIDANCE"
+    )
+    assert (
+        await _finding_independence_level(db_session, unit, finding(unrelated.canonical_key))
+        == "INDEPENDENT"
+    )
 
 
 def test_mode_policy_centralizes_simulation_and_coach_budgets() -> None:
@@ -2303,6 +2674,118 @@ async def test_active_checkpoint_evaluates_latest_stable_direct_code(tmp_path: P
         if concept_id:
             async with sessions() as session, session.begin():
                 await session.execute(delete(Concept).where(Concept.id == concept_id))
+        await engine.dispose()
+
+
+async def test_initial_editor_baseline_is_context_in_active_and_completed_evaluation(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup: tuple[UUID, UUID, UUID] | None = None
+    try:
+        async with sessions() as session, session.begin():
+            development = await create_development_interview(
+                session, mode="COACH", initial_stage="IMPLEMENTATION"
+            )
+            cleanup = (
+                development.user.id,
+                development.configuration.id,
+                development.problem.id,
+            )
+            user_id = development.user.id
+            persisted = await RealtimeControlService(session).persist_candidate_code_snapshot(
+                session_id=development.interview_session.id,
+                message=CandidateCodeSnapshotMessage(
+                    type="candidate_code_snapshot",
+                    client_event_id="baseline-only-initial",
+                    client_instance_id="stage6a-baseline-test",
+                    client_sequence=1,
+                    source_code="return {};",
+                    language="cpp",
+                    trigger="INITIAL_EDITOR_STATE",
+                ),
+            )
+            session_id = development.interview_session.id
+            snapshot_id = persisted.snapshot_id
+
+        provider = FakeAssessmentProvider(
+            {
+                "findings": [
+                    {
+                        "assessment_dimension": "CORRECTNESS",
+                        "polarity": "NEGATIVE",
+                        "confidence": 0.99,
+                        "technical_rationale": "Starter code is incomplete.",
+                        "evidence_finding": "The starter body returns an empty result.",
+                        "proposed_strength": "STRONG",
+                        "source_aliases": ["source_1"],
+                        "concept_keys": [],
+                        "skill_dimension_keys": ["correctness"],
+                        "boundary_kind": "MEANINGFUL_TECHNICAL_BOUNDARY",
+                        "breakpoint_subtype": None,
+                        "breakpoint_effect": "WEAKNESS",
+                        "breakpoint_severity": "HIGH",
+                    }
+                ]
+            }
+        )
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions,
+            ai_gateway=AIGateway(
+                settings=create_settings(env_file=tmp_path / ".env"),
+                sessionmaker=sessions,
+                provider=provider,
+            ),
+        )
+        active = await coordinator.evaluate_active_checkpoint(session_id)
+        assert active.units == ()
+        assert provider.calls == 0
+
+        async with sessions() as session, session.begin():
+            snapshot = await session.get(CodeSnapshot, snapshot_id)
+            assert snapshot is not None
+            assert snapshot.source_code == "return {};"
+            interview = await session.get(InterviewSession, session_id)
+            assert interview is not None
+            await InterviewCompletionService(session).complete(
+                session_id=session_id,
+                reason="USER_ENDED",
+                expected_state_version=interview.state_version,
+                idempotency_key="baseline-only-complete",
+            )
+
+        completed = await coordinator.evaluate(session_id)
+        assert completed.units == ()
+        assert provider.calls == 0
+        async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Assessment)
+                    .where(Assessment.interview_session_id == session_id)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Evidence)
+                    .where(Evidence.interview_session_id == session_id)
+                )
+                == 0
+            )
+            assert (
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(Breakpoint)
+                        .where(Breakpoint.user_id == user_id)
+                    )
+                == 0
+            )
+    finally:
+        if cleanup:
+            await _cleanup(sessions, *cleanup)
         await engine.dispose()
 
 

@@ -1082,6 +1082,11 @@ async def test_assessment_builder_applies_debugging_window_independence(
     previous_code = cast(dict[str, object], previous_failed["code_snapshot"])
     current_code = cast(dict[str, object], execution["code_snapshot"])
 
+    assert not any(
+        unit.kind == AssessmentUnitKind.DIRECT_CODE
+        and unit.source_code_snapshot_id == previous.snapshot_id
+        for unit in units
+    )
     assert previous_code["id"] == str(previous.snapshot_id)
     assert current_code["id"] == str(current.snapshot_id)
     assert any(
@@ -1102,7 +1107,7 @@ async def test_ordinary_independent_code_diff_remains_direct_code(
 ) -> None:
     dev = await create_development_interview(db_session, initial_stage="IMPLEMENTATION")
     service = RealtimeControlService(db_session)
-    await service.persist_candidate_code_snapshot(
+    baseline = await service.persist_candidate_code_snapshot(
         session_id=dev.interview_session.id,
         message=CandidateCodeSnapshotMessage(
             **_client(1),
@@ -1132,15 +1137,26 @@ async def test_ordinary_independent_code_diff_remains_direct_code(
     units = await AssessmentInputBuilder(db_session).build_completed_simulation(
         dev.interview_session.id
     )
+    direct_units = [item for item in units if item.kind == AssessmentUnitKind.DIRECT_CODE]
+    assert len(direct_units) == 1
     unit = next(item for item in units if item.source_code_snapshot_id == revision.snapshot_id)
     assessment_unit = cast(dict[str, object], unit.input_payload["assessment_unit"])
     code = cast(dict[str, object], assessment_unit["code"])
+    previous = cast(dict[str, object], code["previous"])
 
     assert unit.kind == AssessmentUnitKind.DIRECT_CODE
+    assert previous["id"] == str(baseline.snapshot_id)
     assert is_successful_recovery_unit(unit) is False
     assert code["candidate_revision_observed"] is True
     assert code["correction_status"] == "NOT_DETERMINED_BY_SOFTWARE"
     assert "self_correction" not in unit.serialize().lower()
+    rebuilt = await AssessmentInputBuilder(db_session).build_completed_simulation(
+        dev.interview_session.id
+    )
+    rebuilt_unit = next(
+        item for item in rebuilt if item.source_code_snapshot_id == revision.snapshot_id
+    )
+    assert rebuilt_unit.unit_key == unit.unit_key
 
 
 async def test_invalidation_dismisses_breakpoint_when_only_support_disappears(
