@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -18,6 +18,8 @@ from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
     ReasoningEffort,
+    ReasoningErrorCategory,
+    ReasoningProviderError,
     ReasoningRequest,
     ReasoningUsage,
 )
@@ -31,7 +33,14 @@ from app.evidence.coordinator import (
     _finding_independence_level,
 )
 from app.evidence.independence import IndependenceAttributionService
-from app.evidence.models import Assessment, Breakpoint, BreakpointEvidence, Evidence, SkillDimension
+from app.evidence.models import (
+    Assessment,
+    Breakpoint,
+    BreakpointEvidence,
+    Evidence,
+    EvidenceConcept,
+    SkillDimension,
+)
 from app.evidence.units import (
     AssessmentInputBuilder,
     AssessmentSourceFact,
@@ -49,7 +58,10 @@ from app.interviews.assistance_wording import (
     COACH_ASSISTANCE_PURPOSE,
     CoachAssistanceWordingService,
 )
-from app.interviews.budget_policy import assistance_budget_snapshot
+from app.interviews.budget_policy import (
+    assistance_budget_snapshot,
+    interactive_deep_reasoning_limit,
+)
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.interaction_repository import InterviewInteractionRepository
@@ -121,9 +133,15 @@ class FakeAssessmentProvider:
 
 
 class BlockingAssistanceProvider(FakeAssessmentProvider):
-    def __init__(self, *, block_purpose: str) -> None:
-        super().__init__({"findings": []})
+    def __init__(
+        self,
+        *,
+        block_purpose: str,
+        assessment_output: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(assessment_output or {"findings": []})
         self.block_purpose = block_purpose
+        self.assessment_output = assessment_output or {"findings": []}
         self.started = asyncio.Event()
         self.release = asyncio.Event()
 
@@ -143,11 +161,28 @@ class BlockingAssistanceProvider(FakeAssessmentProvider):
                 "prompt_text": "Which invariant in the current step is least certain?",
             }
             if request.purpose == COACH_ASSISTANCE_PURPOSE
-            else {"findings": []}
+            else self.assessment_output
         )
         return await super().reason_structured(
             request, model=model, reasoning_effort=reasoning_effort
         )
+
+
+class FailingAssessmentProvider(FakeAssessmentProvider):
+    def __init__(self, category: ReasoningErrorCategory) -> None:
+        super().__init__({"findings": []})
+        self.category = category
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        self.calls += 1
+        self.requests.append(request)
+        raise ReasoningProviderError(self.category, "Injected assessment failure")
 
 
 async def _coach_with_transcript(
@@ -221,11 +256,70 @@ def _negative_finding(concept_key: str) -> dict[str, object]:
     }
 
 
+def _positive_finding(concept_key: str, rationale: str) -> dict[str, object]:
+    return {
+        "findings": [
+            {
+                "assessment_dimension": "CORRECTNESS",
+                "polarity": "POSITIVE",
+                "confidence": 0.95,
+                "technical_rationale": rationale,
+                "evidence_finding": rationale,
+                "proposed_strength": "MODERATE",
+                "source_aliases": ["source_1"],
+                "concept_keys": [concept_key],
+                "skill_dimension_keys": ["correctness"],
+                "boundary_kind": "NONE",
+                "breakpoint_subtype": None,
+                "breakpoint_effect": "NONE",
+                "breakpoint_severity": None,
+            }
+        ]
+    }
+
+
 def _wording_output(level: str) -> dict[str, object]:
     return {
         "contract_version": "coach-assistance-output.v1",
         "prompt_text": f"Continue with one bounded {level.lower()} step.",
     }
+
+
+async def _complete_authorized_assistance(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    prompt_id: UUID,
+    suffix: str,
+) -> None:
+    prompt = await session.get(InterviewerPrompt, prompt_id)
+    assert prompt is not None and prompt.status == "AUTHORIZED"
+    service = RealtimeControlService(session)
+    started = await service.start_delivery(
+        session_id=session_id,
+        message=CounterQDeliveryStartedMessage(
+            type="counterq_delivery_started",
+            client_event_id=f"{suffix}-start",
+            client_instance_id=f"{suffix}-delivery-client",
+            client_sequence=1,
+            interviewer_prompt_id=prompt.id,
+            intended_text=prompt.intent,
+            provider_response_id=f"{suffix}-provider-response",
+        ),
+    )
+    await service.complete_delivery(
+        session_id=session_id,
+        message=CounterQDeliveryCompletedMessage(
+            type="counterq_delivery_completed",
+            client_event_id=f"{suffix}-complete",
+            client_instance_id=f"{suffix}-delivery-client",
+            client_sequence=2,
+            interviewer_prompt_id=prompt.id,
+            prompt_delivery_id=started.delivery_id,
+            provider_response_id=f"{suffix}-provider-response",
+            transcript=prompt.intent,
+        ),
+    )
 
 
 async def _deliver_assistance_prompt(
@@ -3061,6 +3155,607 @@ async def test_active_checkpoint_invalid_schema_is_not_retried(tmp_path: Path) -
     finally:
         if cleanup:
             await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_invalid_active_checkpoint_allows_one_target_null_metacognitive_hint(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = FakeAssessmentProvider(
+        [{"not_findings": []}, _wording_output("METACOGNITIVE")]
+    )
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        result = await workflow.request(
+            AssistanceRequestCommand(session_id, "invalid-first-metacognitive")
+        )
+        assert result.status == "AUTHORIZED"
+        assert result.assistance_type == "METACOGNITIVE"
+        assert result.hint_level == "METACOGNITIVE"
+        assert result.target_concept_id is None
+        assert result.target_skill_dimension_id is None
+        assert result.interviewer_prompt_id is not None
+        assert [request.purpose for request in provider.requests] == [
+            CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+            COACH_ASSISTANCE_PURPOSE,
+        ]
+        assert provider.requests[1].policy.policy_key == "coach_assistance"
+        assert provider.requests[1].policy.version == "v1"
+
+        assessment_payload = json.loads(provider.requests[0].input_content)
+        wording_payload = json.loads(provider.requests[1].input_content)
+        assert wording_payload["trusted_context"]["diagnostic_target"] == {
+            "concept_key": None,
+            "skill_dimension_key": None,
+            "validated_boundary": None,
+            "validated_evidence_finding": None,
+        }
+        assert wording_payload["untrusted_candidate_context"]["content"] == (
+            assessment_payload["assessment_unit"]
+        )
+
+        async with sessions() as session, session.begin():
+            await _complete_authorized_assistance(
+                session,
+                session_id=session_id,
+                prompt_id=result.interviewer_prompt_id,
+                suffix="invalid-first-metacognitive",
+            )
+            first_sequence = await _persist_candidate_answer(
+                session,
+                session_id=session_id,
+                suffix="invalid-first-metacognitive-a",
+                client_sequence=1,
+            )
+            second_sequence = await _persist_candidate_answer(
+                session,
+                session_id=session_id,
+                suffix="invalid-first-metacognitive-b",
+                client_sequence=2,
+            )
+
+        async with sessions() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.interview_session_id == session_id)
+                    .order_by(AIInvocation.started_at, AIInvocation.id)
+                )
+            )
+            assert [(item.purpose, item.status) for item in invocations] == [
+                (CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE, "FAILED"),
+                (COACH_ASSISTANCE_PURPOSE, "SUCCEEDED"),
+            ]
+            assert invocations[0].error_class == "STRUCTURED_OUTPUT_INVALID"
+            assert invocations[0].estimated_cost == Decimal("0.000100")
+            assert invocations[0].input_tokens == 10
+            assert invocations[0].output_tokens == 10
+            budget = await session.scalar(
+                select(SessionBudget).where(SessionBudget.session_id == session_id)
+            )
+            assert budget is not None
+            assert budget.deep_reasoning_used == 2
+            assert budget.estimated_cost == Decimal("0.000200")
+            assert budget.assistance_interventions_used == 1
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Assessment)
+                    .where(Assessment.interview_session_id == session_id)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Evidence)
+                    .where(Evidence.interview_session_id == session_id)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Breakpoint)
+                    .where(Breakpoint.first_detected_session_id == session_id)
+                )
+                == 0
+            )
+            responses = [
+                await _candidate_response_at_sequence(
+                    session,
+                    session_id=session_id,
+                    server_sequence=sequence,
+                )
+                for sequence in (first_sequence, second_sequence)
+            ]
+            assert [response.interviewer_prompt_id for response in responses] == [
+                result.interviewer_prompt_id,
+                result.interviewer_prompt_id,
+            ]
+            for response in responses:
+                attribution = await IndependenceAttributionService(session).for_response(
+                    response
+                )
+                assert attribution.level == "AFTER_LIGHT_GUIDANCE"
+                assert attribution.reason == "ACTUAL_ASSISTANCE_DELIVERY"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_delivered_fallback_cannot_repeat_or_escalate_without_gap_evidence(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = FakeAssessmentProvider(
+        [
+            {"not_findings": []},
+            _wording_output("METACOGNITIVE"),
+            {"not_findings": []},
+        ]
+    )
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        first = await workflow.request(
+            AssistanceRequestCommand(session_id, "first-invalid-fallback")
+        )
+        assert first.status == "AUTHORIZED"
+        assert first.interviewer_prompt_id is not None
+        async with sessions() as session, session.begin():
+            await _complete_authorized_assistance(
+                session,
+                session_id=session_id,
+                prompt_id=first.interviewer_prompt_id,
+                suffix="first-invalid-fallback",
+            )
+
+        second = await workflow.request(
+            AssistanceRequestCommand(session_id, "second-invalid-fallback")
+        )
+        assert second.status == "DEFERRED"
+        assert second.reason == "PROGRESS_RESTORED_NO_CURRENT_GAP"
+        assert second.interviewer_prompt_id is None
+        assert [request.purpose for request in provider.requests] == [
+            CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+            COACH_ASSISTANCE_PURPOSE,
+            CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+        ]
+        async with sessions() as session:
+            prompts = list(
+                await session.scalars(
+                    select(InterviewerPrompt)
+                    .where(InterviewerPrompt.interview_session_id == session_id)
+                    .where(InterviewerPrompt.assistance_type.is_not(None))
+                )
+            )
+            assert {(prompt.hint_level, prompt.status) for prompt in prompts} == {
+                ("METACOGNITIVE", "DELIVERED"),
+                ("METACOGNITIVE", "CANCELLED"),
+            }
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_invalid_checkpoint_fallback_does_not_apply_to_budget_exhaustion(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = FakeAssessmentProvider({"not_findings": []})
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        async with sessions() as session, session.begin():
+            budget = await session.scalar(
+                select(SessionBudget).where(SessionBudget.session_id == session_id)
+            )
+            assert budget is not None
+            budget.deep_reasoning_used = interactive_deep_reasoning_limit(budget)
+
+        result = await workflow.request(
+            AssistanceRequestCommand(session_id, "budget-exhausted-no-fallback")
+        )
+        assert result.status == "DEFERRED"
+        assert result.reason == "ACTIVE_EVIDENCE_CHECKPOINT_UNAVAILABLE"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 0
+        async with sessions() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(AIInvocation)
+                    .where(AIInvocation.interview_session_id == session_id)
+                )
+                == 0
+            )
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_invalid_checkpoint_fallback_does_not_apply_to_provider_timeout(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = FailingAssessmentProvider("TIMEOUT")
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        result = await workflow.request(
+            AssistanceRequestCommand(session_id, "timeout-no-fallback")
+        )
+        assert result.status == "DEFERRED"
+        assert result.reason == "ACTIVE_EVIDENCE_CHECKPOINT_UNAVAILABLE"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 1
+        assert provider.requests[0].purpose == CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE
+        async with sessions() as session:
+            invocation = await session.scalar(
+                select(AIInvocation).where(
+                    AIInvocation.interview_session_id == session_id
+                )
+            )
+            assert invocation is not None
+            assert invocation.status == "TIMED_OUT"
+            assert invocation.error_class == "TIMEOUT"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_precheckpoint_policy_gates_never_call_fallback_providers(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup: list[tuple[UUID, UUID, UUID]] = []
+    fixed_now = datetime.now(UTC)
+    try:
+        async with sessions() as session, session.begin():
+            simulation = await create_development_interview(
+                session, mode="SIMULATION", initial_stage="IMPLEMENTATION"
+            )
+            before_attempt = await create_development_interview(
+                session, mode="COACH", initial_stage="IMPLEMENTATION"
+            )
+            wrap_only = await create_development_interview(
+                session, mode="COACH", initial_stage="IMPLEMENTATION"
+            )
+            for development in (simulation, before_attempt, wrap_only):
+                cleanup.append(
+                    (
+                        development.user.id,
+                        development.configuration.id,
+                        development.problem.id,
+                    )
+                )
+            service = RealtimeControlService(session)
+            for development, suffix in (
+                (simulation, "simulation-gate"),
+                (wrap_only, "wrap-gate"),
+            ):
+                await service.persist_candidate_transcript(
+                    session_id=development.interview_session.id,
+                    message=CandidateTranscriptFinalizedMessage(
+                        type="candidate_transcript_finalized",
+                        client_event_id=f"{suffix}-event",
+                        client_instance_id=f"{suffix}-client",
+                        client_sequence=1,
+                        provider_item_id=f"{suffix}-item",
+                        transcript="I made a meaningful attempt and need help.",
+                    ),
+                )
+            wrap_only.interview_session.deadline_at = fixed_now + timedelta(seconds=5)
+
+        provider = FakeAssessmentProvider({"not_findings": []})
+        gateway = AIGateway(
+            settings=create_settings(env_file=tmp_path / ".env"),
+            sessionmaker=sessions,
+            provider=provider,
+        )
+        workflow = CoachAssistanceWorkflow(
+            sessionmaker=sessions,
+            evidence_coordinator=SessionEvidenceEvaluationCoordinator(
+                sessionmaker=sessions, ai_gateway=gateway
+            ),
+            wording_service=CoachAssistanceWordingService(gateway),
+            clock=lambda: fixed_now,
+        )
+
+        simulation_result = await workflow.request(
+            AssistanceRequestCommand(
+                simulation.interview_session.id, "simulation-precheckpoint-gate"
+            )
+        )
+        attempt_result = await workflow.request(
+            AssistanceRequestCommand(
+                before_attempt.interview_session.id, "attempt-precheckpoint-gate"
+            )
+        )
+        wrap_result = await workflow.request(
+            AssistanceRequestCommand(
+                wrap_only.interview_session.id, "wrap-precheckpoint-gate"
+            )
+        )
+        assert simulation_result.status == "REFUSED"
+        assert attempt_result.status == "ATTEMPT_REQUIRED"
+        assert wrap_result.status == "DENIED"
+        assert wrap_result.reason == "WRAP_ONLY_PROHIBITS_ASSISTANCE"
+        assert provider.calls == 0
+    finally:
+        for identifiers in cleanup:
+            await _cleanup(sessions, *identifiers)
+        await engine.dispose()
+
+
+async def test_candidate_progress_during_invalid_checkpoint_blocks_fallback_wording(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = BlockingAssistanceProvider(
+        block_purpose=CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+        assessment_output={"not_findings": []},
+    )
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        task = asyncio.create_task(
+            workflow.request(
+                AssistanceRequestCommand(session_id, "progress-during-invalid-checkpoint")
+            )
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        async with sessions() as session, session.begin():
+            await InterviewRuntime(session).accept_event(
+                AcceptEventCommand(
+                    session_id=session_id,
+                    event_type="MEANINGFUL_CODE_CHANGE",
+                    source="NATIVE_EDITOR",
+                    occurred_at=datetime.now(UTC),
+                    idempotency_key="progress-during-invalid-checkpoint-event",
+                )
+            )
+        provider.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "DEFERRED"
+        assert result.reason == "CANDIDATE_PROGRESS_SUPERSEDED_ASSISTANCE"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 1
+        assert all(
+            request.purpose != COACH_ASSISTANCE_PURPOSE for request in provider.requests
+        )
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "STALE"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_candidate_progress_during_fallback_wording_prevents_authorization(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = BlockingAssistanceProvider(
+        block_purpose=COACH_ASSISTANCE_PURPOSE,
+        assessment_output={"not_findings": []},
+    )
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        task = asyncio.create_task(
+            workflow.request(
+                AssistanceRequestCommand(session_id, "progress-during-fallback-wording")
+            )
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        async with sessions() as session, session.begin():
+            await InterviewRuntime(session).accept_event(
+                AcceptEventCommand(
+                    session_id=session_id,
+                    event_type="TRANSCRIPT_FINALIZED",
+                    source="CANDIDATE_VOICE",
+                    occurred_at=datetime.now(UTC),
+                    idempotency_key="progress-during-fallback-wording-event",
+                )
+            )
+        provider.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "DEFERRED"
+        assert result.reason == "CANDIDATE_PROGRESS_SUPERSEDED_ASSISTANCE"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 2
+        assert [request.purpose for request in provider.requests] == [
+            CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+            COACH_ASSISTANCE_PURPOSE,
+        ]
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "STALE"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_post_interview_evaluation_recovers_both_sides_of_fallback_hint(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup: tuple[UUID, UUID, UUID] | None = None
+    concept_id: UUID | None = None
+    try:
+        async with sessions() as session, session.begin():
+            development = await create_development_interview(
+                session, mode="COACH", initial_stage="IMPLEMENTATION"
+            )
+            cleanup = (
+                development.user.id,
+                development.configuration.id,
+                development.problem.id,
+            )
+            session_id = development.interview_session.id
+            concept = Concept(
+                canonical_key=f"stage6a_fallback_recovery_{session_id.hex}",
+                display_name="Fallback recovery target",
+                category="algorithm",
+                status="ACTIVE",
+                description="Post-interview fallback recovery target",
+            )
+            session.add(concept)
+            await session.flush()
+            concept_id = concept.id
+            session.add(
+                ProblemConcept(
+                    problem_version_id=development.problem_version.id,
+                    concept_id=concept.id,
+                    relevance="PRIMARY",
+                    expected_importance="HIGH",
+                    role="CORE",
+                )
+            )
+            await RealtimeControlService(session).persist_candidate_transcript(
+                session_id=session_id,
+                message=CandidateTranscriptFinalizedMessage(
+                    type="candidate_transcript_finalized",
+                    client_event_id="fallback-recovery-pre-hint",
+                    client_instance_id="fallback-recovery-client",
+                    client_sequence=1,
+                    provider_item_id="fallback-recovery-pre-hint-item",
+                    transcript="I think the boundary should only move forward.",
+                ),
+            )
+            concept_key = concept.canonical_key
+
+        provider = FakeAssessmentProvider(
+            [
+                {"not_findings": []},
+                _wording_output("METACOGNITIVE"),
+                _positive_finding(
+                    concept_key, "The pre-hint answer states the monotonic boundary."
+                ),
+                _positive_finding(
+                    concept_key, "The post-hint answer explains the same invariant."
+                ),
+            ]
+        )
+        gateway, workflow = _workflow_for_provider(
+            sessions=sessions, provider=provider, tmp_path=tmp_path
+        )
+        assistance = await workflow.request(
+            AssistanceRequestCommand(session_id, "fallback-recovery-request")
+        )
+        assert assistance.status == "AUTHORIZED"
+        assert assistance.interviewer_prompt_id is not None
+        assert assistance.target_concept_id is None
+        assert assistance.target_skill_dimension_id is None
+
+        async with sessions() as session, session.begin():
+            await _complete_authorized_assistance(
+                session,
+                session_id=session_id,
+                prompt_id=assistance.interviewer_prompt_id,
+                suffix="fallback-recovery",
+            )
+            await RealtimeControlService(session).persist_candidate_transcript(
+                session_id=session_id,
+                message=CandidateTranscriptFinalizedMessage(
+                    type="candidate_transcript_finalized",
+                    client_event_id="fallback-recovery-post-hint",
+                    client_instance_id="fallback-recovery-client",
+                    client_sequence=2,
+                    provider_item_id="fallback-recovery-post-hint-item",
+                    transcript="The left boundary is monotonic because each value exits once.",
+                ),
+            )
+            interview = await session.get(InterviewSession, session_id)
+            assert interview is not None
+            await InterviewCompletionService(session).complete(
+                session_id=session_id,
+                reason="USER_ENDED",
+                expected_state_version=interview.state_version,
+                idempotency_key="fallback-recovery-complete",
+            )
+
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions, ai_gateway=gateway
+        )
+        first_evaluation = await coordinator.evaluate(session_id)
+        assert first_evaluation.completed_units == 2
+        second_evaluation = await coordinator.evaluate(session_id)
+        assert second_evaluation.skipped_units == 2
+        assert all(
+            unit.error_category == "ALREADY_EVALUATED"
+            for unit in second_evaluation.units
+        )
+        assert provider.calls == 4
+
+        async with sessions() as session:
+            assessments = list(
+                await session.scalars(
+                    select(Assessment)
+                    .where(Assessment.interview_session_id == session_id)
+                    .order_by(Assessment.created_at, Assessment.id)
+                )
+            )
+            evidence = list(
+                await session.scalars(
+                    select(Evidence)
+                    .where(Evidence.interview_session_id == session_id)
+                    .order_by(Evidence.created_at, Evidence.id)
+                )
+            )
+            assert len(assessments) == 2
+            assert len(evidence) == 2
+            assert [item.independence_level for item in evidence] == [
+                "INDEPENDENT",
+                "AFTER_LIGHT_GUIDANCE",
+            ]
+            evidence_concepts = list(
+                await session.scalars(
+                    select(EvidenceConcept).where(
+                        EvidenceConcept.evidence_id.in_([item.id for item in evidence])
+                    )
+                )
+            )
+            assert len(evidence_concepts) == 2
+            assert {item.concept_id for item in evidence_concepts} == {concept_id}
+    finally:
+        if cleanup:
+            await _cleanup(sessions, *cleanup)
+        if concept_id:
+            async with sessions() as session, session.begin():
+                await session.execute(delete(Concept).where(Concept.id == concept_id))
         await engine.dispose()
 
 

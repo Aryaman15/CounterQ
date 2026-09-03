@@ -161,7 +161,8 @@ class CoachAssistanceWorkflow:
                 unit.status == "COMPLETED" or unit.error_category == "ALREADY_EVALUATED"
                 for unit in checkpoint.units
             )
-            if checkpoint.failed_units or not checkpoint_usable:
+            metacognitive_fallback = _allows_first_metacognitive_fallback(checkpoint)
+            if not checkpoint_usable and not metacognitive_fallback:
                 await self._terminalize(prompt_id, "REJECTED")
                 return await self._result_without_prompt(
                     facts, "DEFERRED", "ACTIVE_EVIDENCE_CHECKPOINT_UNAVAILABLE"
@@ -171,6 +172,7 @@ class CoachAssistanceWorkflow:
                 facts=facts,
                 prompt_id=prompt_id,
                 checkpoint=checkpoint,
+                metacognitive_fallback=metacognitive_fallback,
             )
             if isinstance(context, AssistanceRequestResult):
                 return context
@@ -411,6 +413,7 @@ class CoachAssistanceWorkflow:
         facts: _RequestFacts,
         prompt_id: UUID,
         checkpoint: SessionEvaluationResult,
+        metacognitive_fallback: bool,
     ) -> _GenerationContext | AssistanceRequestResult:
         del command  # Candidate preference never selects software authorization.
         checkpoint_unit = checkpoint.units[0]
@@ -481,9 +484,28 @@ class CoachAssistanceWorkflow:
                     return _result_without_prompt_snapshot(
                         facts, "DENIED", decision.reason, budget
                     )
+                if metacognitive_fallback and (
+                    target is not None
+                    or decision.next_hint_level != "METACOGNITIVE"
+                    or decision.requires_gap_evidence
+                ):
+                    prompt.status = "REJECTED"
+                    budget = await _required_budget(session, facts.session_id)
+                    return _result_without_prompt_snapshot(
+                        facts,
+                        "DEFERRED",
+                        "ACTIVE_EVIDENCE_CHECKPOINT_UNAVAILABLE",
+                        budget,
+                    )
                 level = decision.next_hint_level
-                assistance_type = _select_assistance_type(
-                    level=level, unit_kind=checkpoint_unit.unit_kind, stage=facts.stage
+                assistance_type = (
+                    "METACOGNITIVE"
+                    if metacognitive_fallback
+                    else _select_assistance_type(
+                        level=level,
+                        unit_kind=checkpoint_unit.unit_kind,
+                        stage=facts.stage,
+                    )
                 )
                 invites_retry = level in {"STRUCTURAL_HINT", "DIRECT_TEACHING"}
                 available = await _required_budget(
@@ -686,6 +708,16 @@ class CoachAssistanceWorkflow:
         async with self._sessionmaker() as session:
             budget = await _required_budget(session, facts.session_id)
             return _result_without_prompt_snapshot(facts, status, reason, budget)
+
+
+def _allows_first_metacognitive_fallback(checkpoint: SessionEvaluationResult) -> bool:
+    """Admit only one malformed active evaluation to the target-null first rung."""
+
+    return (
+        len(checkpoint.units) == 1
+        and checkpoint.units[0].status == "FAILED"
+        and checkpoint.units[0].error_category == "STRUCTURED_OUTPUT_INVALID"
+    )
 
 
 def _request_facts_from_event(event: InterviewEvent) -> _RequestFacts:
