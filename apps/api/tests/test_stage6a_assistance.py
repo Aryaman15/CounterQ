@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, func, select
@@ -36,7 +38,17 @@ from app.evidence.units import (
     AssessmentUnit,
     AssessmentUnitKind,
 )
-from app.interviews.assistance import AssistanceRequestCommand, CoachAssistanceWorkflow
+from app.interviews.assistance import (
+    AssistanceRequestCommand,
+    CoachAssistanceWorkflow,
+    _causal_prior_level,
+    _DiagnosticTarget,
+)
+from app.interviews.assistance_facts import initial_final_defense_answer_captured
+from app.interviews.assistance_wording import (
+    COACH_ASSISTANCE_PURPOSE,
+    CoachAssistanceWordingService,
+)
 from app.interviews.budget_policy import assistance_budget_snapshot
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.interaction_repository import InterviewInteractionRepository
@@ -46,6 +58,7 @@ from app.interviews.models import (
     InterviewerPrompt,
     InterviewerPromptDelivery,
     InterviewSession,
+    SessionBudget,
 )
 from app.interviews.prompt_authorization import PromptAuthorizationService
 from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
@@ -65,7 +78,7 @@ from app.realtime.control_service import RealtimeControlService
 class FakeAssessmentProvider:
     provider_name = "fake"
 
-    def __init__(self, output_data: dict[str, Any]) -> None:
+    def __init__(self, output_data: dict[str, Any] | list[dict[str, Any]]) -> None:
         self.output_data = output_data
         self.calls = 0
         self.requests: list[ReasoningRequest] = []
@@ -79,8 +92,13 @@ class FakeAssessmentProvider:
     ) -> ProviderReasoningResult:
         self.calls += 1
         self.requests.append(request)
+        output = (
+            self.output_data[min(self.calls - 1, len(self.output_data) - 1)]
+            if isinstance(self.output_data, list)
+            else self.output_data
+        )
         return ProviderReasoningResult(
-            output_data=self.output_data,
+            output_data=output,
             provider=self.provider_name,
             model=model,
             provider_model_version="fake-v1",
@@ -91,6 +109,85 @@ class FakeAssessmentProvider:
             estimated_cost=Decimal("0.0001"),
             currency="USD",
         )
+
+
+class BlockingAssistanceProvider(FakeAssessmentProvider):
+    def __init__(self, *, block_purpose: str) -> None:
+        super().__init__({"findings": []})
+        self.block_purpose = block_purpose
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        if request.purpose == self.block_purpose:
+            self.started.set()
+            await self.release.wait()
+        self.output_data = (
+            {
+                "contract_version": "coach-assistance-output.v1",
+                "prompt_text": "Which invariant in the current step is least certain?",
+            }
+            if request.purpose == COACH_ASSISTANCE_PURPOSE
+            else {"findings": []}
+        )
+        return await super().reason_structured(
+            request, model=model, reasoning_effort=reasoning_effort
+        )
+
+
+async def _coach_with_transcript(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    stage: str = "IMPLEMENTATION",
+) -> tuple[UUID, tuple[UUID, UUID, UUID]]:
+    async with sessions() as session, session.begin():
+        development = await create_development_interview(
+            session, mode="COACH", initial_stage=stage
+        )
+        await RealtimeControlService(session).persist_candidate_transcript(
+            session_id=development.interview_session.id,
+            message=CandidateTranscriptFinalizedMessage(
+                type="candidate_transcript_finalized",
+                client_event_id=f"blocking-attempt-{development.interview_session.id}",
+                client_instance_id="stage6a-test",
+                client_sequence=1,
+                provider_item_id=f"candidate-{development.interview_session.id}",
+                transcript="I am testing the invariant in my current approach.",
+            ),
+        )
+        return development.interview_session.id, (
+            development.user.id,
+            development.configuration.id,
+            development.problem.id,
+        )
+
+
+def _workflow_for_provider(
+    *,
+    sessions: async_sessionmaker[AsyncSession],
+    provider: FakeAssessmentProvider,
+    tmp_path: Path,
+    transaction_probe: Any | None = None,
+) -> tuple[AIGateway, CoachAssistanceWorkflow]:
+    gateway = AIGateway(
+        settings=create_settings(env_file=tmp_path / ".env"),
+        sessionmaker=sessions,
+        provider=provider,
+        transaction_probe=transaction_probe,
+    )
+    return gateway, CoachAssistanceWorkflow(
+        sessionmaker=sessions,
+        evidence_coordinator=SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions, ai_gateway=gateway
+        ),
+        wording_service=CoachAssistanceWordingService(gateway),
+    )
 
 
 def test_mode_policy_centralizes_simulation_and_coach_budgets() -> None:
@@ -389,6 +486,191 @@ async def test_authorized_assistance_reserves_capacity_and_charges_only_actual_d
     assert empty_interrupted.delivery_state == "INTERRUPTED"
     assert empty_interrupted.transcript_segment_id is None
     assert development.budget.assistance_interventions_used == 1
+
+
+async def test_proposed_assistance_reserves_capacity_without_consuming_it(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, mode="COACH")
+    event = (
+        await InterviewRuntime(db_session).accept_event(
+            AcceptEventCommand(
+                session_id=development.interview_session.id,
+                event_type="CANDIDATE_ASSISTANCE_REQUESTED",
+                source="SYSTEM",
+                occurred_at=datetime.now(UTC),
+                idempotency_key="proposed-budget-request",
+            )
+        )
+    ).event
+    prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=development.interview_session.id,
+        origin="SYSTEM",
+        kind="INSTRUCTION",
+        intent="[pending]",
+        status="PROPOSED",
+        assistance_type="METACOGNITIVE",
+        hint_level="METACOGNITIVE",
+        assistance_trigger="CANDIDATE_REQUEST",
+        target_event_id=event.id,
+        source_event_watermark=event.server_sequence,
+    )
+    reserved = await assistance_budget_snapshot(db_session, development.interview_session.id)
+    assert reserved is not None
+    assert reserved.outstanding_assistance_interventions == 1
+    assert reserved.assistance_interventions_used == 0
+    permit = await PromptAuthorizationService(db_session).permit_delivery(
+        session_id=development.interview_session.id,
+        prompt_id=prompt.id,
+    )
+    assert permit.status == "REJECTED"
+
+    prompt.status = "REJECTED"
+    released = await assistance_budget_snapshot(db_session, development.interview_session.id)
+    assert released is not None
+    assert released.outstanding_assistance_interventions == 0
+    assert released.assistance_interventions_used == 0
+
+
+async def test_sequence_causality_escalates_only_same_target_post_delivery(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(db_session, mode="COACH")
+    concept = Concept(
+        canonical_key=f"stage6a_sequence_{development.interview_session.id.hex}",
+        display_name="Sequence target",
+        category="algorithm",
+        status="ACTIVE",
+        description="Sequence-causal assistance target",
+    )
+    db_session.add(concept)
+    skill = await db_session.scalar(
+        select(SkillDimension).where(SkillDimension.canonical_key == "correctness")
+    )
+    assert skill is not None
+    request_event = (
+        await InterviewRuntime(db_session).accept_event(
+            AcceptEventCommand(
+                session_id=development.interview_session.id,
+                event_type="CANDIDATE_ASSISTANCE_REQUESTED",
+                source="SYSTEM",
+                occurred_at=datetime.now(UTC),
+                idempotency_key="sequence-causal-request",
+            )
+        )
+    ).event
+    await db_session.flush()
+    prompt = await InterviewInteractionRepository(db_session).add_prompt(
+        interview_session_id=development.interview_session.id,
+        origin="SYSTEM",
+        kind="INSTRUCTION",
+        intent="Which invariant is uncertain?",
+        status="AUTHORIZED",
+        assistance_type="METACOGNITIVE",
+        hint_level="METACOGNITIVE",
+        assistance_trigger="CANDIDATE_REQUEST",
+        target_event_id=request_event.id,
+        target_concept_id=concept.id,
+        target_skill_dimension_id=skill.id,
+        source_event_watermark=request_event.server_sequence,
+        authorized_at=datetime.now(UTC),
+    )
+    delivery_event = (
+        await InterviewRuntime(db_session).accept_event(
+            AcceptEventCommand(
+                session_id=development.interview_session.id,
+                event_type="COUNTERQ_UTTERANCE_DELIVERED",
+                source="COUNTERQ_VOICE",
+                occurred_at=datetime.now(UTC),
+                idempotency_key="sequence-causal-delivery",
+            )
+        )
+    ).event
+    segment = await ObservationRepository(db_session).add_transcript_segment(
+        session_id=development.interview_session.id,
+        event_id=delivery_event.id,
+        speaker="COUNTERQ",
+        sequence=delivery_event.server_sequence,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        text=prompt.intent,
+        interview_stage=development.interview_session.current_stage,
+        interview_state_version=development.interview_session.state_version,
+        delivery_state="DELIVERED",
+    )
+    await InterviewInteractionRepository(db_session).add_delivery(
+        interview_session_id=development.interview_session.id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=1,
+        intended_text=prompt.intent,
+        actual_transcript_segment_id=segment.id,
+        delivery_state="DELIVERED",
+        started_at=datetime.now(UTC),
+        completed_at=datetime.now(UTC),
+    )
+
+    def target(*, concept_id: UUID, watermark: int) -> _DiagnosticTarget:
+        return _DiagnosticTarget(
+            evidence_id=uuid4(),
+            concept_id=concept_id,
+            concept_key="sequence_target",
+            skill_dimension_id=skill.id,
+            skill_dimension_key="correctness",
+            finding="Current gap",
+            boundary="sequence_boundary",
+            polarity="NEGATIVE",
+            strength="STRONG",
+            confidence=Decimal("0.99"),
+            source_watermark=watermark,
+        )
+
+    pre_level, pre_stable = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=delivery_event.server_sequence),
+    )
+    assert pre_level is None and pre_stable is True
+    post_level, post_stable = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=delivery_event.server_sequence + 1),
+    )
+    assert post_level == "METACOGNITIVE" and post_stable is False
+    unrelated_level, unrelated_stable = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=uuid4(), watermark=delivery_event.server_sequence + 1),
+    )
+    assert unrelated_level is None and unrelated_stable is False
+    assert ModePolicy.next_level(post_level) == "PROBLEM_NARROWING"
+    assert ModePolicy.next_level(unrelated_level) == "METACOGNITIVE"
+
+
+async def test_final_defense_answer_is_derived_from_durable_response(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session, mode="COACH", initial_stage="FINAL_DEFENSE"
+    )
+    session_id = development.interview_session.id
+    assert not await initial_final_defense_answer_captured(db_session, session_id)
+    persisted = await RealtimeControlService(db_session).persist_candidate_transcript(
+        session_id=session_id,
+        message=CandidateTranscriptFinalizedMessage(
+            type="candidate_transcript_finalized",
+            client_event_id="final-defense-answer",
+            client_instance_id="stage6a-test",
+            client_sequence=1,
+            provider_item_id="candidate-final-defense-answer",
+            transcript="The left boundary is monotonic because each value exits once.",
+        ),
+    )
+    assert await initial_final_defense_answer_captured(db_session, session_id)
+    assert await initial_final_defense_answer_captured(
+        db_session,
+        session_id,
+        before_sequence=persisted.server_sequence + 1,
+    )
 
 
 async def test_target_scoped_assistance_does_not_contaminate_unrelated_finding(
@@ -742,7 +1024,7 @@ async def test_simulation_request_persists_refusal_without_assistance_metadata(
         await engine.dispose()
 
 
-async def test_coach_request_requires_attempt_then_authorizes_minimum_targeted_help() -> None:
+async def test_coach_request_requires_attempt_and_defers_without_provider() -> None:
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     cleanup: tuple[UUID, UUID, UUID] | None = None
@@ -792,18 +1074,17 @@ async def test_coach_request_requires_attempt_then_authorizes_minimum_targeted_h
         )
         assert historical_retry.status == "ATTEMPT_REQUIRED"
         assert historical_retry.interviewer_prompt_id == before_attempt.interviewer_prompt_id
-        authorized = await workflow.request(
+        deferred = await workflow.request(
             AssistanceRequestCommand(
                 interview_session_id=session_id,
                 idempotency_key="coach-after-attempt",
             )
         )
-        assert authorized.status == "AUTHORIZED"
-        assert authorized.prompt_kind == "INSTRUCTION"
-        assert authorized.assistance_type == "METACOGNITIVE"
-        assert authorized.hint_level == "METACOGNITIVE"
-        assert authorized.request_event_watermark > 0
-        assert authorized.budget.outstanding_assistance_interventions == 1
+        assert deferred.status == "DEFERRED"
+        assert deferred.reason == "ASSISTANCE_PROVIDER_UNAVAILABLE"
+        assert deferred.interviewer_prompt_id is None
+        assert deferred.request_event_watermark > 0
+        assert deferred.budget.outstanding_assistance_interventions == 0
 
         retry = await workflow.request(
             AssistanceRequestCommand(
@@ -811,23 +1092,25 @@ async def test_coach_request_requires_attempt_then_authorizes_minimum_targeted_h
                 idempotency_key="coach-after-attempt",
             )
         )
-        assert retry.interviewer_prompt_id == authorized.interviewer_prompt_id
-        assert retry.reason == "IDEMPOTENT_ASSISTANCE_REQUEST"
+        assert retry.interviewer_prompt_id is None
+        assert retry.reason == "ASSISTANCE_PROVIDER_UNAVAILABLE"
         concurrent = await workflow.request(
             AssistanceRequestCommand(
                 interview_session_id=session_id,
                 idempotency_key="coach-concurrent-request",
             )
         )
-        assert concurrent.interviewer_prompt_id == authorized.interviewer_prompt_id
-        assert concurrent.reason == "OUTSTANDING_ASSISTANCE_ALREADY_AUTHORIZED"
+        assert concurrent.interviewer_prompt_id is None
+        assert concurrent.reason == "ASSISTANCE_PROVIDER_UNAVAILABLE"
     finally:
         if cleanup:
             await _cleanup(sessions, *cleanup)
         await engine.dispose()
 
 
-async def test_candidate_progress_suppresses_authorized_assistance_before_delivery() -> None:
+async def test_candidate_progress_suppresses_authorized_assistance_before_delivery(
+    tmp_path: Path,
+) -> None:
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     cleanup: tuple[UUID, UUID, UUID] | None = None
@@ -842,21 +1125,44 @@ async def test_candidate_progress_suppresses_authorized_assistance_before_delive
                 development.problem.id,
             )
             session_id = development.interview_session.id
-            await InterviewRuntime(session).accept_event(
-                AcceptEventCommand(
-                    session_id=session_id,
-                    event_type="MEANINGFUL_CODE_CHANGE",
-                    source="NATIVE_EDITOR",
-                    occurred_at=datetime.now(UTC),
-                    idempotency_key="stale-attempt",
-                )
+            await RealtimeControlService(session).persist_candidate_transcript(
+                session_id=session_id,
+                message=CandidateTranscriptFinalizedMessage(
+                    type="candidate_transcript_finalized",
+                    client_event_id="stale-attempt",
+                    client_instance_id="stage6a-test",
+                    client_sequence=1,
+                    provider_item_id="candidate-stale-attempt",
+                    transcript="I am uncertain about the invariant in my approach.",
+                ),
             )
-        result = await CoachAssistanceWorkflow(sessionmaker=sessions).request(
+        provider = FakeAssessmentProvider(
+            [
+                {"findings": []},
+                {
+                    "contract_version": "coach-assistance-output.v1",
+                    "prompt_text": "Which part of your current invariant feels least certain?",
+                },
+            ]
+        )
+        gateway = AIGateway(
+            settings=create_settings(env_file=tmp_path / ".env"),
+            sessionmaker=sessions,
+            provider=provider,
+        )
+        result = await CoachAssistanceWorkflow(
+            sessionmaker=sessions,
+            evidence_coordinator=SessionEvidenceEvaluationCoordinator(
+                sessionmaker=sessions, ai_gateway=gateway
+            ),
+            wording_service=CoachAssistanceWordingService(gateway),
+        ).request(
             AssistanceRequestCommand(
                 interview_session_id=session_id,
                 idempotency_key="stale-hint",
             )
         )
+        assert result.status == "AUTHORIZED"
         assert result.interviewer_prompt_id is not None
         async with sessions() as session, session.begin():
             await InterviewRuntime(session).accept_event(
@@ -882,6 +1188,265 @@ async def test_candidate_progress_suppresses_authorized_assistance_before_delive
     finally:
         if cleanup:
             await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_candidate_progress_during_active_checkpoint_prevents_wording(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = BlockingAssistanceProvider(
+        block_purpose=CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE
+    )
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        task = asyncio.create_task(
+            workflow.request(
+                AssistanceRequestCommand(session_id, "progress-during-checkpoint")
+            )
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        async with sessions() as session, session.begin():
+            await InterviewRuntime(session).accept_event(
+                AcceptEventCommand(
+                    session_id=session_id,
+                    event_type="MEANINGFUL_CODE_CHANGE",
+                    source="NATIVE_EDITOR",
+                    occurred_at=datetime.now(UTC),
+                    idempotency_key="progress-arrived-during-checkpoint",
+                )
+            )
+        provider.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "DEFERRED"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 1
+        assert all(request.purpose != COACH_ASSISTANCE_PURPOSE for request in provider.requests)
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "STALE"
+            budget = await assistance_budget_snapshot(session, session_id)
+            assert budget is not None
+            assert budget.outstanding_assistance_interventions == 0
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_candidate_progress_during_wording_prevents_authorization(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = BlockingAssistanceProvider(block_purpose=COACH_ASSISTANCE_PURPOSE)
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        task = asyncio.create_task(
+            workflow.request(AssistanceRequestCommand(session_id, "progress-during-wording"))
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        async with sessions() as session, session.begin():
+            await InterviewRuntime(session).accept_event(
+                AcceptEventCommand(
+                    session_id=session_id,
+                    event_type="TRANSCRIPT_FINALIZED",
+                    source="CANDIDATE_VOICE",
+                    occurred_at=datetime.now(UTC),
+                    idempotency_key="voice-progress-during-wording",
+                )
+            )
+        provider.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "DEFERRED"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 2
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "STALE"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_code_change_during_wording_stales_captured_snapshot(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessions() as session, session.begin():
+        development = await create_development_interview(
+            session, mode="COACH", initial_stage="IMPLEMENTATION"
+        )
+        cleanup = (
+            development.user.id,
+            development.configuration.id,
+            development.problem.id,
+        )
+        session_id = development.interview_session.id
+        service = RealtimeControlService(session)
+        await service.persist_candidate_code_snapshot(
+            session_id=session_id,
+            message=CandidateCodeSnapshotMessage(
+                type="candidate_code_snapshot",
+                client_event_id="wording-code-initial",
+                client_instance_id="stage6a-test",
+                client_sequence=1,
+                source_code="int value = 0;",
+                language="cpp",
+                trigger="INITIAL_EDITOR_STATE",
+            ),
+        )
+        captured = await service.persist_candidate_code_snapshot(
+            session_id=session_id,
+            message=CandidateCodeSnapshotMessage(
+                type="candidate_code_snapshot",
+                client_event_id="wording-code-attempt",
+                client_instance_id="stage6a-test",
+                client_sequence=2,
+                source_code="int value = 1;",
+                language="cpp",
+                trigger="EDIT_BURST",
+            ),
+        )
+    provider = BlockingAssistanceProvider(block_purpose=COACH_ASSISTANCE_PURPOSE)
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        task = asyncio.create_task(
+            workflow.request(AssistanceRequestCommand(session_id, "code-during-wording"))
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        async with sessions() as session, session.begin():
+            await RealtimeControlService(session).persist_candidate_code_snapshot(
+                session_id=session_id,
+                message=CandidateCodeSnapshotMessage(
+                    type="candidate_code_snapshot",
+                    client_event_id="wording-code-progress",
+                    client_instance_id="stage6a-test",
+                    client_sequence=3,
+                    source_code="int value = 2;",
+                    language="cpp",
+                    trigger="EDIT_BURST",
+                ),
+            )
+        provider.release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.status == "DEFERRED"
+        assert result.interviewer_prompt_id is None
+        wording_payload = json.loads(provider.requests[1].input_content)
+        captured_payload = wording_payload["untrusted_candidate_context"]["content"][
+            "current_code_snapshot"
+        ]
+        assert captured_payload["id"] == str(captured.snapshot_id)
+        assert captured_payload["version_number"] == captured.version_number
+        assert captured_payload["source_code"] == "int value = 1;"
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "STALE"
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_concurrent_same_request_uses_one_proposed_slot_and_wording_call(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = BlockingAssistanceProvider(block_purpose=COACH_ASSISTANCE_PURPOSE)
+    probe_values: list[bool] = []
+    gateway_holder: dict[str, AIGateway] = {}
+
+    def transaction_probe() -> bool:
+        active = gateway_holder["gateway"].active_transaction_count > 0
+        probe_values.append(active)
+        return active
+
+    gateway, workflow = _workflow_for_provider(
+        sessions=sessions,
+        provider=provider,
+        tmp_path=tmp_path,
+        transaction_probe=transaction_probe,
+    )
+    gateway_holder["gateway"] = gateway
+    command = AssistanceRequestCommand(session_id, "concurrent-same-request")
+    try:
+        first_task = asyncio.create_task(workflow.request(command))
+        await asyncio.wait_for(provider.started.wait(), timeout=5)
+        duplicate = await workflow.request(command)
+        assert duplicate.status == "DEFERRED"
+        assert duplicate.reason == "ASSISTANCE_GENERATION_IN_PROGRESS"
+        assert duplicate.interviewer_prompt_id is None
+        async with sessions() as session:
+            budget = await assistance_budget_snapshot(session, session_id)
+            assert budget is not None
+            assert budget.outstanding_assistance_interventions == 1
+            assert budget.assistance_interventions_used == 0
+        provider.release.set()
+        first = await asyncio.wait_for(first_task, timeout=5)
+        assert first.status == "AUTHORIZED"
+        assert first.interviewer_prompt_id is not None
+        assert provider.calls == 2
+        assert sum(
+            request.purpose == COACH_ASSISTANCE_PURPOSE for request in provider.requests
+        ) == 1
+        assert probe_values and not any(probe_values)
+    finally:
+        await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_malformed_wording_rejects_reservation_and_releases_capacity(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    session_id, cleanup = await _coach_with_transcript(sessions)
+    provider = FakeAssessmentProvider([{"findings": []}, {"unexpected": "shape"}])
+    _gateway, workflow = _workflow_for_provider(
+        sessions=sessions, provider=provider, tmp_path=tmp_path
+    )
+    try:
+        result = await workflow.request(
+            AssistanceRequestCommand(session_id, "malformed-wording")
+        )
+        assert result.status == "DEFERRED"
+        assert result.reason == "ASSISTANCE_WORDING_UNAVAILABLE"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 2
+        async with sessions() as session:
+            prompt = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert prompt is not None and prompt.status == "REJECTED"
+            budget = await assistance_budget_snapshot(session, session_id)
+            assert budget is not None
+            assert budget.outstanding_assistance_interventions == 0
+    finally:
+        await _cleanup(sessions, *cleanup)
         await engine.dispose()
 
 
@@ -934,7 +1499,8 @@ async def test_active_checkpoint_is_one_shot_and_reused_post_interview(tmp_path:
             concept_key = concept.canonical_key
 
         provider = FakeAssessmentProvider(
-            {
+            [
+                {
                 "findings": [
                     {
                         "assessment_dimension": "CORRECTNESS",
@@ -952,22 +1518,29 @@ async def test_active_checkpoint_is_one_shot_and_reused_post_interview(tmp_path:
                         "breakpoint_severity": "HIGH",
                     }
                 ]
-            }
+                },
+                {
+                    "contract_version": "coach-assistance-output.v1",
+                    "prompt_text": "Which left-pointer invariant is least certain?",
+                },
+            ]
+        )
+        gateway = AIGateway(
+            settings=create_settings(env_file=tmp_path / ".env"),
+            sessionmaker=sessions,
+            provider=provider,
         )
         coordinator = SessionEvidenceEvaluationCoordinator(
-            sessionmaker=sessions,
-            ai_gateway=AIGateway(
-                settings=create_settings(env_file=tmp_path / ".env"),
-                sessionmaker=sessions,
-                provider=provider,
-            ),
+            sessionmaker=sessions, ai_gateway=gateway
         )
         active = await coordinator.evaluate_active_checkpoint(session_id)
         assert active.completed_units == 1
         assert provider.calls == 1
         assert provider.requests[0].purpose == CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE
         assistance = await CoachAssistanceWorkflow(
-            sessionmaker=sessions, evidence_coordinator=coordinator
+            sessionmaker=sessions,
+            evidence_coordinator=coordinator,
+            wording_service=CoachAssistanceWordingService(gateway),
         ).request(
             AssistanceRequestCommand(
                 interview_session_id=session_id,
@@ -978,7 +1551,23 @@ async def test_active_checkpoint_is_one_shot_and_reused_post_interview(tmp_path:
         assert assistance.hint_level == "METACOGNITIVE"
         assert assistance.target_concept_id == concept_id
         assert assistance.target_skill_dimension_id is not None
-        assert provider.calls == 1
+        assert provider.calls == 2
+        assert provider.requests[1].purpose == COACH_ASSISTANCE_PURPOSE
+        assert provider.requests[1].capability == "STANDARD_REASONING"
+        assert provider.requests[1].policy.policy_key == "coach_assistance"
+        assert provider.requests[1].policy.version == "v1"
+        assert provider.requests[1].output_json_schema["properties"][
+            "contract_version"
+        ]["const"] == "coach-assistance-output.v1"
+        wording_payload = json.loads(provider.requests[1].input_content)
+        assert wording_payload["trusted_context"]["software_authorization"] == {
+            "assistance_type": "METACOGNITIVE",
+            "selected_hint_level": "METACOGNITIVE",
+        }
+        assert wording_payload["trusted_context"]["diagnostic_target"][
+            "concept_key"
+        ] == concept_key
+        assert wording_payload["untrusted_candidate_context"]["authority"] == "NONE"
         async with sessions() as session, session.begin():
             interview = await session.get(InterviewSession, session_id)
             assert interview is not None
@@ -988,17 +1577,29 @@ async def test_active_checkpoint_is_one_shot_and_reused_post_interview(tmp_path:
         post = await coordinator.evaluate(session_id)
         assert post.skipped_units == 1
         assert post.units[0].error_category == "ALREADY_EVALUATED"
-        assert provider.calls == 1
+        assert provider.calls == 2
         async with sessions() as session:
             evidence = await session.scalar(
                 select(Evidence).where(Evidence.interview_session_id == session_id)
             )
-            invocation = await session.scalar(
-                select(AIInvocation).where(AIInvocation.interview_session_id == session_id)
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(
+                        AIInvocation.interview_session_id == session_id
+                    )
+                )
             )
             assert evidence is not None and evidence.independence_level == "INDEPENDENT"
-            assert invocation is not None
-            assert invocation.purpose == CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE
+            assert {item.purpose for item in invocations} == {
+                CANDIDATE_RESPONSE_ASSESSMENT_PURPOSE,
+                COACH_ASSISTANCE_PURPOSE,
+            }
+            budget = await session.scalar(
+                select(SessionBudget).where(SessionBudget.session_id == session_id)
+            )
+            assert budget is not None
+            assert budget.deep_reasoning_used == 2
+            assert budget.reserved_post_interview_deep_reasoning_calls == 16
     finally:
         if cleanup:
             await _cleanup(sessions, *cleanup)

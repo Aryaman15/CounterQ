@@ -19,6 +19,7 @@ from app.interviews.assistance import (
     AssistanceRequestResult,
     CoachAssistanceWorkflow,
 )
+from app.interviews.assistance_wording import CoachAssistanceWordingService
 from app.interviews.mode_policy import ModePolicy
 from app.interviews.runtime import InterviewRuntimeError
 
@@ -99,25 +100,29 @@ async def request_candidate_assistance(
 ) -> CandidateAssistanceResponse:
     sessionmaker = get_sessionmaker()
     evidence_coordinator: SessionEvidenceEvaluationCoordinator | None = None
+    wording_service: CoachAssistanceWordingService | None = None
     try:
         provider = build_reasoning_provider(settings)
     except ReasoningProviderConfigurationError:
-        # The deterministic policy remains available. Without a configured
-        # provider the workflow cannot unlock assistance beyond metacognition.
+        # Refusal/no-attempt behavior remains deterministic. Technical help is
+        # deferred because candidate-visible assistance has no fallback prose.
         provider = None
     if provider is not None:
+        gateway = AIGateway(
+            settings=settings,
+            sessionmaker=sessionmaker,
+            provider=provider,
+        )
         evidence_coordinator = SessionEvidenceEvaluationCoordinator(
             sessionmaker=sessionmaker,
-            ai_gateway=AIGateway(
-                settings=settings,
-                sessionmaker=sessionmaker,
-                provider=provider,
-            ),
+            ai_gateway=gateway,
         )
+        wording_service = CoachAssistanceWordingService(gateway)
     try:
         result = await CoachAssistanceWorkflow(
             sessionmaker=sessionmaker,
             evidence_coordinator=evidence_coordinator,
+            wording_service=wording_service,
         ).request(
             AssistanceRequestCommand(
                 interview_session_id=interview_session_id,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -104,8 +105,9 @@ async def assistance_budget_snapshot(
     session_id: object,
     *,
     for_update: bool = False,
+    exclude_prompt_id: UUID | None = None,
 ) -> AssistanceBudgetSnapshot | None:
-    """Count delivered usage plus outstanding authorization reservations."""
+    """Count delivered usage plus PROPOSED/AUTHORIZED reservations."""
 
     statement = select(SessionBudget).where(SessionBudget.session_id == session_id)
     if for_update:
@@ -113,14 +115,24 @@ async def assistance_budget_snapshot(
     budget = await session.scalar(statement)
     if budget is None:
         return None
-    total_reserved = await _outstanding_assistance(session, session_id)
+    total_reserved = await _outstanding_assistance(
+        session, session_id, exclude_prompt_id=exclude_prompt_id
+    )
     structural_reserved = await _outstanding_assistance(
-        session, session_id, hint_level="STRUCTURAL_HINT"
+        session,
+        session_id,
+        hint_level="STRUCTURAL_HINT",
+        exclude_prompt_id=exclude_prompt_id,
     )
     teaching_reserved = await _outstanding_assistance(
-        session, session_id, hint_level="DIRECT_TEACHING"
+        session,
+        session_id,
+        hint_level="DIRECT_TEACHING",
+        exclude_prompt_id=exclude_prompt_id,
     )
-    retry_reserved = await _outstanding_assistance(session, session_id, guided_retry=True)
+    retry_reserved = await _outstanding_assistance(
+        session, session_id, guided_retry=True, exclude_prompt_id=exclude_prompt_id
+    )
     return AssistanceBudgetSnapshot(
         max_assistance_interventions=budget.max_assistance_interventions,
         assistance_interventions_used=budget.assistance_interventions_used,
@@ -178,13 +190,16 @@ async def _outstanding_assistance(
     *,
     hint_level: str | None = None,
     guided_retry: bool = False,
+    exclude_prompt_id: UUID | None = None,
 ) -> int:
     statement = (
         select(func.count(InterviewerPrompt.id))
         .where(InterviewerPrompt.interview_session_id == session_id)
-        .where(InterviewerPrompt.status == "AUTHORIZED")
+        .where(InterviewerPrompt.status.in_(("PROPOSED", "AUTHORIZED")))
         .where(InterviewerPrompt.assistance_type.is_not(None))
     )
+    if exclude_prompt_id is not None:
+        statement = statement.where(InterviewerPrompt.id != exclude_prompt_id)
     if hint_level is not None:
         statement = statement.where(InterviewerPrompt.hint_level == hint_level)
     if guided_retry:

@@ -14,8 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.evidence.models import Evidence, EvidenceConcept, EvidenceSkill
 from app.examiner.models import CandidateClaim, ExaminerDecision
+from app.interviews.assistance_facts import initial_final_defense_answer_captured
 from app.interviews.budget_policy import assistance_budget_snapshot, probe_budget_snapshot
 from app.interviews.interaction_repository import InterviewInteractionRepository
+from app.interviews.mode_policy import ASSISTANCE_ALLOWED_STAGES
 from app.interviews.models import (
     InterviewConfiguration,
     InterviewerPrompt,
@@ -381,15 +383,7 @@ class PromptAuthorizationService:
         timing = await InterviewRuntime(self._session, clock=self._clock).time_policy(interview.id)
         if timing is None or timing.pressure in {"DEFENSE_RESERVED", "WRAP_ONLY"}:
             return ("EXPIRED", "Protected closeout time suppresses new assistance.")
-        if interview.current_stage not in {
-            "PROBLEM_UNDERSTANDING",
-            "APPROACH_DISCOVERY",
-            "APPROACH_DEFENSE",
-            "IMPLEMENTATION",
-            "TESTING_DEBUGGING",
-            "COMPLEXITY_EDGE_CASES",
-            "CONSTRAINT_MUTATION",
-        }:
+        if interview.current_stage not in ASSISTANCE_ALLOWED_STAGES:
             return ("STALE", "Assistance is no longer legal in the current stage.")
         if prompt.target_event_id is None or prompt.source_event_watermark is None:
             return ("STALE", "Assistance provenance is incomplete.")
@@ -402,6 +396,14 @@ class PromptAuthorizationService:
             return ("STALE", "Assistance target event is unavailable.")
         if prompt.source_event_watermark != event.server_sequence:
             return ("STALE", "Assistance watermark does not match its request event.")
+        if interview.current_stage == "FINAL_DEFENSE" and not (
+            await initial_final_defense_answer_captured(
+                self._session,
+                interview.id,
+                before_sequence=prompt.source_event_watermark,
+            )
+        ):
+            return ("STALE", "Final Defense assistance requires an initial answer.")
         if event.code_snapshot_id != prompt.source_code_snapshot_id:
             return ("STALE", "Assistance code provenance does not match its request event.")
         latest_candidate_progress = await self._session.scalar(
