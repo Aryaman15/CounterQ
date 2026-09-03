@@ -435,12 +435,13 @@ class CoachAssistanceWorkflow:
                 )
                 any_prior = await _any_delivered_assistance(session, facts.session_id)
                 prior_level, same_target_without_new_failure = await _causal_prior_level(
-                    session, facts.session_id, target
+                    session,
+                    facts.session_id,
+                    target,
+                    delivery_stage=(
+                        "FINAL_DEFENSE" if facts.stage == "FINAL_DEFENSE" else None
+                    ),
                 )
-                if facts.stage == "FINAL_DEFENSE":
-                    # Final Defense starts a fresh independent diagnostic attempt.
-                    prior_level = None
-                    same_target_without_new_failure = False
                 if target is None and any_prior:
                     prompt.status = "CANCELLED"
                     budget = await _required_budget(session, facts.session_id)
@@ -835,7 +836,11 @@ async def _select_checkpoint_target(
 
 
 async def _causal_prior_level(
-    session: AsyncSession, session_id: UUID, target: _DiagnosticTarget | None
+    session: AsyncSession,
+    session_id: UUID,
+    target: _DiagnosticTarget | None,
+    *,
+    delivery_stage: str | None = None,
 ) -> tuple[str | None, bool]:
     if target is None:
         return None, False
@@ -848,35 +853,59 @@ async def _causal_prior_level(
             )
         )
     )
-    causal: list[str] = []
-    matched_without_new_failure = False
+    applicable: list[tuple[int, str, UUID]] = []
     for prompt in prompts:
-        delivery_watermark = await _delivery_watermark(session, prompt.id)
+        delivery_watermark = await _delivery_watermark(
+            session, prompt.id, delivery_stage=delivery_stage
+        )
         if delivery_watermark is None:
             continue
-        exact_target = (
-            prompt.target_concept_id == target.concept_id
-            and prompt.target_skill_dimension_id == target.skill_dimension_id
-            and (target.concept_id is not None or target.skill_dimension_id is not None)
-        )
+        targeted = _assistance_target_matches(prompt, target)
         broad_direct_response = (
             prompt.target_concept_id is None
             and prompt.target_skill_dimension_id is None
             and await _evidence_directly_answers_prompt(session, target.evidence_id, prompt.id)
         )
-        if not (exact_target or broad_direct_response):
+        if not (targeted or broad_direct_response):
             continue
-        if target.source_watermark > delivery_watermark:
-            causal.append(cast(str, prompt.hint_level))
-        else:
-            matched_without_new_failure = True
-    if not causal:
-        return None, matched_without_new_failure
-    return max(causal, key=lambda level: HINT_LADDER.index(cast(str, level))), False
+        applicable.append((delivery_watermark, cast(str, prompt.hint_level), prompt.id))
+    if not applicable:
+        return None, False
+    latest_watermark = max(item[0] for item in applicable)
+    if target.source_watermark <= latest_watermark:
+        return None, True
+    # The latest delivery proves whether the ladder may advance. Once tested,
+    # preserve the strongest delivered rung so malformed historical ordering
+    # can never de-escalate assistance.
+    prior_level = max(
+        (item[1] for item in applicable),
+        key=lambda level: HINT_LADDER.index(cast(str, level)),
+    )
+    return prior_level, False
 
 
-async def _delivery_watermark(session: AsyncSession, prompt_id: UUID) -> int | None:
-    value = await session.scalar(
+def _assistance_target_matches(
+    prompt: InterviewerPrompt, target: _DiagnosticTarget
+) -> bool:
+    if (
+        prompt.target_concept_id is not None
+        and prompt.target_skill_dimension_id is not None
+    ):
+        return (
+            prompt.target_concept_id == target.concept_id
+            and prompt.target_skill_dimension_id == target.skill_dimension_id
+        )
+    if prompt.target_concept_id is not None:
+        return prompt.target_concept_id == target.concept_id
+    if prompt.target_skill_dimension_id is not None:
+        return prompt.target_skill_dimension_id == target.skill_dimension_id
+    return False
+
+
+async def _delivery_watermark(
+    session: AsyncSession, prompt_id: UUID, *, delivery_stage: str | None = None
+) -> int | None:
+    query = (
         select(func.max(InterviewEvent.server_sequence))
         .select_from(InterviewerPromptDelivery)
         .join(
@@ -891,6 +920,9 @@ async def _delivery_watermark(session: AsyncSession, prompt_id: UUID) -> int | N
             ),
         )
     )
+    if delivery_stage is not None:
+        query = query.where(TranscriptSegment.interview_stage == delivery_stage)
+    value = await session.scalar(query)
     return int(value) if value is not None else None
 
 

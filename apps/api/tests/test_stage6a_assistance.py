@@ -190,6 +190,142 @@ def _workflow_for_provider(
     )
 
 
+def _negative_finding(concept_key: str) -> dict[str, object]:
+    return {
+        "findings": [
+            {
+                "assessment_dimension": "CORRECTNESS",
+                "polarity": "NEGATIVE",
+                "confidence": 0.95,
+                "technical_rationale": "The same invariant remains unsupported.",
+                "evidence_finding": "The candidate repeats the same invariant error.",
+                "proposed_strength": "MODERATE",
+                "source_aliases": ["source_1"],
+                "concept_keys": [concept_key],
+                "skill_dimension_keys": ["correctness"],
+                "boundary_kind": "MEANINGFUL_TECHNICAL_BOUNDARY",
+                "breakpoint_subtype": "left_pointer_monotonicity",
+                "breakpoint_effect": "WEAKNESS",
+                "breakpoint_severity": "HIGH",
+            }
+        ]
+    }
+
+
+def _wording_output(level: str) -> dict[str, object]:
+    return {
+        "contract_version": "coach-assistance-output.v1",
+        "prompt_text": f"Continue with one bounded {level.lower()} step.",
+    }
+
+
+async def _deliver_assistance_prompt(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    suffix: str,
+    stage: str,
+    level: str | None = None,
+    prompt_id: UUID | None = None,
+    target_concept_id: UUID | None = None,
+    target_skill_dimension_id: UUID | None = None,
+) -> tuple[InterviewerPrompt, int]:
+    repository = InterviewInteractionRepository(session)
+    runtime = InterviewRuntime(session)
+    if prompt_id is None:
+        request_event = (
+            await runtime.accept_event(
+                AcceptEventCommand(
+                    session_id=session_id,
+                    event_type="CANDIDATE_ASSISTANCE_REQUESTED",
+                    source="SYSTEM",
+                    occurred_at=datetime.now(UTC),
+                    idempotency_key=f"{suffix}-request",
+                    payload={"captured_stage": stage},
+                )
+            )
+        ).event
+        assert level is not None
+        prompt = await repository.add_prompt(
+            interview_session_id=session_id,
+            origin="SYSTEM",
+            kind="INSTRUCTION",
+            intent=f"{level} assistance for {suffix}.",
+            status="AUTHORIZED",
+            assistance_type=level,
+            hint_level=level,
+            assistance_trigger="CANDIDATE_REQUEST",
+            target_event_id=request_event.id,
+            target_concept_id=target_concept_id,
+            target_skill_dimension_id=target_skill_dimension_id,
+            source_event_watermark=request_event.server_sequence,
+            authorized_at=datetime.now(UTC),
+        )
+    else:
+        loaded_prompt = await session.get(InterviewerPrompt, prompt_id)
+        assert loaded_prompt is not None and loaded_prompt.hint_level is not None
+        prompt = loaded_prompt
+    delivery = await repository.add_delivery(
+        interview_session_id=session_id,
+        interviewer_prompt_id=prompt.id,
+        delivery_attempt=1,
+        intended_text=prompt.intent,
+        delivery_state="STARTED",
+        started_at=datetime.now(UTC),
+    )
+    delivery_event = (
+        await runtime.accept_event(
+            AcceptEventCommand(
+                session_id=session_id,
+                event_type="COUNTERQ_UTTERANCE_DELIVERED",
+                source="COUNTERQ_VOICE",
+                occurred_at=datetime.now(UTC),
+                idempotency_key=f"{suffix}-delivery",
+                payload={"prompt_delivery_id": str(delivery.id)},
+            )
+        )
+    ).event
+    segment = await ObservationRepository(session).add_transcript_segment(
+        session_id=session_id,
+        event_id=delivery_event.id,
+        speaker="COUNTERQ",
+        sequence=delivery_event.server_sequence,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        text=prompt.intent,
+        interview_stage=stage,
+        interview_state_version=delivery_event.interview_state_version,
+        delivery_state="DELIVERED",
+    )
+    delivery.delivery_state = "DELIVERED"
+    delivery.actual_transcript_segment_id = segment.id
+    delivery.completed_at = datetime.now(UTC)
+    prompt.status = "DELIVERED"
+    await session.flush()
+    return prompt, delivery_event.server_sequence
+
+
+async def _persist_candidate_answer(
+    session: AsyncSession,
+    *,
+    session_id: UUID,
+    suffix: str,
+    client_sequence: int,
+) -> int:
+    result = await RealtimeControlService(session).persist_candidate_transcript(
+        session_id=session_id,
+        message=CandidateTranscriptFinalizedMessage(
+            type="candidate_transcript_finalized",
+            client_event_id=f"{suffix}-candidate-event",
+            client_instance_id="stage6a-causal-test",
+            client_sequence=client_sequence,
+            provider_item_id=f"{suffix}-candidate-item",
+            transcript="I still believe the same invalid invariant holds.",
+        ),
+    )
+    return result.server_sequence
+
+
 def test_mode_policy_centralizes_simulation_and_coach_budgets() -> None:
     policy = ModePolicy()
     assert policy.assistance_budget("SIMULATION").max_assistance_interventions == 0
@@ -213,6 +349,72 @@ def test_mode_policy_centralizes_simulation_and_coach_budgets() -> None:
         )
         is False
     )
+
+
+def test_final_defense_normal_uses_full_progressive_ladder() -> None:
+    policy = ModePolicy()
+    expected = (
+        (None, "METACOGNITIVE"),
+        ("METACOGNITIVE", "PROBLEM_NARROWING"),
+        ("PROBLEM_NARROWING", "CONCEPTUAL_HINT"),
+        ("CONCEPTUAL_HINT", "STRUCTURAL_HINT"),
+        ("STRUCTURAL_HINT", "DIRECT_TEACHING"),
+    )
+    for prior, next_level in expected:
+        decision = policy.evaluate_assistance(
+            mode="COACH",
+            stage="FINAL_DEFENSE",
+            time_pressure="NORMAL",
+            meaningful_attempt_exists=True,
+            gap_evidence_exists=True,
+            highest_delivered_level=prior,
+            initial_final_defense_answer_captured=True,
+        )
+        assert decision.allowed is True
+        assert decision.next_hint_level == next_level
+        assert decision.maximum_hint_level == "DIRECT_TEACHING"
+    assert policy.direct_teaching_allowed(
+        mode="COACH",
+        stage="FINAL_DEFENSE",
+        time_pressure="NORMAL",
+        gap_evidence_exists=True,
+        prior_lower_level_assistance_failed=True,
+    )
+
+    constrained = policy.evaluate_assistance(
+        mode="COACH",
+        stage="FINAL_DEFENSE",
+        time_pressure="CONSTRAINED",
+        meaningful_attempt_exists=True,
+        gap_evidence_exists=True,
+        highest_delivered_level="PROBLEM_NARROWING",
+        initial_final_defense_answer_captured=True,
+    )
+    assert constrained.allowed is True
+    assert constrained.next_hint_level == "CONCEPTUAL_HINT"
+    capped = policy.evaluate_assistance(
+        mode="COACH",
+        stage="FINAL_DEFENSE",
+        time_pressure="CONSTRAINED",
+        meaningful_attempt_exists=True,
+        gap_evidence_exists=True,
+        highest_delivered_level="CONCEPTUAL_HINT",
+        initial_final_defense_answer_captured=True,
+    )
+    assert capped.allowed is False
+    assert capped.reason == "TIME_PRESSURE_CAP_REACHED"
+    for pressure in ("DEFENSE_RESERVED", "WRAP_ONLY"):
+        protected = policy.evaluate_assistance(
+            mode="COACH",
+            stage="FINAL_DEFENSE",
+            time_pressure=pressure,  # type: ignore[arg-type]
+            meaningful_attempt_exists=True,
+            gap_evidence_exists=True,
+            highest_delivered_level=None,
+            initial_final_defense_answer_captured=True,
+        )
+        assert protected.allowed is False
+        assert protected.reason == f"{pressure}_PROHIBITS_ASSISTANCE"
 
 
 def test_bootstrap_cannot_switch_mode_during_restoration() -> None:
@@ -644,6 +846,398 @@ async def test_sequence_causality_escalates_only_same_target_post_delivery(
     assert unrelated_level is None and unrelated_stable is False
     assert ModePolicy.next_level(post_level) == "PROBLEM_NARROWING"
     assert ModePolicy.next_level(unrelated_level) == "METACOGNITIVE"
+    defense_level, defense_stable = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=delivery_event.server_sequence + 1),
+        delivery_stage="FINAL_DEFENSE",
+    )
+    assert defense_level is None and defense_stable is False
+
+    first_failure = (
+        await InterviewRuntime(db_session).accept_event(
+            AcceptEventCommand(
+                session_id=development.interview_session.id,
+                event_type="MEANINGFUL_CODE_CHANGE",
+                source="NATIVE_EDITOR",
+                occurred_at=datetime.now(UTC),
+                idempotency_key="sequence-causal-first-failure",
+            )
+        )
+    ).event
+    causal_l1, _ = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=first_failure.server_sequence),
+    )
+    assert causal_l1 == "METACOGNITIVE"
+    _, l2_delivery_sequence = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix="sequence-causal-l2",
+        stage=development.interview_session.current_stage,
+        level="PROBLEM_NARROWING",
+        target_concept_id=concept.id,
+        target_skill_dimension_id=skill.id,
+    )
+    assert l2_delivery_sequence > first_failure.server_sequence
+    untested_l2, stable_after_l2 = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=first_failure.server_sequence),
+    )
+    assert untested_l2 is None and stable_after_l2 is True
+
+    second_failure = (
+        await InterviewRuntime(db_session).accept_event(
+            AcceptEventCommand(
+                session_id=development.interview_session.id,
+                event_type="MEANINGFUL_CODE_CHANGE",
+                source="NATIVE_EDITOR",
+                occurred_at=datetime.now(UTC),
+                idempotency_key="sequence-causal-second-failure",
+            )
+        )
+    ).event
+    causal_l2, stable_after_new_failure = await _causal_prior_level(
+        db_session,
+        development.interview_session.id,
+        target(concept_id=concept.id, watermark=second_failure.server_sequence),
+    )
+    assert causal_l2 == "PROBLEM_NARROWING"
+    assert stable_after_new_failure is False
+    assert ModePolicy.next_level(causal_l2) == "CONCEPTUAL_HINT"
+
+
+@pytest.mark.parametrize(
+    ("prompt_scope", "expected_relevant"),
+    (
+        ("CONCEPT_ONLY", True),
+        ("SKILL_ONLY", True),
+        ("BOTH_DIFFERENT_SKILL", False),
+        ("UNRELATED_CONCEPT", False),
+    ),
+)
+async def test_causal_assistance_target_matching_uses_populated_dimensions(
+    db_session: AsyncSession,
+    prompt_scope: str,
+    expected_relevant: bool,
+) -> None:
+    development = await create_development_interview(db_session, mode="COACH")
+    concept = Concept(
+        canonical_key=f"stage6a_scope_{prompt_scope}_{development.interview_session.id.hex}",
+        display_name="Current concept",
+        category="algorithm",
+        status="ACTIVE",
+        description="Current causal target",
+    )
+    other_concept = Concept(
+        canonical_key=f"stage6a_other_{prompt_scope}_{development.interview_session.id.hex}",
+        display_name="Other concept",
+        category="algorithm",
+        status="ACTIVE",
+        description="Unrelated causal target",
+    )
+    db_session.add_all([concept, other_concept])
+    await db_session.flush()
+    correctness = await db_session.scalar(
+        select(SkillDimension).where(SkillDimension.canonical_key == "correctness")
+    )
+    debugging = await db_session.scalar(
+        select(SkillDimension).where(SkillDimension.canonical_key == "debugging")
+    )
+    assert correctness is not None and debugging is not None
+    prompt_concept_id = (
+        None
+        if prompt_scope == "SKILL_ONLY"
+        else other_concept.id
+        if prompt_scope == "UNRELATED_CONCEPT"
+        else concept.id
+    )
+    prompt_skill_id = (
+        correctness.id
+        if prompt_scope == "SKILL_ONLY"
+        else debugging.id
+        if prompt_scope == "BOTH_DIFFERENT_SKILL"
+        else None
+    )
+    _, delivery_sequence = await _deliver_assistance_prompt(
+        db_session,
+        session_id=development.interview_session.id,
+        suffix=f"target-scope-{prompt_scope.lower()}",
+        stage=development.interview_session.current_stage,
+        level="METACOGNITIVE",
+        target_concept_id=prompt_concept_id,
+        target_skill_dimension_id=prompt_skill_id,
+    )
+    target = _DiagnosticTarget(
+        evidence_id=uuid4(),
+        concept_id=concept.id,
+        concept_key=concept.canonical_key,
+        skill_dimension_id=correctness.id,
+        skill_dimension_key=correctness.canonical_key,
+        finding="Current same-target gap",
+        boundary="target_scope",
+        polarity="NEGATIVE",
+        strength="MODERATE",
+        confidence=Decimal("0.95"),
+        source_watermark=delivery_sequence + 1,
+    )
+    prior, stable = await _causal_prior_level(
+        db_session, development.interview_session.id, target
+    )
+    assert stable is False
+    assert (prior == "METACOGNITIVE") is expected_relevant
+    if not expected_relevant:
+        assert ModePolicy.next_level(prior) == "METACOGNITIVE"
+
+
+async def test_latest_untested_assistance_defers_before_wording(tmp_path: Path) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup: tuple[UUID, UUID, UUID] | None = None
+    try:
+        async with sessions() as session, session.begin():
+            development = await create_development_interview(
+                session, mode="COACH", initial_stage="IMPLEMENTATION"
+            )
+            cleanup = (
+                development.user.id,
+                development.configuration.id,
+                development.problem.id,
+            )
+            session_id = development.interview_session.id
+            concept = Concept(
+                canonical_key=f"stage6a_latest_{session_id.hex}",
+                display_name="Latest assistance target",
+                category="algorithm",
+                status="ACTIVE",
+                description="Newest applicable delivery controls progression",
+            )
+            session.add(concept)
+            await session.flush()
+            session.add(
+                ProblemConcept(
+                    problem_version_id=development.problem_version.id,
+                    concept_id=concept.id,
+                    relevance="PRIMARY",
+                    expected_importance="HIGH",
+                    role="CORE",
+                )
+            )
+            skill = await session.scalar(
+                select(SkillDimension).where(
+                    SkillDimension.canonical_key == "correctness"
+                )
+            )
+            assert skill is not None
+            await _deliver_assistance_prompt(
+                session,
+                session_id=session_id,
+                suffix="latest-untested-l1",
+                stage="IMPLEMENTATION",
+                level="METACOGNITIVE",
+                target_concept_id=concept.id,
+                target_skill_dimension_id=skill.id,
+            )
+            failure_sequence = await _persist_candidate_answer(
+                session,
+                session_id=session_id,
+                suffix="latest-untested-failure",
+                client_sequence=1,
+            )
+            concept_key = concept.canonical_key
+
+        provider = FakeAssessmentProvider(_negative_finding(concept_key))
+        gateway, workflow = _workflow_for_provider(
+            sessions=sessions, provider=provider, tmp_path=tmp_path
+        )
+        coordinator = SessionEvidenceEvaluationCoordinator(
+            sessionmaker=sessions, ai_gateway=gateway
+        )
+        checkpoint = await coordinator.evaluate_active_checkpoint(session_id)
+        assert checkpoint.completed_units == 1
+        assert provider.calls == 1
+        async with sessions() as session, session.begin():
+            _, l2_delivery_sequence = await _deliver_assistance_prompt(
+                session,
+                session_id=session_id,
+                suffix="latest-untested-l2",
+                stage="IMPLEMENTATION",
+                level="PROBLEM_NARROWING",
+                target_concept_id=concept.id,
+                target_skill_dimension_id=skill.id,
+            )
+            assert l2_delivery_sequence > failure_sequence
+
+        result = await workflow.request(
+            AssistanceRequestCommand(session_id, "latest-untested-next-request")
+        )
+        assert result.status == "DEFERRED"
+        assert result.reason == "STABLE_FAILURE_OR_PROGRESS_REQUIRED"
+        assert result.interviewer_prompt_id is None
+        assert provider.calls == 1
+        assert all(
+            request.purpose != COACH_ASSISTANCE_PURPOSE for request in provider.requests
+        )
+        async with sessions() as session:
+            reservation = await session.scalar(
+                select(InterviewerPrompt).where(
+                    InterviewerPrompt.target_event_id == result.request_event_id
+                )
+            )
+            assert reservation is not None and reservation.status == "CANCELLED"
+            authorized = await session.scalar(
+                select(func.count(InterviewerPrompt.id)).where(
+                    InterviewerPrompt.interview_session_id == session_id,
+                    InterviewerPrompt.assistance_type.is_not(None),
+                    InterviewerPrompt.status == "AUTHORIZED",
+                )
+            )
+            assert authorized == 0
+    finally:
+        if cleanup:
+            await _cleanup(sessions, *cleanup)
+        await engine.dispose()
+
+
+async def test_final_defense_workflow_progresses_to_direct_teaching(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    cleanup: tuple[UUID, UUID, UUID] | None = None
+    levels = (
+        "METACOGNITIVE",
+        "PROBLEM_NARROWING",
+        "CONCEPTUAL_HINT",
+        "STRUCTURAL_HINT",
+        "DIRECT_TEACHING",
+    )
+    try:
+        async with sessions() as session, session.begin():
+            development = await create_development_interview(
+                session, mode="COACH", initial_stage="FINAL_DEFENSE"
+            )
+            cleanup = (
+                development.user.id,
+                development.configuration.id,
+                development.problem.id,
+            )
+            # Five assessed rungs plus five wording calls require ten live
+            # STANDARD_REASONING slots; expand only this test session so every
+            # approved assistance budget is demonstrably available.
+            development.budget.max_deep_reasoning_calls += 2
+            session_id = development.interview_session.id
+            concept = Concept(
+                canonical_key=f"stage6a_defense_ladder_{session_id.hex}",
+                display_name="Final Defense ladder target",
+                category="algorithm",
+                status="ACTIVE",
+                description="Final Defense progressive Coach target",
+            )
+            session.add(concept)
+            await session.flush()
+            session.add(
+                ProblemConcept(
+                    problem_version_id=development.problem_version.id,
+                    concept_id=concept.id,
+                    relevance="PRIMARY",
+                    expected_importance="HIGH",
+                    role="CORE",
+                )
+            )
+            service = RealtimeControlService(session)
+            await service.persist_candidate_code_snapshot(
+                session_id=session_id,
+                message=CandidateCodeSnapshotMessage(
+                    type="candidate_code_snapshot",
+                    client_event_id="defense-independent-code-initial",
+                    client_instance_id="stage6a-final-defense",
+                    client_sequence=1,
+                    source_code="int answer = 0;",
+                    language="cpp",
+                    trigger="INITIAL_EDITOR_STATE",
+                ),
+            )
+            await service.persist_candidate_code_snapshot(
+                session_id=session_id,
+                message=CandidateCodeSnapshotMessage(
+                    type="candidate_code_snapshot",
+                    client_event_id="defense-independent-code-attempt",
+                    client_instance_id="stage6a-final-defense",
+                    client_sequence=2,
+                    source_code="int answer = 1;",
+                    language="cpp",
+                    trigger="EDIT_BURST",
+                ),
+            )
+            concept_key = concept.canonical_key
+
+        outputs: list[dict[str, object]] = []
+        for level in levels:
+            outputs.extend((_negative_finding(concept_key), _wording_output(level)))
+        provider = FakeAssessmentProvider(outputs)
+        _gateway, workflow = _workflow_for_provider(
+            sessions=sessions, provider=provider, tmp_path=tmp_path
+        )
+        before_answer = await workflow.request(
+            AssistanceRequestCommand(session_id, "defense-before-independent-answer")
+        )
+        assert before_answer.status == "DENIED"
+        assert before_answer.reason == "FINAL_DEFENSE_INITIAL_ANSWER_REQUIRED"
+        assert provider.calls == 0
+
+        async with sessions() as session, session.begin():
+            await _persist_candidate_answer(
+                session,
+                session_id=session_id,
+                suffix="defense-initial-answer",
+                client_sequence=1,
+            )
+
+        authorized_ids: list[UUID] = []
+        for index, expected_level in enumerate(levels):
+            result = await workflow.request(
+                AssistanceRequestCommand(session_id, f"defense-ladder-request-{index}")
+            )
+            assert result.status == "AUTHORIZED", result
+            assert result.hint_level == expected_level
+            assert result.interviewer_prompt_id is not None
+            authorized_ids.append(result.interviewer_prompt_id)
+            if expected_level == "DIRECT_TEACHING":
+                break
+            async with sessions() as session, session.begin():
+                await _deliver_assistance_prompt(
+                    session,
+                    session_id=session_id,
+                    suffix=f"defense-ladder-{index}",
+                    stage="FINAL_DEFENSE",
+                    prompt_id=result.interviewer_prompt_id,
+                )
+                await _persist_candidate_answer(
+                    session,
+                    session_id=session_id,
+                    suffix=f"defense-post-hint-failure-{index}",
+                    client_sequence=index + 2,
+                )
+
+        assert len(authorized_ids) == len(levels)
+        assert provider.calls == len(levels) * 2
+        assert sum(
+            request.purpose == COACH_ASSISTANCE_PURPOSE for request in provider.requests
+        ) == len(levels)
+        async with sessions() as session:
+            evidence = list(
+                await session.scalars(
+                    select(Evidence).where(Evidence.interview_session_id == session_id)
+                )
+            )
+            assert any(item.independence_level == "INDEPENDENT" for item in evidence)
+    finally:
+        if cleanup:
+            await _cleanup(sessions, *cleanup)
+        await engine.dispose()
 
 
 async def test_final_defense_answer_is_derived_from_durable_response(

@@ -99,7 +99,6 @@ class ModePolicy:
         return (
             mode == "COACH"
             and stage in ASSISTANCE_ALLOWED_STAGES
-            and stage != "FINAL_DEFENSE"
             and time_pressure == "NORMAL"
             and gap_evidence_exists
             and prior_lower_level_assistance_failed
@@ -145,9 +144,7 @@ class ModePolicy:
             return self._deny("INDEPENDENT_EVIDENCE_REQUIRED_FOR_CONFIRMATION")
 
         maximum: HintLevel = (
-            "CONCEPTUAL_HINT"
-            if time_pressure == "CONSTRAINED" or stage == "FINAL_DEFENSE"
-            else "DIRECT_TEACHING"
+            "CONCEPTUAL_HINT" if time_pressure == "CONSTRAINED" else "DIRECT_TEACHING"
         )
         next_level = self.next_level(highest_delivered_level)
         if not gap_evidence_exists and next_level != "METACOGNITIVE":
