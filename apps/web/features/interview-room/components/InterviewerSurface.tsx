@@ -80,6 +80,7 @@ export function InterviewerSurface({
   const showTranscriptInspector =
     process.env.NODE_ENV !== "production" &&
     (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0 || evaluationReady);
+  const showDevelopmentControls = process.env.NODE_ENV !== "production" && (connected || showTranscriptInspector);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [reasoningSmokePending, setReasoningSmokePending] = useState(false);
   const [reasoningSmokeResult, setReasoningSmokeResult] =
@@ -255,20 +256,12 @@ export function InterviewerSurface({
               <button type="button" className="voice-icon-button" onClick={onDisconnectVoice} aria-label="Disconnect voice">
                 <PlugZap size={14} aria-hidden="true" />
               </button>
-              <button
-                type="button"
-                className="voice-control-button voice-dev-button"
-                onClick={onSpeakDevelopmentPhrase}
-              >
-                <Volume2 size={14} aria-hidden="true" />
-                <span>Dev phrase</span>
-              </button>
             </>
           )}
           {mode === "COACH" ? (
             <button
               type="button"
-              className="voice-control-button"
+              className="voice-control-button coach-assistance-button"
               onClick={() => void handleAssistanceRequest()}
               disabled={!connected || terminal || assistancePending || !canonicalDebug.sessionId}
             >
@@ -303,24 +296,36 @@ export function InterviewerSurface({
         <History size={16} aria-hidden="true" />
         <span>Recent conversation</span>
       </button>
-      {showTranscriptInspector ? (
-        <div className="voice-dev-transcript-anchor" ref={transcriptPopoverRef}>
-          <button
-            type="button"
-            className="voice-control-button voice-dev-button"
-            aria-expanded={transcriptOpen}
-            aria-controls="development-transcript-popover"
-            onClick={() => setTranscriptOpen((current) => !current)}
-          >
-            <span>Dev transcript</span>
-          </button>
-          {transcriptOpen ? (
-            <div
-              id="development-transcript-popover"
-              className="voice-dev-transcript-popover"
-              role="dialog"
-              aria-labelledby="development-transcript-title"
+      {showDevelopmentControls ? (
+        <div className="voice-dev-tools" aria-label="Development voice controls">
+          {connected ? (
+            <button
+              type="button"
+              className="voice-control-button voice-dev-button"
+              onClick={onSpeakDevelopmentPhrase}
             >
+              <Volume2 size={14} aria-hidden="true" />
+              <span>Dev phrase</span>
+            </button>
+          ) : null}
+          {showTranscriptInspector ? (
+            <div className="voice-dev-transcript-anchor" ref={transcriptPopoverRef}>
+              <button
+                type="button"
+                className="voice-control-button voice-dev-button"
+                aria-expanded={transcriptOpen}
+                aria-controls="development-transcript-popover"
+                onClick={() => setTranscriptOpen((current) => !current)}
+              >
+                <span>Dev transcript</span>
+              </button>
+              {transcriptOpen ? (
+                <div
+                  id="development-transcript-popover"
+                  className="voice-dev-transcript-popover"
+                  role="dialog"
+                  aria-labelledby="development-transcript-title"
+                >
               <div className="voice-dev-transcript-header">
                 <h2 id="development-transcript-title">DEVELOPMENT TRANSCRIPT</h2>
                 <button
@@ -830,6 +835,8 @@ export function InterviewerSurface({
                   </dd>
                 </div>
               </dl>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

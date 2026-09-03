@@ -25,6 +25,7 @@ import {
   writeStoredProblemWidth,
 } from "../features/interview-room/hooks/localPersistence";
 import { reducedMotionQuery } from "../features/interview-room/hooks/usePrefersReducedMotion";
+import type { VoicePresenceState } from "../features/interview-room/models/candidate-visible";
 
 const observedRealtimeSession = {
   eventType: "session.created" as const,
@@ -100,6 +101,42 @@ const observedCanonicalSession = {
     reason: "Authorized prompt is valid for delivery.",
   },
 };
+
+function renderCoachInterviewerSurface({
+  voiceState = "Listening",
+  isMuted = false,
+  terminal = false,
+  mode = "COACH",
+}: {
+  voiceState?: VoicePresenceState;
+  isMuted?: boolean;
+  terminal?: boolean;
+  mode?: "COACH" | "SIMULATION";
+} = {}) {
+  const noop = vi.fn();
+  return render(
+    <InterviewerSurface
+      mode={mode}
+      voiceState={voiceState}
+      isMuted={isMuted}
+      voiceError={null}
+      partialTranscript=""
+      lastFinalTranscript=""
+      sessionDebug={observedRealtimeSession}
+      canonicalDebug={observedCanonicalSession}
+      currentTurn={demoInterviewFixture.currentDeliveredTurn}
+      onEnableMicrophone={noop}
+      onMute={noop}
+      onUnmute={noop}
+      onDisconnectVoice={noop}
+      onSpeakDevelopmentPhrase={noop}
+      onEvaluateExaminerDecision={noop}
+      onDeliverAuthorizedPrompt={noop}
+      onOpenConversation={noop}
+      terminal={terminal}
+    />,
+  );
+}
 
 vi.mock("@monaco-editor/react", () => ({
   default: ({ value, onChange }: { value: string; onChange: (value: string) => void }) => (
@@ -372,6 +409,41 @@ describe("Interview Room demo", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "Ask for a hint" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["Ready", false, false],
+    ["Connecting", false, false],
+    ["Listening", false, true],
+    ["Muted", true, true],
+    ["Speaking", false, true],
+  ] as const)(
+    "keeps the Coach hint action visible in the %s voice state",
+    (voiceState, isMuted, shouldBeEnabled) => {
+      renderCoachInterviewerSurface({ voiceState, isMuted });
+
+      const hintButton = screen.getByRole("button", { name: "Ask for a hint" });
+      expect(hintButton).toBeVisible();
+      expect(hintButton).toHaveProperty("disabled", !shouldBeEnabled);
+    },
+  );
+
+  it("keeps the Coach hint action safely disabled after the interview becomes terminal", () => {
+    renderCoachInterviewerSurface({ terminal: true });
+
+    expect(screen.getByRole("button", { name: "Ask for a hint" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ask for a hint" })).toBeDisabled();
+  });
+
+  it("keeps development voice tools separate from the candidate-facing Coach action", () => {
+    renderCoachInterviewerSurface();
+
+    const candidateControls = screen.getByLabelText("Realtime voice controls");
+    const developmentControls = screen.getByLabelText("Development voice controls");
+    expect(within(candidateControls).getByRole("button", { name: "Ask for a hint" })).toBeVisible();
+    expect(within(candidateControls).queryByRole("button", { name: "Dev phrase" })).not.toBeInTheDocument();
+    expect(within(developmentControls).getByRole("button", { name: "Dev phrase" })).toBeVisible();
+    expect(within(developmentControls).getByRole("button", { name: "Dev transcript" })).toBeVisible();
   });
 
   it("shows the deterministic problem statement, examples, constraints, and signature", () => {
