@@ -39,9 +39,7 @@ T = TypeVar("T", bound=BaseModel)
 logger = structlog.get_logger(__name__)
 POST_INTERVIEW_ASSESSMENT_PURPOSE = "post_interview_assessment"
 SESSION_REPORT_PURPOSE = "session_report"
-POST_INTERVIEW_REASONING_PURPOSES = frozenset(
-    {POST_INTERVIEW_ASSESSMENT_PURPOSE, SESSION_REPORT_PURPOSE}
-)
+POST_INTERVIEW_REASONING_PURPOSES = frozenset({POST_INTERVIEW_ASSESSMENT_PURPOSE})
 
 
 class AIGatewayError(Exception):
@@ -505,6 +503,14 @@ def _reserve_reasoning_budget(
         raise ReasoningBudgetExceeded("Interview session has reached its hard reasoning budget")
 
     if capability == "STANDARD_REASONING":
+        if purpose == SESSION_REPORT_PURPOSE:
+            if budget.report_reasoning_used >= budget.max_report_reasoning_calls:
+                raise ReasoningBudgetExceeded("Report reasoning budget is exhausted")
+            budget.report_reasoning_used += 1
+            return (
+                budget.report_reasoning_used,
+                budget.max_report_reasoning_calls - budget.report_reasoning_used,
+            )
         deep_reasoning_limit = (
             budget.max_deep_reasoning_calls
             if purpose in POST_INTERVIEW_REASONING_PURPOSES

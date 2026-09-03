@@ -145,7 +145,7 @@ class SessionReportValidator:
             ("hire probability", "hiring outcome", "should be hired", "hire recommendation"),
         ):
             issues.append(ReportValidationIssue("HIRING_PREDICTION", "$"))
-        canonical_ids = [str(identifier) for identifier in (*evidence, *breakpoints, *assistance)]
+        canonical_ids = {str(identifier) for identifier in _uuid_values(bundle)}
         if any(identifier in all_text for identifier in canonical_ids):
             issues.append(ReportValidationIssue("RAW_INTERNAL_ID_IN_COPY", "$"))
 
@@ -333,3 +333,15 @@ def _has_numeric_score(value: str) -> bool:
 def _contains_any(value: str, needles: tuple[str, ...]) -> bool:
     lowered = value.lower()
     return any(needle in lowered for needle in needles)
+
+
+def _uuid_values(value: object) -> list[UUID]:
+    if isinstance(value, UUID):
+        return [value]
+    if hasattr(value, "model_dump"):
+        return _uuid_values(value.model_dump(mode="python"))
+    if isinstance(value, dict):
+        return [identifier for item in value.values() for identifier in _uuid_values(item)]
+    if isinstance(value, (list, tuple)):
+        return [identifier for item in value for identifier in _uuid_values(item)]
+    return []

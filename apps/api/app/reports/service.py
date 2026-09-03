@@ -12,6 +12,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.ai_gateway.gateway import AIGateway, AIGatewayError
 from app.ai_gateway.provider import ReasoningProviderError
 from app.interviews.models import InterviewSession
+from app.outbox.claims import OutboxWorkClaim
+from app.outbox.models import OutboxEvent
 from app.reports.models import SessionReport
 from app.reports.policy import (
     SESSION_REPORT_INSTRUCTIONS,
@@ -35,6 +37,14 @@ class SessionReportGenerationError(RuntimeError):
         self.category = category
         self.safe_message = safe_message
         super().__init__(safe_message)
+
+
+class SessionReportWorkOwnershipLost(SessionReportGenerationError):
+    def __init__(self) -> None:
+        super().__init__(
+            "OUTBOX_OWNERSHIP_LOST",
+            "Session Report work claim is no longer current",
+        )
 
 
 @dataclass(frozen=True)
@@ -63,13 +73,28 @@ class SessionReportGenerationService:
         *,
         interview_session_id: UUID,
         generation_request_key: str,
+        work_claim: OutboxWorkClaim | None = None,
     ) -> SessionReportGenerationResult:
+        if work_claim is not None:
+            async with self._sessionmaker() as ownership_session:
+                async with ownership_session.begin():
+                    await _require_work_claim(
+                        ownership_session,
+                        work_claim=work_claim,
+                        interview_session_id=interview_session_id,
+                    )
         async with self._sessionmaker() as read_session:
             bundle = await SessionReportSourceBuilder(read_session).build(interview_session_id)
 
         source_changed = False
         async with self._sessionmaker() as session:
             async with session.begin():
+                if work_claim is not None:
+                    await _require_work_claim(
+                        session,
+                        work_claim=work_claim,
+                        interview_session_id=interview_session_id,
+                    )
                 report, should_generate = await SessionReportRepository(session).prepare_generation(
                     session_id=interview_session_id,
                     generation_request_key=generation_request_key,
@@ -122,10 +147,18 @@ class SessionReportGenerationService:
                 raise SessionReportGenerationError(
                     "REPORT_SYNTHESIS_FAILED", "Report synthesis did not return a result"
                 )
+        except SessionReportWorkOwnershipLost:
+            raise
         except (AIGatewayError, ReasoningProviderError, SessionReportGenerationError) as exc:
             category = getattr(exc, "category", type(exc).__name__)
             async with self._sessionmaker() as session:
                 async with session.begin():
+                    if work_claim is not None:
+                        await _require_work_claim(
+                            session,
+                            work_claim=work_claim,
+                            interview_session_id=interview_session_id,
+                        )
                     await SessionReportRepository(session).mark_failed(
                         report_id=report_id,
                         category=category,
@@ -141,6 +174,12 @@ class SessionReportGenerationService:
         except SessionReportValidationError as exc:
             async with self._sessionmaker() as session:
                 async with session.begin():
+                    if work_claim is not None:
+                        await _require_work_claim(
+                            session,
+                            work_claim=work_claim,
+                            interview_session_id=interview_session_id,
+                        )
                     await SessionReportRepository(session).mark_failed(
                         report_id=report_id,
                         category="REPORT_VALIDATION_FAILED",
@@ -155,6 +194,12 @@ class SessionReportGenerationService:
 
         async with self._sessionmaker() as session:
             async with session.begin():
+                if work_claim is not None:
+                    await _require_work_claim(
+                        session,
+                        work_claim=work_claim,
+                        interview_session_id=interview_session_id,
+                    )
                 locked_interview = await session.scalar(
                     select(InterviewSession)
                     .where(InterviewSession.id == interview_session_id)
@@ -209,3 +254,25 @@ def initial_report_generation_key(session_id: UUID) -> str:
         f"session-report:{session_id}:{SESSION_REPORT_POLICY_KEY}."
         f"{SESSION_REPORT_POLICY_VERSION}:initial"
     )
+
+
+async def _require_work_claim(
+    session: AsyncSession,
+    *,
+    work_claim: OutboxWorkClaim,
+    interview_session_id: UUID,
+) -> OutboxEvent:
+    event = await session.scalar(
+        select(OutboxEvent)
+        .where(OutboxEvent.id == work_claim.outbox_event_id)
+        .with_for_update()
+    )
+    if (
+        event is None
+        or event.interview_session_id != interview_session_id
+        or event.event_type != "GENERATE_SESSION_REPORT"
+        or event.attempt_count != work_claim.attempt
+        or event.status != "PROCESSING"
+    ):
+        raise SessionReportWorkOwnershipLost()
+    return event

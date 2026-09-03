@@ -9,11 +9,11 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage6b_session_report_head() -> None:
+def test_alembic_configuration_has_stage6b_report_budget_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609040116"
+    assert script.get_current_head() == "202609040117"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -81,6 +81,15 @@ def test_stage6b_table_boundary_is_explicit() -> None:
     }.isdisjoint(table_names)
 
 
+def test_stage6b_report_budget_columns_are_safe_for_existing_sessions() -> None:
+    columns = asyncio.run(session_budget_report_columns())
+
+    assert columns == {
+        "max_report_reasoning_calls": ("NO", "4"),
+        "report_reasoning_used": ("NO", "0"),
+    }
+
+
 async def table_exists(table_name: str) -> bool:
     return table_name in await public_table_names()
 
@@ -98,5 +107,30 @@ async def public_table_names() -> set[str]:
             """,
         )
         return {str(row["table_name"]) for row in rows}
+    finally:
+        await connection.close()
+
+
+async def session_budget_report_columns() -> dict[str, tuple[str, str | None]]:
+    database_url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://")
+    connection = await asyncpg.connect(database_url)
+    try:
+        rows = await connection.fetch(
+            """
+            SELECT column_name, is_nullable, column_default
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            AND table_name = 'session_budgets'
+            AND column_name IN ('max_report_reasoning_calls', 'report_reasoning_used')
+            ORDER BY column_name
+            """,
+        )
+        return {
+            str(row["column_name"]): (
+                str(row["is_nullable"]),
+                str(row["column_default"]) if row["column_default"] is not None else None,
+            )
+            for row in rows
+        }
     finally:
         await connection.close()

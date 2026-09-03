@@ -17,14 +17,14 @@ from app.outbox.consumer import PostSessionOutboxConsumer
 from app.reports.service import SessionReportGenerationService
 
 
-def consume_outbox_event(outbox_event_id: str) -> dict[str, str | None]:
+def consume_outbox_event(outbox_event_id: str, attempt: int) -> dict[str, str | None]:
     """RQ boundary; durable retry state remains owned by PostgreSQL."""
 
     register_orm_models()
-    return asyncio.run(_consume(UUID(outbox_event_id)))
+    return asyncio.run(_consume(UUID(outbox_event_id), attempt))
 
 
-async def _consume(outbox_event_id: UUID) -> dict[str, str | None]:
+async def _consume(outbox_event_id: UUID, attempt: int) -> dict[str, str | None]:
     settings = get_settings()
     engine = build_engine(settings)
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
@@ -47,7 +47,7 @@ async def _consume(outbox_event_id: UUID) -> dict[str, str | None]:
         processing_lease_seconds=settings.outbox_claim_lease_seconds,
     )
     try:
-        result = await consumer.consume(outbox_event_id)
+        result = await consumer.consume(outbox_event_id, attempt)
         return {
             "outbox_event_id": str(result.outbox_event_id),
             "status": result.status,

@@ -140,6 +140,9 @@ def _build_fixture(case: dict[str, str]) -> ReportCorpusFixture:
             ),
         )
     needs_breakpoint = report_kind in {"OPEN_BREAKPOINT", "ASSISTED_OPEN_BREAKPOINT"}
+    breakpoint_support_id = (
+        before_help_evidence_id if report_kind == "ASSISTED_OPEN_BREAKPOINT" else evidence_id
+    )
     breakpoints = (
         []
         if not needs_breakpoint or not active
@@ -151,7 +154,10 @@ def _build_fixture(case: dict[str, str]) -> ReportCorpusFixture:
                 summary="Worst-case complexity still needs independent defense.",
                 concept_target=target,
                 skill_target=skill,
-                supporting_evidence_ids=[evidence_id],
+                supporting_evidence_ids=[breakpoint_support_id],
+                resolution_support_evidence_ids=(
+                    [evidence_id] if report_kind == "ASSISTED_OPEN_BREAKPOINT" else []
+                ),
             )
         ]
     )
@@ -183,7 +189,11 @@ def _build_fixture(case: dict[str, str]) -> ReportCorpusFixture:
         title="Complexity reasoning was session-specific",
         finding="You distinguished expected lookup behavior from its worst-case boundary.",
         evidence_ids=[evidence_id] if active else [],
-        breakpoint_id=breakpoint_id if breakpoints else None,
+        breakpoint_id=(
+            breakpoint_id
+            if breakpoints and report_kind != "ASSISTED_OPEN_BREAKPOINT"
+            else None
+        ),
         independence_level=cast(Any, independence) if active else None,
         based_on_insufficient_evidence=False,
     )
@@ -253,7 +263,7 @@ def _build_fixture(case: dict[str, str]) -> ReportCorpusFixture:
                 ),
                 status="OPEN",
                 severity="MEDIUM",
-                evidence_ids=[evidence_id],
+                evidence_ids=[breakpoint_support_id],
             )
         ]
         if breakpoints

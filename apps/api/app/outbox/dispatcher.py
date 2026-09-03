@@ -6,6 +6,8 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TypeGuard
+from uuid import UUID
 
 import structlog
 from sqlalchemy import and_, or_, select
@@ -25,6 +27,13 @@ class DispatchResult:
     failed: int
 
 
+@dataclass(frozen=True)
+class ClaimedOutboxEvent:
+    id: UUID
+    event_type: str
+    attempt: int
+
+
 class OutboxDispatcher:
     def __init__(
         self,
@@ -42,8 +51,24 @@ class OutboxDispatcher:
         self._clock = clock or (lambda: datetime.now(UTC))
 
     async def dispatch_once(self, *, limit: int = 20) -> DispatchResult:
-        now = self._clock()
+        events = await self._claim(limit=limit)
         published = retryable = failed = 0
+        for event in events:
+            try:
+                await self._publisher.publish(
+                    outbox_event_id=event.id,
+                    attempt=event.attempt,
+                )
+            except Exception as exc:
+                outcome = await self._record_publish_failure(event, exc)
+                retryable += int(outcome == "RETRY")
+                failed += int(outcome == "FAILED")
+            else:
+                published += int(await self._record_published(event))
+        return DispatchResult(len(events), published, retryable, failed)
+
+    async def _claim(self, *, limit: int) -> list[ClaimedOutboxEvent]:
+        now = self._clock()
         async with self._sessionmaker() as session:
             async with session.begin():
                 events = list(
@@ -60,35 +85,60 @@ class OutboxDispatcher:
                     event.attempt_count += 1
                     event.last_attempt_at = now
                     event.next_retry_at = now + timedelta(seconds=self._claim_lease_seconds)
-                    try:
-                        await self._publisher.publish(
-                            outbox_event_id=event.id,
-                            attempt=event.attempt_count,
-                        )
-                    except Exception as exc:
-                        event.last_error = type(exc).__name__[:256]
-                        if event.attempt_count >= self._max_attempts:
-                            event.status = "FAILED"
-                            event.next_retry_at = None
-                            failed += 1
-                        else:
-                            event.status = "RETRY"
-                            event.next_retry_at = now + _retry_delay(event.attempt_count)
-                            retryable += 1
-                        logger.warning(
-                            "outbox_publish_failed",
-                            outbox_event_id=str(event.id),
-                            event_type=event.event_type,
-                            attempt=event.attempt_count,
-                            status=event.status,
-                            error_class=type(exc).__name__,
-                        )
-                    else:
-                        event.status = "PUBLISHED"
-                        event.published_at = now
-                        event.last_error = None
-                        published += 1
-        return DispatchResult(len(events), published, retryable, failed)
+                await session.flush()
+                return [
+                    ClaimedOutboxEvent(
+                        id=event.id,
+                        event_type=event.event_type,
+                        attempt=event.attempt_count,
+                    )
+                    for event in events
+                ]
+
+    async def _record_published(self, claim: ClaimedOutboxEvent) -> bool:
+        now = self._clock()
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                event = await session.scalar(
+                    select(OutboxEvent).where(OutboxEvent.id == claim.id).with_for_update()
+                )
+                if not _owns_publication_claim(event, claim):
+                    return False
+                event.status = "PUBLISHED"
+                event.published_at = now
+                event.next_retry_at = now + timedelta(seconds=self._claim_lease_seconds)
+                event.last_error = None
+                return True
+
+    async def _record_publish_failure(
+        self,
+        claim: ClaimedOutboxEvent,
+        exc: Exception,
+    ) -> str | None:
+        now = self._clock()
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                event = await session.scalar(
+                    select(OutboxEvent).where(OutboxEvent.id == claim.id).with_for_update()
+                )
+                if not _owns_publication_claim(event, claim):
+                    return None
+                event.last_error = type(exc).__name__[:256]
+                if event.attempt_count >= self._max_attempts:
+                    event.status = "FAILED"
+                    event.next_retry_at = None
+                else:
+                    event.status = "RETRY"
+                    event.next_retry_at = now + _retry_delay(event.attempt_count)
+                logger.warning(
+                    "outbox_publish_failed",
+                    outbox_event_id=str(event.id),
+                    event_type=event.event_type,
+                    attempt=event.attempt_count,
+                    status=event.status,
+                    error_class=type(exc).__name__,
+                )
+                return event.status
 
 
 async def run_dispatcher_loop(
@@ -131,3 +181,14 @@ def _dispatchable_at(now: datetime):  # type: ignore[no-untyped-def]
 
 def _retry_delay(attempt: int) -> timedelta:
     return timedelta(seconds=min(300, 2 ** min(attempt, 8)))
+
+
+def _owns_publication_claim(
+    event: OutboxEvent | None,
+    claim: ClaimedOutboxEvent,
+) -> TypeGuard[OutboxEvent]:
+    return bool(
+        event is not None
+        and event.attempt_count == claim.attempt
+        and event.status == "PROCESSING"
+    )

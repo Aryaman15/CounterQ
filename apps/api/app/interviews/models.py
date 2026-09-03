@@ -183,6 +183,10 @@ class SessionBudget(Base):
         CheckConstraint("max_probes >= 0", name="max_probes_nonnegative"),
         CheckConstraint("max_deep_reasoning_calls >= 0", name="max_deep_reasoning_nonnegative"),
         CheckConstraint(
+            "max_report_reasoning_calls >= 0",
+            name="max_report_reasoning_calls_nonnegative",
+        ),
+        CheckConstraint(
             "reserved_post_interview_deep_reasoning_calls >= 0",
             name="post_eval_deep_reserve_nonnegative",
         ),
@@ -194,6 +198,11 @@ class SessionBudget(Base):
         CheckConstraint("max_vision_calls >= 0", name="max_vision_nonnegative"),
         CheckConstraint("probes_used >= 0", name="probes_used_nonnegative"),
         CheckConstraint("deep_reasoning_used >= 0", name="deep_reasoning_used_nonnegative"),
+        CheckConstraint(
+            "report_reasoning_used >= 0 AND "
+            "report_reasoning_used <= max_report_reasoning_calls",
+            name="report_reasoning_used_within_max",
+        ),
         CheckConstraint("strong_reasoning_used >= 0", name="strong_reasoning_used_nonnegative"),
         CheckConstraint("vision_used >= 0", name="vision_used_nonnegative"),
         CheckConstraint(
@@ -247,6 +256,12 @@ class SessionBudget(Base):
     max_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     max_probes: Mapped[int] = mapped_column(Integer, nullable=False)
     max_deep_reasoning_calls: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_report_reasoning_calls: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=4,
+        server_default=text("4"),
+    )
     reserved_post_interview_deep_reasoning_calls: Mapped[int] = mapped_column(
         Integer,
         nullable=False,
@@ -260,6 +275,12 @@ class SessionBudget(Base):
     realtime_reserved_budget: Mapped[Decimal] = mapped_column(Numeric(12, 4), nullable=False)
     probes_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     deep_reasoning_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    report_reasoning_used: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
     strong_reasoning_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     vision_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     max_assistance_interventions: Mapped[int] = mapped_column(

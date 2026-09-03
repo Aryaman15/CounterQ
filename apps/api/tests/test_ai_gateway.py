@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_gateway.gateway import (
     POST_INTERVIEW_ASSESSMENT_PURPOSE,
+    SESSION_REPORT_PURPOSE,
     AIGateway,
     PolicyVersionConflict,
     ReasoningBudgetExceeded,
@@ -752,6 +753,75 @@ async def test_post_interview_assessment_can_use_unspent_interactive_capacity(
         assert provider.calls == 24
 
 
+async def test_session_report_uses_dedicated_capacity_after_stage5_budget_is_consumed(
+    tmp_path: Path,
+) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session, session.begin():
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            assert budget is not None
+            budget.deep_reasoning_used = budget.max_deep_reasoning_calls
+
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        result = await gateway.reason_structured(
+            interview_session_id=dev.interview_session.id,
+            capability="STANDARD_REASONING",
+            purpose=SESSION_REPORT_PURPOSE,
+            policy=policy("dedicated report budget policy"),
+            instructions="dedicated report budget policy",
+            input_content="Fixed report input",
+            output_model=SmokeResult,
+        )
+
+        async with maker() as session:
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+        assert budget is not None
+        assert budget.max_deep_reasoning_calls == 24
+        assert budget.reserved_post_interview_deep_reasoning_calls == 16
+        assert budget.deep_reasoning_used == 24
+        assert budget.report_reasoning_used == 1
+        assert result.budget_used == 1
+        assert result.budget_remaining == 3
+        assert provider.calls == 1
+
+
+async def test_session_report_budget_exhaustion_prevents_provider_dispatch(
+    tmp_path: Path,
+) -> None:
+    async for maker, dev in gateway_sessionmaker():
+        async with maker() as session, session.begin():
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            assert budget is not None
+            budget.report_reasoning_used = budget.max_report_reasoning_calls
+
+        provider = FakeReasoningProvider()
+        gateway = AIGateway(settings=settings(tmp_path), sessionmaker=maker, provider=provider)
+        with pytest.raises(ReasoningBudgetExceeded):
+            await gateway.reason_structured(
+                interview_session_id=dev.interview_session.id,
+                capability="STANDARD_REASONING",
+                purpose=SESSION_REPORT_PURPOSE,
+                policy=policy("exhausted report budget policy"),
+                instructions="exhausted report budget policy",
+                input_content="Fixed report input",
+                output_model=SmokeResult,
+            )
+
+        async with maker() as session:
+            budget = await session.get(SessionBudget, dev.interview_session.id)
+            invocation_count = await session.scalar(
+                select(func.count())
+                .select_from(AIInvocation)
+                .where(AIInvocation.interview_session_id == dev.interview_session.id)
+            )
+        assert budget is not None
+        assert budget.deep_reasoning_used == 0
+        assert budget.report_reasoning_used == 4
+        assert invocation_count == 0
+        assert provider.calls == 0
+
+
 async def test_zero_reserve_preserves_legacy_standard_reasoning_limit(tmp_path: Path) -> None:
     async for maker, dev in gateway_sessionmaker():
         async with maker() as session, session.begin():
@@ -798,6 +868,7 @@ async def test_hard_monetary_limit_blocks_every_reasoning_partition(tmp_path: Pa
         for capability, purpose_name in (
             ("STANDARD_REASONING", "live_examiner"),
             ("STANDARD_REASONING", POST_INTERVIEW_ASSESSMENT_PURPOSE),
+            ("STANDARD_REASONING", SESSION_REPORT_PURPOSE),
             ("STRONG_REASONING", "live_examiner"),
         ):
             with pytest.raises(ReasoningBudgetExceeded):
@@ -820,6 +891,7 @@ async def test_hard_monetary_limit_blocks_every_reasoning_partition(tmp_path: Pa
             )
         assert budget is not None
         assert budget.deep_reasoning_used == 0
+        assert budget.report_reasoning_used == 0
         assert budget.strong_reasoning_used == 0
         assert invocation_count == 0
         assert provider.calls == 0

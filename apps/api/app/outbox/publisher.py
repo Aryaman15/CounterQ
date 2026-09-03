@@ -28,6 +28,7 @@ class RQJobPublisher:
             self._queue.enqueue,
             "app.worker.jobs.consume_outbox_event",
             str(outbox_event_id),
+            attempt,
             job_id=f"outbox-{outbox_event_id}-attempt-{attempt}",
             result_ttl=3600,
             failure_ttl=86400,

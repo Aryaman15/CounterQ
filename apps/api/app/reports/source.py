@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -244,16 +245,23 @@ class SessionReportSourceBuilder:
             skill = await self._session.get(SkillDimension, breakpoint.skill_dimension_id)
             if concept is None or skill is None:
                 continue
-            support = list(
-                await self._session.scalars(
-                    select(BreakpointEvidence.evidence_id).where(
-                        BreakpointEvidence.breakpoint_id == breakpoint.id,
-                        BreakpointEvidence.evidence_id.in_(active_ids),
+            relationships = cast(
+                list[tuple[UUID, str]],
+                (
+                    await self._session.execute(
+                        select(
+                            BreakpointEvidence.evidence_id,
+                            BreakpointEvidence.relationship,
+                        ).where(
+                            BreakpointEvidence.breakpoint_id == breakpoint.id,
+                            BreakpointEvidence.evidence_id.in_(active_ids),
+                        )
                     )
-                )
+                ).tuples().all(),
             )
-            if not support:
-                continue
+            support, contradicting, resolution_support = _partition_breakpoint_evidence(
+                relationships
+            )
             result.append(
                 ReportBreakpointSource(
                     id=breakpoint.id,
@@ -271,6 +279,8 @@ class SessionReportSourceBuilder:
                         display_name=skill.display_name,
                     ),
                     supporting_evidence_ids=sorted(support, key=str),
+                    contradicting_evidence_ids=sorted(contradicting, key=str),
+                    resolution_support_evidence_ids=sorted(resolution_support, key=str),
                 )
             )
         return result
@@ -458,6 +468,27 @@ class SessionReportSourceBuilder:
                 )
             )
         return result
+
+
+def _partition_breakpoint_evidence(
+    relationships: list[tuple[UUID, str]],
+) -> tuple[list[UUID], list[UUID], list[UUID]]:
+    supporting = [
+        evidence_id
+        for evidence_id, relationship in relationships
+        if relationship in {"CREATED", "REINFORCED"}
+    ]
+    contradicting = [
+        evidence_id
+        for evidence_id, relationship in relationships
+        if relationship == "CONTRADICTED"
+    ]
+    resolution_support = [
+        evidence_id
+        for evidence_id, relationship in relationships
+        if relationship == "RESOLUTION_SUPPORT"
+    ]
+    return supporting, contradicting, resolution_support
 
 
 def _bounded_excerpt(value: str) -> str:

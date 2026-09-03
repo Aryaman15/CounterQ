@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Literal, TypeGuard
 from uuid import UUID
 
 import structlog
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
 from app.interviews.models import InterviewSession
+from app.outbox.claims import OutboxWorkClaim
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
 from app.reports.service import (
@@ -51,39 +53,48 @@ class PostSessionOutboxConsumer:
         self._processing_lease_seconds = processing_lease_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
 
-    async def consume(self, outbox_event_id: UUID) -> ConsumerResult:
-        event = await self._begin_processing(outbox_event_id)
+    async def consume(self, outbox_event_id: UUID, attempt: int) -> ConsumerResult:
+        event = await self._begin_processing(outbox_event_id, attempt)
         if event is None:
-            return ConsumerResult(outbox_event_id, "SKIPPED")
+            return ConsumerResult(outbox_event_id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
+        stop_heartbeat = asyncio.Event()
+        heartbeat = asyncio.create_task(
+            self._heartbeat(
+                outbox_event_id=outbox_event_id,
+                attempt=attempt,
+                stop_event=stop_heartbeat,
+            )
+        )
         try:
             if event.event_type == "FINALIZE_SESSION_EVIDENCE":
-                return await self._finalize_evidence(event)
+                return await self._finalize_evidence(event, attempt)
             if event.event_type == "GENERATE_SESSION_REPORT":
-                return await self._generate_report(event)
-            return await self._record_failure(event.id, "UNSUPPORTED_OUTBOX_EVENT", permanent=True)
+                return await self._generate_report(event, attempt)
+            return await self._record_failure(
+                event.id,
+                attempt,
+                "UNSUPPORTED_OUTBOX_EVENT",
+                permanent=True,
+            )
         except SessionReportGenerationError as exc:
-            return await self._record_failure(event.id, exc.category)
+            return await self._record_failure(event.id, attempt, exc.category)
         except Exception as exc:
-            return await self._record_failure(event.id, type(exc).__name__)
+            return await self._record_failure(event.id, attempt, type(exc).__name__)
+        finally:
+            stop_heartbeat.set()
+            await heartbeat
 
-    async def _begin_processing(self, event_id: UUID) -> OutboxEvent | None:
+    async def _begin_processing(self, event_id: UUID, attempt: int) -> OutboxEvent | None:
         now = self._clock()
         async with self._sessionmaker() as session:
             async with session.begin():
                 event = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
                 )
-                if event is None or event.status in {"COMPLETED", "FAILED"}:
-                    return None
-                if event.status in {"PENDING", "RETRY"} and (
-                    event.available_at > now
-                    or (event.next_retry_at is not None and event.next_retry_at > now)
-                ):
-                    return None
                 if (
-                    event.status == "PROCESSING"
-                    and event.next_retry_at is not None
-                    and event.next_retry_at > now
+                    event is None
+                    or event.attempt_count != attempt
+                    or event.status != "PUBLISHED"
                 ):
                     return None
                 event.status = "PROCESSING"
@@ -93,7 +104,44 @@ class PostSessionOutboxConsumer:
                 session.expunge(event)
                 return event
 
-    async def _finalize_evidence(self, event: OutboxEvent) -> ConsumerResult:
+    async def _heartbeat(
+        self,
+        *,
+        outbox_event_id: UUID,
+        attempt: int,
+        stop_event: asyncio.Event,
+    ) -> None:
+        interval = max(0.1, self._processing_lease_seconds / 3)
+        while not stop_event.is_set():
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                pass
+            try:
+                if not await self._renew_lease(outbox_event_id, attempt):
+                    return
+            except Exception as exc:
+                logger.warning(
+                    "outbox_heartbeat_failed",
+                    outbox_event_id=str(outbox_event_id),
+                    attempt=attempt,
+                    error_class=type(exc).__name__,
+                )
+
+    async def _renew_lease(self, event_id: UUID, attempt: int) -> bool:
+        now = self._clock()
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                event = await session.scalar(
+                    select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
+                )
+                if not _owns_work_claim(event, attempt):
+                    return False
+                event.next_retry_at = now + timedelta(seconds=self._processing_lease_seconds)
+                return True
+
+    async def _finalize_evidence(self, event: OutboxEvent, attempt: int) -> ConsumerResult:
         result = await self._evidence_coordinator.evaluate(event.interview_session_id)
         if result.failed_units:
             categories = sorted(
@@ -105,6 +153,7 @@ class PostSessionOutboxConsumer:
             )
             return await self._record_failure(
                 event.id,
+                attempt,
                 "EVIDENCE_FINALIZATION_FAILED:" + ",".join(categories),
             )
         now = self._clock()
@@ -113,8 +162,8 @@ class PostSessionOutboxConsumer:
                 current = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == event.id).with_for_update()
                 )
-                if current is None or current.status == "COMPLETED":
-                    return ConsumerResult(event.id, "SKIPPED")
+                if not _owns_work_claim(current, attempt):
+                    return ConsumerResult(event.id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
                 interview = await session.get(InterviewSession, event.interview_session_id)
                 if interview is None:
                     current.status = "FAILED"
@@ -139,26 +188,34 @@ class PostSessionOutboxConsumer:
                 _mark_completed(current, now)
         return ConsumerResult(event.id, "COMPLETED")
 
-    async def _generate_report(self, event: OutboxEvent) -> ConsumerResult:
+    async def _generate_report(self, event: OutboxEvent, attempt: int) -> ConsumerResult:
         request_key = event.payload.get("generation_request_key")
         if not isinstance(request_key, str) or not request_key:
-            return await self._record_failure(event.id, "INVALID_REPORT_REQUEST", permanent=True)
+            return await self._record_failure(
+                event.id,
+                attempt,
+                "INVALID_REPORT_REQUEST",
+                permanent=True,
+            )
         await self._report_service.generate(
             interview_session_id=event.interview_session_id,
             generation_request_key=request_key,
+            work_claim=OutboxWorkClaim(event.id, attempt),
         )
         async with self._sessionmaker() as session:
             async with session.begin():
                 current = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == event.id).with_for_update()
                 )
-                if current is not None and current.status != "COMPLETED":
-                    _mark_completed(current, self._clock())
+                if not _owns_work_claim(current, attempt):
+                    return ConsumerResult(event.id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
+                _mark_completed(current, self._clock())
         return ConsumerResult(event.id, "COMPLETED")
 
     async def _record_failure(
         self,
         event_id: UUID,
+        attempt: int,
         category: str,
         *,
         permanent: bool = False,
@@ -169,8 +226,8 @@ class PostSessionOutboxConsumer:
                 event = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
                 )
-                if event is None or event.status == "COMPLETED":
-                    return ConsumerResult(event_id, "SKIPPED")
+                if not _owns_work_claim(event, attempt):
+                    return ConsumerResult(event_id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
                 event.last_error = category[:2000]
                 event.published_at = event.published_at
                 if permanent or event.attempt_count >= self._max_attempts:
@@ -199,3 +256,14 @@ def _mark_completed(event: OutboxEvent, now: datetime) -> None:
     event.completed_at = now
     event.next_retry_at = None
     event.last_error = None
+
+
+def _owns_work_claim(
+    event: OutboxEvent | None,
+    attempt: int,
+) -> TypeGuard[OutboxEvent]:
+    return bool(
+        event is not None
+        and event.attempt_count == attempt
+        and event.status == "PROCESSING"
+    )

@@ -76,6 +76,8 @@ class ReportBreakpointSource(ReportSourceModel):
     concept_target: CanonicalTarget
     skill_target: CanonicalTarget
     supporting_evidence_ids: list[UUID]
+    contradicting_evidence_ids: list[UUID] = Field(default_factory=list)
+    resolution_support_evidence_ids: list[UUID] = Field(default_factory=list)
 
 
 class DeliveredPromptSource(ReportSourceModel):
@@ -164,12 +166,28 @@ class SessionReportSourceBundle(ReportSourceModel):
         value = self.model_dump(mode="json")
         candidate_interpretations = value.pop("candidate_claims")
         candidate_responses = value.pop("candidate_responses")
+        candidate_content_by_event_id: dict[str, dict[str, object]] = {}
+        for evidence in value["evidence"]:
+            for source in evidence["sources"]:
+                excerpt = source.get("candidate_safe_excerpt")
+                if source.get("source_kind") != "CANDIDATE_TRANSCRIPT" or not excerpt:
+                    continue
+                event_id = str(source["event_id"])
+                candidate_content_by_event_id[event_id] = {
+                    "event_id": event_id,
+                    "server_sequence": source["server_sequence"],
+                    "event_type": source["event_type"],
+                    "source_kind": source["source_kind"],
+                    "candidate_safe_excerpt": excerpt,
+                }
+                source["candidate_safe_excerpt"] = None
         return json.dumps(
             {
                 "input_contract_version": SESSION_REPORT_INPUT_CONTRACT_VERSION,
                 "trusted_canonical_context": value,
                 "untrusted_interpretation_and_candidate_context": {
                     "authority": "CONTEXT_ONLY",
+                    "candidate_content_by_event_id": candidate_content_by_event_id,
                     "candidate_claims": candidate_interpretations,
                     "candidate_responses": candidate_responses,
                 },

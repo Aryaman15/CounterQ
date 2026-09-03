@@ -81,12 +81,14 @@ class InterviewRepository:
         max_structural_hints: int = 0,
         max_direct_teaching_interventions: int = 0,
         max_guided_retries: int = 0,
+        max_report_reasoning_calls: int = 4,
     ) -> SessionBudget:
         budget = SessionBudget(
             session_id=session_id,
             max_duration_seconds=max_duration_seconds,
             max_probes=max_probes,
             max_deep_reasoning_calls=max_deep_reasoning_calls,
+            max_report_reasoning_calls=max_report_reasoning_calls,
             reserved_post_interview_deep_reasoning_calls=(
                 reserved_post_interview_deep_reasoning_calls
             ),
