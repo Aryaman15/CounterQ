@@ -1,11 +1,18 @@
 import argparse
 import asyncio
-import signal
+import threading
 
 import structlog
+from redis import Redis
+from rq import SimpleWorker
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.config.settings import get_settings
 from app.core.logging import configure_logging
+from app.db.registry import register_orm_models
+from app.db.session import build_engine
+from app.outbox.dispatcher import OutboxDispatcher
+from app.outbox.publisher import RQJobPublisher
 from app.redis.client import check_redis
 
 logger = structlog.get_logger(__name__)
@@ -21,17 +28,53 @@ async def run(check_once: bool = False) -> int:
         logger.info("worker_startup_check_complete", redis_ok=redis_ok)
         return 0 if redis_ok else 1
 
-    stop_event = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(sig, stop_event.set)
-        except NotImplementedError:
-            pass
-
     logger.info("worker_ready")
-    await stop_event.wait()
-    logger.info("worker_stopping")
+    return 0
+
+
+async def _run_dispatcher(stop_event: threading.Event) -> None:
+    settings = get_settings()
+    engine = build_engine(settings)
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    dispatcher = OutboxDispatcher(
+        sessionmaker=sessionmaker,
+        publisher=RQJobPublisher(settings),
+        max_attempts=settings.outbox_max_attempts,
+        claim_lease_seconds=settings.outbox_claim_lease_seconds,
+    )
+    try:
+        while not stop_event.is_set():
+            await dispatcher.dispatch_once(limit=settings.outbox_batch_size)
+            await asyncio.to_thread(stop_event.wait, settings.outbox_poll_interval_seconds)
+    finally:
+        await engine.dispose()
+
+
+def _run_worker_process() -> int:
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    register_orm_models()
+    stop_event = threading.Event()
+    dispatcher_thread = threading.Thread(
+        target=lambda: asyncio.run(_run_dispatcher(stop_event)),
+        name="counterq-outbox-dispatcher",
+        daemon=True,
+    )
+    dispatcher_thread.start()
+    connection = Redis.from_url(settings.redis_url)
+    worker = SimpleWorker([settings.background_queue_name], connection=connection)
+    logger.info(
+        "worker_ready",
+        queue=settings.background_queue_name,
+        outbox_dispatcher=True,
+    )
+    try:
+        worker.work(with_scheduler=False)
+    finally:
+        stop_event.set()
+        dispatcher_thread.join(timeout=5)
+        connection.close()
+        logger.info("worker_stopping")
     return 0
 
 
@@ -48,7 +91,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     try:
-        return asyncio.run(run(check_once=args.check))
+        if args.check:
+            return asyncio.run(run(check_once=True))
+        return _run_worker_process()
     except KeyboardInterrupt:
         return 130
 

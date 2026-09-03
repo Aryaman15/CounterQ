@@ -43,6 +43,11 @@ class Settings(BaseSettings):
         default="redis://localhost:6379/0",
         validation_alias="REDIS_URL",
     )
+    background_queue_name: str = "counterq-background"
+    outbox_poll_interval_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    outbox_claim_lease_seconds: int = Field(default=120, ge=10, le=3600)
+    outbox_max_attempts: int = Field(default=5, ge=1, le=20)
+    outbox_batch_size: int = Field(default=20, ge=1, le=100)
     local_web_origin: str = Field(
         default="http://127.0.0.1:3000",
         validation_alias="COUNTERQ_LOCAL_WEB_ORIGIN",

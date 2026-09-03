@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.db.ids import uuid7
 from app.interviews.models import (
     InterviewerPrompt,
     InterviewerPromptDelivery,
@@ -20,6 +21,8 @@ from app.interviews.models import (
 )
 from app.interviews.runtime import InterviewRuntime, SessionNotFound, TransitionCommand
 from app.interviews.state_machine import TransitionContext
+from app.observation.models import InterviewEvent
+from app.outbox.repository import OutboxRepository
 
 TerminalReason = Literal["USER_ENDED", "TIME_EXPIRED"]
 
@@ -34,6 +37,7 @@ class CompletionResult:
     terminal_reason: TerminalReason
     created: bool
     transitions: tuple[InterviewStageTransition, ...]
+    session_completed_event_id: UUID
 
 
 class InterviewCompletionService:
@@ -58,11 +62,14 @@ class InterviewCompletionService:
     ) -> CompletionResult:
         interview = await self._lock_session(session_id)
         if interview.status == "COMPLETED" or interview.current_stage == "COMPLETED":
+            terminal_reason = await self._terminal_reason(interview.id)
+            completion_event = await self._ensure_post_session_work(interview, terminal_reason)
             return CompletionResult(
                 interview=interview,
-                terminal_reason=await self._terminal_reason(interview.id),
+                terminal_reason=terminal_reason,
                 created=False,
                 transitions=(),
+                session_completed_event_id=completion_event.id,
             )
         if reason == "USER_ENDED" and self._clock() >= interview.deadline_at:
             # The deadline is server truth when both terminal requests race.
@@ -110,11 +117,13 @@ class InterviewCompletionService:
                 )
             )
         )
+        completion_event = await self._ensure_post_session_work(interview, reason)
         return CompletionResult(
             interview=interview,
             terminal_reason=reason,
             created=True,
             transitions=tuple(transitions),
+            session_completed_event_id=completion_event.id,
         )
 
     async def reconcile_expired(self, session_id: UUID) -> CompletionResult | None:
@@ -183,3 +192,54 @@ class InterviewCompletionService:
             if transition and transition.trigger == "HARD_TIME_CONTROL"
             else "USER_ENDED"
         )
+
+    async def _ensure_post_session_work(
+        self,
+        interview: InterviewSession,
+        reason: TerminalReason,
+    ) -> InterviewEvent:
+        completion_event = await self._session.scalar(
+            select(InterviewEvent)
+            .where(InterviewEvent.interview_session_id == interview.id)
+            .where(InterviewEvent.event_type == "SESSION_COMPLETED")
+            .order_by(InterviewEvent.server_sequence)
+            .limit(1)
+        )
+        if completion_event is None:
+            interview.last_server_sequence += 1
+            occurred_at = interview.completed_at or self._clock()
+            completion_event = InterviewEvent(
+                id=uuid7(),
+                interview_session_id=interview.id,
+                user_id=interview.user_id,
+                event_type="SESSION_COMPLETED",
+                source="INTERVIEW_ORCHESTRATOR",
+                occurred_at=occurred_at,
+                received_at=self._clock(),
+                server_sequence=interview.last_server_sequence,
+                interview_state_version=interview.state_version,
+                causation_id=None,
+                correlation_id=None,
+                code_snapshot_id=None,
+                idempotency_key=f"session-completed:{interview.id}",
+                payload={"terminal_reason": reason},
+                provenance={"completion_policy": "interview-completion.v1"},
+                schema_version="session.completed.v1",
+            )
+            self._session.add(completion_event)
+            await self._session.flush()
+        await OutboxRepository(self._session).enqueue(
+            aggregate_type="InterviewSession",
+            aggregate_id=interview.id,
+            interview_session_id=interview.id,
+            event_type="FINALIZE_SESSION_EVIDENCE",
+            payload={
+                "interview_session_id": str(interview.id),
+                "assessment_policy": "assessment_evaluator.v3",
+                "completion_event_id": str(completion_event.id),
+            },
+            deduplication_key=(f"evidence-finalization:{interview.id}:assessment_evaluator.v3"),
+            available_at=self._clock(),
+            source_watermark=completion_event.server_sequence,
+        )
+        return completion_event

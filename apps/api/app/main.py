@@ -12,6 +12,7 @@ from app.execution.routes import router as execution_router
 from app.interviews.routes import router as interviews_router
 from app.problems.routes import router as curated_problem_router
 from app.realtime.routes import router as realtime_router
+from app.reports.routes import router as reports_router
 
 
 def create_app() -> FastAPI:
@@ -40,6 +41,7 @@ def create_app() -> FastAPI:
     app.include_router(evidence_router)
     app.include_router(curated_problem_router)
     app.include_router(realtime_router)
+    app.include_router(reports_router)
     return app
 
 

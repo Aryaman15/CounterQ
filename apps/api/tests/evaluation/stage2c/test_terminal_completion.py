@@ -39,7 +39,7 @@ async def test_candidate_finish_creates_wrap_up_then_completed_once(
     assert development.interview_session.status == "COMPLETED"
     assert development.interview_session.current_stage == "COMPLETED"
     assert development.interview_session.state_version == 2
-    assert development.interview_session.last_server_sequence == 2
+    assert development.interview_session.last_server_sequence == 3
     assert development.interview_session.completed_at == now
 
     retry = await service.complete(
@@ -50,7 +50,7 @@ async def test_candidate_finish_creates_wrap_up_then_completed_once(
     )
     assert retry.created is False
     assert development.interview_session.state_version == 2
-    assert development.interview_session.last_server_sequence == 2
+    assert development.interview_session.last_server_sequence == 3
 
 
 async def test_timeout_requires_server_deadline_and_reconciles_active_delivery(

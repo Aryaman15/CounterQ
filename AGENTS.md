@@ -1483,13 +1483,14 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 6A — ModePolicy + Coach Assistance Foundation
+Stage 6B — Coach / Simulation End-to-End + Session Report
 
 Current Goal:
-Implement the shared Coach/Simulation ModePolicy, bounded target-scoped
-assistance, pre-assistance canonical Evidence checkpoint, assistance-aware
-Evidence attribution, and one minimal real Coach browser path without beginning
-Session Report.
+Automate completed-session canonical evaluation, introduce the first durable
+transactional-outbox workflow, generate a versioned Evidence-backed Session
+Report, validate every material report claim against canonical sources, and
+deliver a polished post-session candidate experience without beginning
+CounterMap or Mastery.
 ```
 
 Update only this small section as implementation progresses.

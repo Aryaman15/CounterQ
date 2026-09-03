@@ -26,6 +26,7 @@ from app.interviews.models import (
     SessionBudget,
 )
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
+from app.outbox.models import OutboxEvent
 from app.problems.models import (
     Concept,
     ConceptAlias,
@@ -35,6 +36,7 @@ from app.problems.models import (
     ProblemConcept,
     ProblemVersion,
 )
+from app.reports.models import SessionReport
 
 __all__ = [
     "AIPolicyVersion",
@@ -64,10 +66,12 @@ __all__ = [
     "InterviewSession",
     "InterviewerPrompt",
     "InterviewerPromptDelivery",
+    "OutboxEvent",
     "Problem",
     "ProblemConcept",
     "ProblemVersion",
     "SessionBudget",
+    "SessionReport",
     "SkillDimension",
     "TranscriptSegment",
     "TestResult",

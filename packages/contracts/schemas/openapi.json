@@ -383,6 +383,236 @@
         "title": "CandidateProblemDetail",
         "type": "object"
       },
+      "CandidateSessionReportResponse": {
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "report": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionReportDocument"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "report_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Version"
+          },
+          "session": {
+            "$ref": "#/components/schemas/ReportSessionMetadata"
+          },
+          "status": {
+            "enum": [
+              "NOT_STARTED",
+              "PREPARING",
+              "READY",
+              "FAILED"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "session",
+          "report_id",
+          "report_version",
+          "generated_at",
+          "report",
+          "message"
+        ],
+        "title": "CandidateSessionReportResponse",
+        "type": "object"
+      },
+      "CandidateSourceDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "attribution": {
+            "title": "Attribution",
+            "type": "string"
+          },
+          "evidence_id": {
+            "format": "uuid",
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "finding": {
+            "title": "Finding",
+            "type": "string"
+          },
+          "source_excerpt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Excerpt"
+          },
+          "source_label": {
+            "title": "Source Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "finding",
+          "attribution",
+          "source_label",
+          "source_excerpt"
+        ],
+        "title": "CandidateSourceDetail",
+        "type": "object"
+      },
+      "CoachAssistanceFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "after_help_evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "After Help Evidence Ids",
+            "type": "array"
+          },
+          "assistance_label": {
+            "maxLength": 160,
+            "minLength": 1,
+            "title": "Assistance Label",
+            "type": "string"
+          },
+          "assistance_type": {
+            "enum": [
+              "METACOGNITIVE",
+              "PROBLEM_NARROWING",
+              "CONCEPTUAL_HINT",
+              "STRUCTURAL_HINT",
+              "DIRECT_TEACHING",
+              "DEBUGGING_HINT",
+              "CORRECTNESS_FEEDBACK"
+            ],
+            "title": "Assistance Type",
+            "type": "string"
+          },
+          "before_help_evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Before Help Evidence Ids",
+            "type": "array"
+          },
+          "delivery_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Delivery Ids",
+            "type": "array"
+          },
+          "explanation": {
+            "maxLength": 800,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "hint_level": {
+            "enum": [
+              "METACOGNITIVE",
+              "PROBLEM_NARROWING",
+              "CONCEPTUAL_HINT",
+              "STRUCTURAL_HINT",
+              "DIRECT_TEACHING"
+            ],
+            "title": "Hint Level",
+            "type": "string"
+          },
+          "independent_verification_missing": {
+            "title": "Independent Verification Missing",
+            "type": "boolean"
+          },
+          "later_independence_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDEPENDENT",
+                  "AFTER_PROBE",
+                  "AFTER_LIGHT_GUIDANCE",
+                  "AFTER_STRONG_HINT",
+                  "DIRECTLY_TAUGHT"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Later Independence Level"
+          },
+          "title": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "explanation",
+          "delivery_ids",
+          "assistance_type",
+          "hint_level",
+          "assistance_label",
+          "before_help_evidence_ids",
+          "after_help_evidence_ids",
+          "later_independence_level",
+          "independent_verification_missing"
+        ],
+        "title": "CoachAssistanceFinding",
+        "type": "object"
+      },
       "CreateRealtimeSessionRequest": {
         "properties": {
           "purpose": {
@@ -1379,6 +1609,168 @@
         "title": "DevelopmentReasoningSmokeResponse",
         "type": "object"
       },
+      "DevelopmentRegenerationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "DevelopmentRegenerationRequest",
+        "type": "object"
+      },
+      "DevelopmentRegenerationResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "outbox_event_id": {
+            "format": "uuid",
+            "title": "Outbox Event Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outbox_event_id",
+          "created",
+          "status"
+        ],
+        "title": "DevelopmentRegenerationResponse",
+        "type": "object"
+      },
+      "DevelopmentReportInspection": {
+        "properties": {
+          "ai_invocation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Invocation Id"
+          },
+          "evidence_finalization_status": {
+            "title": "Evidence Finalization Status",
+            "type": "string"
+          },
+          "generation_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Policy"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "is_current": {
+            "title": "Is Current",
+            "type": "boolean"
+          },
+          "last_failure_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure Category"
+          },
+          "outbox": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Outbox",
+            "type": "array"
+          },
+          "report_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Id"
+          },
+          "report_status": {
+            "title": "Report Status",
+            "type": "string"
+          },
+          "report_validation_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Validation Status"
+          },
+          "report_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Version"
+          },
+          "source_breakpoint_count": {
+            "title": "Source Breakpoint Count",
+            "type": "integer"
+          },
+          "source_evidence_count": {
+            "title": "Source Evidence Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "outbox",
+          "evidence_finalization_status",
+          "report_status",
+          "report_id",
+          "report_version",
+          "generation_policy",
+          "ai_invocation_id",
+          "source_evidence_count",
+          "source_breakpoint_count",
+          "report_validation_status",
+          "is_current",
+          "last_failure_category"
+        ],
+        "title": "DevelopmentReportInspection",
+        "type": "object"
+      },
       "DevelopmentRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2101,6 +2493,339 @@
         "title": "RealtimeTurnDetectionConfig",
         "type": "object"
       },
+      "ReportBreakpointFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "breakpoint_id": {
+            "format": "uuid",
+            "title": "Breakpoint Id",
+            "type": "string"
+          },
+          "concept_id": {
+            "format": "uuid",
+            "title": "Concept Id",
+            "type": "string"
+          },
+          "concept_label": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Concept Label",
+            "type": "string"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "explanation": {
+            "maxLength": 800,
+            "minLength": 1,
+            "title": "Explanation",
+            "type": "string"
+          },
+          "severity": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Severity",
+            "type": "string"
+          },
+          "skill_dimension_id": {
+            "format": "uuid",
+            "title": "Skill Dimension Id",
+            "type": "string"
+          },
+          "skill_label": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Skill Label",
+            "type": "string"
+          },
+          "status": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "breakpoint_id",
+          "concept_id",
+          "skill_dimension_id",
+          "concept_label",
+          "skill_label",
+          "title",
+          "explanation",
+          "status",
+          "severity",
+          "evidence_ids"
+        ],
+        "title": "ReportBreakpointFinding",
+        "type": "object"
+      },
+      "ReportFinding": {
+        "additionalProperties": false,
+        "properties": {
+          "based_on_insufficient_evidence": {
+            "title": "Based On Insufficient Evidence",
+            "type": "boolean"
+          },
+          "breakpoint_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakpoint Id"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Evidence Ids",
+            "type": "array"
+          },
+          "finding": {
+            "maxLength": 700,
+            "minLength": 1,
+            "title": "Finding",
+            "type": "string"
+          },
+          "independence_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDEPENDENT",
+                  "AFTER_PROBE",
+                  "AFTER_LIGHT_GUIDANCE",
+                  "AFTER_STRONG_HINT",
+                  "DIRECTLY_TAUGHT"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Independence Level"
+          },
+          "title": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "finding",
+          "evidence_ids",
+          "breakpoint_id",
+          "independence_level",
+          "based_on_insufficient_evidence"
+        ],
+        "title": "ReportFinding",
+        "type": "object"
+      },
+      "ReportNextAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "maxLength": 360,
+            "minLength": 1,
+            "title": "Action",
+            "type": "string"
+          },
+          "based_on_insufficient_evidence": {
+            "title": "Based On Insufficient Evidence",
+            "type": "boolean"
+          },
+          "breakpoint_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Breakpoint Ids",
+            "type": "array"
+          },
+          "evidence_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Evidence Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "action",
+          "evidence_ids",
+          "breakpoint_ids",
+          "based_on_insufficient_evidence"
+        ],
+        "title": "ReportNextAction",
+        "type": "object"
+      },
+      "ReportSection": {
+        "additionalProperties": false,
+        "properties": {
+          "insufficient_evidence_message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insufficient Evidence Message"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFinding"
+            },
+            "maxItems": 6,
+            "title": "Items",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "SUPPORTED",
+              "INSUFFICIENT_EVIDENCE"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "items",
+          "insufficient_evidence_message"
+        ],
+        "title": "ReportSection",
+        "type": "object"
+      },
+      "ReportSessionFacts": {
+        "additionalProperties": false,
+        "properties": {
+          "completed_at": {
+            "title": "Completed At",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "level": {
+            "title": "Level",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_title": {
+            "title": "Problem Title",
+            "type": "string"
+          },
+          "problem_version_id": {
+            "format": "uuid",
+            "title": "Problem Version Id",
+            "type": "string"
+          },
+          "source_watermark": {
+            "title": "Source Watermark",
+            "type": "integer"
+          },
+          "started_at": {
+            "title": "Started At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "mode",
+          "level",
+          "language",
+          "problem_version_id",
+          "problem_title",
+          "started_at",
+          "completed_at",
+          "duration_seconds",
+          "source_watermark"
+        ],
+        "title": "ReportSessionFacts",
+        "type": "object"
+      },
+      "ReportSessionMetadata": {
+        "properties": {
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_title": {
+            "title": "Problem Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_title",
+          "mode",
+          "language",
+          "completed_at",
+          "duration_seconds"
+        ],
+        "title": "ReportSessionMetadata",
+        "type": "object"
+      },
       "RestoredCodeSnapshotMessage": {
         "properties": {
           "content_hash": {
@@ -2208,6 +2933,97 @@
           "status"
         ],
         "title": "RestoredUnresolvedPromptMessage",
+        "type": "object"
+      },
+      "SessionReportDocument": {
+        "additionalProperties": false,
+        "properties": {
+          "adaptability": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "breakpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ReportBreakpointFinding"
+            },
+            "title": "Breakpoints",
+            "type": "array"
+          },
+          "claim_defense": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "coach_assistance": {
+            "items": {
+              "$ref": "#/components/schemas/CoachAssistanceFinding"
+            },
+            "title": "Coach Assistance",
+            "type": "array"
+          },
+          "complexity": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "contract_version": {
+            "const": "session-report-output.v1",
+            "title": "Contract Version",
+            "type": "string"
+          },
+          "correctness_implementation": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "debugging": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "edge_cases": {
+            "$ref": "#/components/schemas/ReportSection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ReportSessionFacts"
+          },
+          "next_actions": {
+            "items": {
+              "$ref": "#/components/schemas/ReportNextAction"
+            },
+            "title": "Next Actions",
+            "type": "array"
+          },
+          "source_details": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateSourceDetail"
+            },
+            "title": "Source Details",
+            "type": "array"
+          },
+          "strengths": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFinding"
+            },
+            "title": "Strengths",
+            "type": "array"
+          },
+          "summary": {
+            "items": {
+              "$ref": "#/components/schemas/ReportFinding"
+            },
+            "title": "Summary",
+            "type": "array"
+          }
+        },
+        "required": [
+          "contract_version",
+          "metadata",
+          "summary",
+          "strengths",
+          "breakpoints",
+          "claim_defense",
+          "correctness_implementation",
+          "complexity",
+          "edge_cases",
+          "debugging",
+          "adaptability",
+          "coach_assistance",
+          "next_actions",
+          "source_details"
+        ],
+        "title": "SessionReportDocument",
         "type": "object"
       },
       "ValidationError": {
@@ -2746,6 +3562,145 @@
         "summary": "Create Realtime Session",
         "tags": [
           "realtime"
+        ]
+      }
+    },
+    "/api/reports/development/sessions/{interview_session_id}/inspection": {
+      "get": {
+        "operationId": "development_report_inspection_api_reports_development_sessions__interview_session_id__inspection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentReportInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Report Inspection",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/reports/development/sessions/{interview_session_id}/regenerate": {
+      "post": {
+        "operationId": "regenerate_session_report_api_reports_development_sessions__interview_session_id__regenerate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentRegenerationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRegenerationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regenerate Session Report",
+        "tags": [
+          "reports"
+        ]
+      }
+    },
+    "/api/reports/sessions/{interview_session_id}": {
+      "get": {
+        "operationId": "session_report_status_api_reports_sessions__interview_session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateSessionReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Report Status",
+        "tags": [
+          "reports"
         ]
       }
     },

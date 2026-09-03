@@ -863,7 +863,7 @@ async def test_strong_verification_never_escalates_more_than_once(tmp_path: Path
         assert decision_count == 0
 
 
-def test_stage4b_policy_contract_is_unchanged_at_the_stage5a_boundary() -> None:
+def test_stage4b_policy_contract_is_unchanged_at_the_stage6b_boundary() -> None:
     assert LIVE_EXAMINER_POLICY_VERSION == "v10"
     assert LIVE_EXAMINER_CONTEXT_PROJECTION_VERSION == "v3"
     assert EXAMINER_OUTPUT_CONTRACT_VERSION == "v2"
@@ -872,7 +872,7 @@ def test_stage4b_policy_contract_is_unchanged_at_the_stage5a_boundary() -> None:
     assert set(CANDIDATE_LEVEL_DEPTH_POLICY) == {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
     assert "evidence" in Base.metadata.tables
     assert "breakpoints" in Base.metadata.tables
-    assert "session_reports" not in Base.metadata.tables
+    assert "session_reports" in Base.metadata.tables
     assert "concept_mastery" not in Base.metadata.tables
 
 

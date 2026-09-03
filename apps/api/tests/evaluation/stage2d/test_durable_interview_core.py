@@ -158,7 +158,7 @@ async def test_terminal_boundaries_are_idempotent_and_immutable(db_session: Asyn
     assert first.created is True and retry.created is False
     assert [row.to_stage for row in transitions] == ["WRAP_UP", "COMPLETED"]
     assert development.interview_session.completed_at == now + timedelta(minutes=4)
-    assert development.interview_session.last_server_sequence == 2
+    assert development.interview_session.last_server_sequence == 3
     assert development.interview_session.state_version == 2
     with pytest.raises(SessionClosed):
         await InterviewRuntime(db_session, clock=clock_at(now + timedelta(minutes=5))).accept_event(

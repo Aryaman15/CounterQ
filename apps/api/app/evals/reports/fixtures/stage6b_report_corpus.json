@@ -1,0 +1,23 @@
+{
+  "schema_version": "stage6b-report-corpus.v1",
+  "input_contract": "session-report-input.v1",
+  "output_contract": "session-report-output.v1",
+  "policy": "session_report/v1",
+  "fixtures": [
+    {"id": "strong-independent-solution", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "STRENGTH"},
+    {"id": "independent-misconception-unresolved", "mode": "SIMULATION", "evidence": "NEGATIVE_INDEPENDENT", "report": "OPEN_BREAKPOINT"},
+    {"id": "misconception-corrected-after-probe", "mode": "SIMULATION", "evidence": "MIXED_AFTER_PROBE", "report": "PROBED_CORRECTION"},
+    {"id": "coach-light-hint-assisted-correction", "mode": "COACH", "evidence": "POSITIVE_AFTER_LIGHT_GUIDANCE", "report": "ASSISTED_IMPROVEMENT"},
+    {"id": "coach-structural-hint-success", "mode": "COACH", "evidence": "POSITIVE_AFTER_STRONG_HINT", "report": "ASSISTED_IMPROVEMENT"},
+    {"id": "direct-teaching-immediate-repetition", "mode": "COACH", "evidence": "POSITIVE_DIRECTLY_TAUGHT", "report": "TAUGHT_NOT_VERIFIED"},
+    {"id": "debugging-independent-recovery", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "DEBUGGING_STRENGTH"},
+    {"id": "contradictory-evidence", "mode": "SIMULATION", "evidence": "MIXED_INDEPENDENT", "report": "MIXED_FINDING"},
+    {"id": "invalidated-evidence-excluded", "mode": "SIMULATION", "evidence": "INVALIDATED", "report": "INSUFFICIENT_EVIDENCE"},
+    {"id": "alternate-technically-correct-approach", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "STRENGTH"},
+    {"id": "little-evidence-for-edge-cases", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "INSUFFICIENT_EDGE_CASES"},
+    {"id": "stale-undelivered-prompt-excluded", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "NO_PROMPT_ATTRIBUTION"},
+    {"id": "starter-editor-baseline-excluded", "mode": "SIMULATION", "evidence": "STARTER_BASELINE", "report": "INSUFFICIENT_EVIDENCE"},
+    {"id": "assisted-success-open-breakpoint", "mode": "COACH", "evidence": "POSITIVE_AFTER_LIGHT_GUIDANCE", "report": "ASSISTED_OPEN_BREAKPOINT"},
+    {"id": "report-regeneration-idempotency", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "VERSIONED_REGENERATION"}
+  ]
+}

@@ -9,11 +9,11 @@ from alembic.script import ScriptDirectory
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage6a_coach_assistance_head() -> None:
+def test_alembic_configuration_has_stage6b_session_report_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609030115"
+    assert script.get_current_head() == "202609040116"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -29,7 +29,7 @@ def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
         command.upgrade(config, "head")
 
 
-def test_stage5a_table_boundary_is_explicit() -> None:
+def test_stage6b_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -60,10 +60,12 @@ def test_stage5a_table_boundary_is_explicit() -> None:
         "interviewer_prompt_deliveries",
         "interviewer_prompts",
         "interview_sessions",
+        "outbox_events",
         "problem_versions",
         "problem_concepts",
         "problems",
         "session_budgets",
+        "session_reports",
         "skill_dimensions",
         "transcript_segments",
         "test_results",
@@ -76,7 +78,6 @@ def test_stage5a_table_boundary_is_explicit() -> None:
         "countermap_nodes",
         "countermap_projections",
         "retest_recommendations",
-        "session_reports",
     }.isdisjoint(table_names)
 
 

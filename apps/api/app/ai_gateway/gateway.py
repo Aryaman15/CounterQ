@@ -38,6 +38,10 @@ from app.interviews.models import InterviewSession, SessionBudget
 T = TypeVar("T", bound=BaseModel)
 logger = structlog.get_logger(__name__)
 POST_INTERVIEW_ASSESSMENT_PURPOSE = "post_interview_assessment"
+SESSION_REPORT_PURPOSE = "session_report"
+POST_INTERVIEW_REASONING_PURPOSES = frozenset(
+    {POST_INTERVIEW_ASSESSMENT_PURPOSE, SESSION_REPORT_PURPOSE}
+)
 
 
 class AIGatewayError(Exception):
@@ -503,7 +507,7 @@ def _reserve_reasoning_budget(
     if capability == "STANDARD_REASONING":
         deep_reasoning_limit = (
             budget.max_deep_reasoning_calls
-            if purpose == POST_INTERVIEW_ASSESSMENT_PURPOSE
+            if purpose in POST_INTERVIEW_REASONING_PURPOSES
             else interactive_deep_reasoning_limit(budget)
         )
         if budget.deep_reasoning_used >= deep_reasoning_limit:

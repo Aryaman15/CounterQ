@@ -208,6 +208,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/reports/development/sessions/{interview_session_id}/inspection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Report Inspection */
+        get: operations["development_report_inspection_api_reports_development_sessions__interview_session_id__inspection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reports/development/sessions/{interview_session_id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Regenerate Session Report */
+        post: operations["regenerate_session_report_api_reports_development_sessions__interview_session_id__regenerate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reports/sessions/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Session Report Status */
+        get: operations["session_report_status_api_reports_sessions__interview_session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -353,6 +404,69 @@ export interface components {
             statement: string;
             /** Supported Languages */
             supported_languages: ("cpp" | "python" | "java")[];
+            /** Title */
+            title: string;
+        };
+        /** CandidateSessionReportResponse */
+        CandidateSessionReportResponse: {
+            /** Generated At */
+            generated_at: string | null;
+            /** Message */
+            message: string;
+            report: components["schemas"]["SessionReportDocument"] | null;
+            /** Report Id */
+            report_id: string | null;
+            /** Report Version */
+            report_version: number | null;
+            session: components["schemas"]["ReportSessionMetadata"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_STARTED" | "PREPARING" | "READY" | "FAILED";
+        };
+        /** CandidateSourceDetail */
+        CandidateSourceDetail: {
+            /** Attribution */
+            attribution: string;
+            /**
+             * Evidence Id
+             * Format: uuid
+             */
+            evidence_id: string;
+            /** Finding */
+            finding: string;
+            /** Source Excerpt */
+            source_excerpt: string | null;
+            /** Source Label */
+            source_label: string;
+        };
+        /** CoachAssistanceFinding */
+        CoachAssistanceFinding: {
+            /** After Help Evidence Ids */
+            after_help_evidence_ids: string[];
+            /** Assistance Label */
+            assistance_label: string;
+            /**
+             * Assistance Type
+             * @enum {string}
+             */
+            assistance_type: "METACOGNITIVE" | "PROBLEM_NARROWING" | "CONCEPTUAL_HINT" | "STRUCTURAL_HINT" | "DIRECT_TEACHING" | "DEBUGGING_HINT" | "CORRECTNESS_FEEDBACK";
+            /** Before Help Evidence Ids */
+            before_help_evidence_ids: string[];
+            /** Delivery Ids */
+            delivery_ids: string[];
+            /** Explanation */
+            explanation: string;
+            /**
+             * Hint Level
+             * @enum {string}
+             */
+            hint_level: "METACOGNITIVE" | "PROBLEM_NARROWING" | "CONCEPTUAL_HINT" | "STRUCTURAL_HINT" | "DIRECT_TEACHING";
+            /** Independent Verification Missing */
+            independent_verification_missing: boolean;
+            /** Later Independence Level */
+            later_independence_level: ("INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT") | null;
             /** Title */
             title: string;
         };
@@ -645,6 +759,57 @@ export interface components {
              */
             verdict: "GUARANTEED" | "NOT_GUARANTEED" | "UNCERTAIN";
         };
+        /** DevelopmentRegenerationRequest */
+        DevelopmentRegenerationRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** DevelopmentRegenerationResponse */
+        DevelopmentRegenerationResponse: {
+            /** Created */
+            created: boolean;
+            /**
+             * Outbox Event Id
+             * Format: uuid
+             */
+            outbox_event_id: string;
+            /** Status */
+            status: string;
+        };
+        /** DevelopmentReportInspection */
+        DevelopmentReportInspection: {
+            /** Ai Invocation Id */
+            ai_invocation_id: string | null;
+            /** Evidence Finalization Status */
+            evidence_finalization_status: string;
+            /** Generation Policy */
+            generation_policy: string | null;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Is Current */
+            is_current: boolean;
+            /** Last Failure Category */
+            last_failure_category: string | null;
+            /** Outbox */
+            outbox: {
+                [key: string]: unknown;
+            }[];
+            /** Report Id */
+            report_id: string | null;
+            /** Report Status */
+            report_status: string;
+            /** Report Validation Status */
+            report_validation_status: string | null;
+            /** Report Version */
+            report_version: number | null;
+            /** Source Breakpoint Count */
+            source_breakpoint_count: number;
+            /** Source Evidence Count */
+            source_evidence_count: number;
+        };
         /** DevelopmentRunRequest */
         DevelopmentRunRequest: {
             /** Client Event Id */
@@ -914,6 +1079,127 @@ export interface components {
              */
             type: "semantic_vad";
         };
+        /** ReportBreakpointFinding */
+        ReportBreakpointFinding: {
+            /**
+             * Breakpoint Id
+             * Format: uuid
+             */
+            breakpoint_id: string;
+            /**
+             * Concept Id
+             * Format: uuid
+             */
+            concept_id: string;
+            /** Concept Label */
+            concept_label: string;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Explanation */
+            explanation: string;
+            /** Severity */
+            severity: string;
+            /**
+             * Skill Dimension Id
+             * Format: uuid
+             */
+            skill_dimension_id: string;
+            /** Skill Label */
+            skill_label: string;
+            /** Status */
+            status: string;
+            /** Title */
+            title: string;
+        };
+        /** ReportFinding */
+        ReportFinding: {
+            /** Based On Insufficient Evidence */
+            based_on_insufficient_evidence: boolean;
+            /** Breakpoint Id */
+            breakpoint_id: string | null;
+            /** Evidence Ids */
+            evidence_ids: string[];
+            /** Finding */
+            finding: string;
+            /** Independence Level */
+            independence_level: ("INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT") | null;
+            /** Title */
+            title: string;
+        };
+        /** ReportNextAction */
+        ReportNextAction: {
+            /** Action */
+            action: string;
+            /** Based On Insufficient Evidence */
+            based_on_insufficient_evidence: boolean;
+            /** Breakpoint Ids */
+            breakpoint_ids: string[];
+            /** Evidence Ids */
+            evidence_ids: string[];
+        };
+        /** ReportSection */
+        ReportSection: {
+            /** Insufficient Evidence Message */
+            insufficient_evidence_message: string | null;
+            /** Items */
+            items: components["schemas"]["ReportFinding"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "SUPPORTED" | "INSUFFICIENT_EVIDENCE";
+        };
+        /** ReportSessionFacts */
+        ReportSessionFacts: {
+            /** Completed At */
+            completed_at: string;
+            /** Duration Seconds */
+            duration_seconds: number;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Language */
+            language: string;
+            /** Level */
+            level: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /** Problem Title */
+            problem_title: string;
+            /**
+             * Problem Version Id
+             * Format: uuid
+             */
+            problem_version_id: string;
+            /** Source Watermark */
+            source_watermark: number;
+            /** Started At */
+            started_at: string;
+        };
+        /** ReportSessionMetadata */
+        ReportSessionMetadata: {
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Duration Seconds */
+            duration_seconds: number;
+            /** Language */
+            language: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /** Problem Title */
+            problem_title: string;
+        };
         /** RestoredCodeSnapshotMessage */
         RestoredCodeSnapshotMessage: {
             /** Content Hash */
@@ -968,6 +1254,33 @@ export interface components {
              * @constant
              */
             status: "AUTHORIZED";
+        };
+        /** SessionReportDocument */
+        SessionReportDocument: {
+            adaptability: components["schemas"]["ReportSection"];
+            /** Breakpoints */
+            breakpoints: components["schemas"]["ReportBreakpointFinding"][];
+            claim_defense: components["schemas"]["ReportSection"];
+            /** Coach Assistance */
+            coach_assistance: components["schemas"]["CoachAssistanceFinding"][];
+            complexity: components["schemas"]["ReportSection"];
+            /**
+             * Contract Version
+             * @constant
+             */
+            contract_version: "session-report-output.v1";
+            correctness_implementation: components["schemas"]["ReportSection"];
+            debugging: components["schemas"]["ReportSection"];
+            edge_cases: components["schemas"]["ReportSection"];
+            metadata: components["schemas"]["ReportSessionFacts"];
+            /** Next Actions */
+            next_actions: components["schemas"]["ReportNextAction"][];
+            /** Source Details */
+            source_details: components["schemas"]["CandidateSourceDetail"][];
+            /** Strengths */
+            strengths: components["schemas"]["ReportFinding"][];
+            /** Summary */
+            summary: components["schemas"]["ReportFinding"][];
         };
         /** ValidationError */
         ValidationError: {
@@ -1350,6 +1663,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateRealtimeSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_report_inspection_api_reports_development_sessions__interview_session_id__inspection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentReportInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regenerate_session_report_api_reports_development_sessions__interview_session_id__regenerate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentRegenerationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRegenerationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    session_report_status_api_reports_sessions__interview_session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateSessionReportResponse"];
                 };
             };
             /** @description Validation Error */

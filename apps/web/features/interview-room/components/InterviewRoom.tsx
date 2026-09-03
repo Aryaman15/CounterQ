@@ -27,6 +27,7 @@ import { InterviewerSurface } from "./InterviewerSurface";
 import { MonacoInterviewEditor } from "./MonacoInterviewEditor";
 import { ProblemPanel } from "./ProblemPanel";
 import { RecentConversationDrawer } from "./RecentConversationDrawer";
+import { SessionReportExperience } from "./SessionReportExperience";
 
 type InterviewRoomProps = {
   fixture: DemoInterviewRoomFixture;
@@ -376,6 +377,14 @@ export function InterviewRoom({
         busy={realtimeVoice.isRestoring}
         error={realtimeVoice.errorMessage}
         onStart={startInterview}
+      />
+    );
+  }
+
+  if (terminal && realtimeVoice.restoredBootstrap?.interview_session_id) {
+    return (
+      <SessionReportExperience
+        interviewSessionId={realtimeVoice.restoredBootstrap.interview_session_id}
       />
     );
   }
