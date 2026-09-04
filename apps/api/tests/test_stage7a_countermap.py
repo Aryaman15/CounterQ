@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
+import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -82,6 +83,128 @@ async def test_completed_session_projects_valid_candidate_safe_empty_map(
     assert response.graph is not None
     assert response.graph.semantic_identity() == graph.semantic_identity()
     assert response.graph.interview_session_id == development.interview_session.id
+
+
+@pytest.mark.parametrize(
+    "mismatch",
+    ["source_identity", "source_watermark", "schema_version", "generation_policy_version"],
+)
+async def test_ready_generation_key_is_reused_only_for_exact_projection_identity(
+    db_session: AsyncSession,
+    mismatch: str,
+) -> None:
+    development = await create_development_interview(
+        db_session,
+        initial_stage="IMPLEMENTATION",
+    )
+    await InterviewCompletionService(db_session).complete(
+        session_id=development.interview_session.id,
+        reason="USER_ENDED",
+        expected_state_version=0,
+        idempotency_key=f"stage7a-identity-{mismatch}",
+    )
+    bundle = await CounterMapSourceBuilder(db_session).build(development.interview_session.id)
+    graph = CounterMapProjector().project(bundle)
+    repository = CounterMapProjectionRepository(db_session)
+    projection, created = await repository.prepare_generation(
+        session_id=development.interview_session.id,
+        generation_request_key=f"stage7a-same-key-{mismatch}",
+        source_watermark=bundle.source_watermark,
+        source_identity=bundle.source_identity,
+    )
+    await repository.mark_ready(
+        projection=projection,
+        graph_json=graph.model_dump(mode="json"),
+        generated_at=datetime.now(UTC),
+    )
+    preserved_graph = projection.graph_json
+    source_identity = bundle.source_identity
+    source_watermark = bundle.source_watermark
+    if mismatch == "source_identity":
+        source_identity = "sha256:" + "f" * 64
+    elif mismatch == "source_watermark":
+        source_watermark += 1
+    elif mismatch == "schema_version":
+        projection.schema_version = "countermap.graph.legacy"
+    else:
+        projection.generation_policy_version = "countermap-projector.v1"
+    await db_session.flush()
+
+    same, should_generate = await repository.prepare_generation(
+        session_id=development.interview_session.id,
+        generation_request_key=f"stage7a-same-key-{mismatch}",
+        source_watermark=source_watermark,
+        source_identity=source_identity,
+    )
+
+    assert same.id == projection.id
+    assert should_generate is False
+    assert same.status == "STALE"
+    assert same.is_current is False
+    assert same.graph_json == preserved_graph
+    assert same.last_failure_category == "GENERATION_IDENTITY_MISMATCH"
+
+
+async def test_new_generation_request_versions_atomically_supersede_ready_projection(
+    db_session: AsyncSession,
+) -> None:
+    development = await create_development_interview(
+        db_session,
+        initial_stage="IMPLEMENTATION",
+    )
+    await InterviewCompletionService(db_session).complete(
+        session_id=development.interview_session.id,
+        reason="USER_ENDED",
+        expected_state_version=0,
+        idempotency_key="stage7a-versioned-regeneration",
+    )
+    bundle = await CounterMapSourceBuilder(db_session).build(development.interview_session.id)
+    graph = CounterMapProjector().project(bundle)
+    repository = CounterMapProjectionRepository(db_session)
+    first, first_created = await repository.prepare_generation(
+        session_id=development.interview_session.id,
+        generation_request_key="stage7a-generation-v1",
+        source_watermark=bundle.source_watermark,
+        source_identity=bundle.source_identity,
+    )
+    await repository.mark_ready(
+        projection=first,
+        graph_json=graph.model_dump(mode="json"),
+        generated_at=datetime.now(UTC),
+    )
+    first.generation_policy_version = "countermap-projector.v1"
+    await db_session.flush()
+    assert await repository.current_ready(development.interview_session.id) is None
+    first.generation_policy_version = graph.generation_policy_version
+    await db_session.flush()
+    reused, reused_created = await repository.prepare_generation(
+        session_id=development.interview_session.id,
+        generation_request_key="stage7a-generation-v1",
+        source_watermark=bundle.source_watermark,
+        source_identity=bundle.source_identity,
+    )
+    second, second_created = await repository.prepare_generation(
+        session_id=development.interview_session.id,
+        generation_request_key="stage7a-generation-v2",
+        source_watermark=bundle.source_watermark,
+        source_identity=bundle.source_identity,
+    )
+    await repository.mark_ready(
+        projection=second,
+        graph_json=graph.model_dump(mode="json"),
+        generated_at=datetime.now(UTC),
+    )
+
+    assert first_created is True
+    assert reused.id == first.id
+    assert reused_created is False
+    assert second_created is True
+    assert second.projection_version == first.projection_version + 1
+    assert first.status == "STALE"
+    assert first.graph_json is not None
+    assert second.status == "READY"
+    assert second.is_current is True
+    assert await repository.current_ready(development.interview_session.id) == second
 
 
 async def test_outbox_fans_out_siblings_and_countermap_delivery_is_idempotent() -> None:

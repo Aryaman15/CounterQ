@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from uuid import UUID
 
 import pytest
 
+from app.config.settings import Settings
 from app.countermap.projector import CounterMapProjector
+from app.countermap.routes import development_countermap_fixtures
 from app.countermap.schema import CounterMapGraph, stable_edge_id, stable_node_id
 from app.countermap.validator import CounterMapValidationError, CounterMapValidator
 from app.evals.countermap.corpus import CounterMapCorpusFixture, load_countermap_corpus
@@ -124,10 +127,146 @@ def _cases() -> list[IntegrityCase]:
 
     def correction_not_from_diff() -> None:
         evidence = integrity.bundle.evidence[0].model_copy(
-            update={"finding": "Two code versions were observed."}
+            update={
+                "finding": "Two code versions were observed.",
+                "candidate_response_id": None,
+            }
         )
         changed = integrity.bundle.model_copy(update={"evidence": [evidence]})
         assert not _has_edge(CounterMapProjector().project(changed), "CORRECTED_BY")
+
+    def correction_ignores_free_text(marker: str) -> None:
+        evidence = integrity.bundle.evidence[0].model_copy(
+            update={"finding": marker, "candidate_response_id": None}
+        )
+        changed = integrity.bundle.model_copy(update={"evidence": [evidence]})
+        assert not _has_edge(CounterMapProjector().project(changed), "CORRECTED_BY")
+
+    def correction_uses_structured_response_not_finding() -> None:
+        evidence = integrity.bundle.evidence[0].model_copy(
+            update={"finding": "Two code moments belong to one independently evidenced response."}
+        )
+        changed = integrity.bundle.model_copy(update={"evidence": [evidence]})
+        graph = CounterMapProjector().project(changed)
+        CounterMapValidator().validate(bundle=changed, graph=graph)
+        assert _has_edge(graph, "CORRECTED_BY")
+
+    def ambiguous_three_action_correction_is_omitted() -> None:
+        response = integrity.bundle.responses[0].model_copy(
+            update={
+                "source_event_ids": [
+                    *integrity.bundle.responses[0].source_event_ids,
+                    integrity.bundle.events[2].id,
+                ],
+                "end_sequence": 3,
+            }
+        )
+        evidence = integrity.bundle.evidence[0].model_copy(
+            update={
+                "source_links": [
+                    *integrity.bundle.evidence[0].source_links,
+                    integrity.bundle.evidence[0].source_links[0].model_copy(
+                        update={
+                            "event_id": integrity.bundle.events[2].id,
+                            "server_sequence": 3,
+                        }
+                    ),
+                ]
+            }
+        )
+        changed = integrity.bundle.model_copy(
+            update={"responses": [response], "evidence": [evidence]}
+        )
+        assert not _has_edge(CounterMapProjector().project(changed), "CORRECTED_BY")
+
+    def coach_has_only_assisted_outcome_semantics() -> None:
+        assert _has_node(coach_graph, "ASSISTANCE")
+        assert _has_edge(coach_graph, "ASSISTED")
+        assert not _has_edge(coach_graph, "ANSWERED_BY")
+        assert not _has_edge(coach_graph, "TRIGGERED")
+
+    def assistance_requires_explicit_prompt_response_link() -> None:
+        base_delivery = coach.bundle.deliveries[0]
+        second_delivery = base_delivery.model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000111"),
+                "prompt_id": UUID("7a000000-0000-4000-8000-000000000112"),
+            }
+        )
+        ambiguous = coach.bundle.evidence[1].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000113"),
+                "candidate_response_id": None,
+            }
+        )
+        changed = coach.bundle.model_copy(
+            update={
+                "deliveries": [base_delivery, second_delivery],
+                "evidence": [*coach.bundle.evidence, ambiguous],
+            }
+        )
+        graph = CounterMapProjector().project(changed)
+        CounterMapValidator().validate(bundle=changed, graph=graph)
+        assistance_ids = {
+            source.source_id
+            for node in graph.nodes
+            if node.node_type == "ASSISTANCE"
+            for source in node.canonical_sources
+            if source.source_type == "DELIVERED_PROMPT"
+        }
+        assisted_evidence_ids = {
+            source.related_source_id
+            for edge in graph.edges
+            if edge.relationship == "ASSISTED"
+            for source in edge.canonical_relationship_sources
+        }
+        assert assistance_ids == {base_delivery.id}
+        assert assisted_evidence_ids == {coach.bundle.evidence[1].id}
+
+    def assistance_preserves_all_explicit_evidence_links() -> None:
+        linked = coach.bundle.evidence[1]
+        second_linked = linked.model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000114")
+            }
+        )
+        changed = coach.bundle.model_copy(
+            update={"evidence": [*coach.bundle.evidence, second_linked]}
+        )
+        graph = CounterMapProjector().project(changed)
+        CounterMapValidator().validate(bundle=changed, graph=graph)
+        assisted = next(item for item in graph.edges if item.relationship == "ASSISTED")
+        assert {
+            source.related_source_id for source in assisted.canonical_relationship_sources
+        } == {linked.id, second_linked.id}
+
+    def endpoint_substitution_rejected(
+        fixture: CounterMapCorpusFixture,
+        graph: CounterMapGraph,
+        relationship: str,
+    ) -> None:
+        edge = next(item for item in graph.edges if item.relationship == relationship)
+        changed_edge = edge.model_copy(
+            update={
+                "from_node_id": edge.to_node_id,
+                "to_node_id": edge.from_node_id,
+                "edge_id": stable_edge_id(
+                    edge.to_node_id,
+                    edge.from_node_id,
+                    edge.relationship,
+                    *(item.source_id for item in edge.canonical_relationship_sources),
+                ),
+            }
+        )
+        changed = graph.model_copy(
+            update={
+                "edges": [
+                    changed_edge if item.edge_id == edge.edge_id else item
+                    for item in graph.edges
+                ]
+            }
+        )
+        _assert_validation_category(fixture, changed, "EDGE_ENDPOINT_BINDING")
 
     def deterministic() -> None:
         second = CounterMapProjector().project(simulation.bundle)
@@ -311,6 +450,66 @@ def _cases() -> list[IntegrityCase]:
         ),
         IntegrityCase("correction-not-inferred-from-diff", correction_not_from_diff),
         IntegrityCase(
+            "correction-finding-fixed-size-window-is-not-proof",
+            lambda: correction_ignores_free_text("A fixed-size window was selected."),
+        ),
+        IntegrityCase(
+            "correction-finding-revised-constraint-is-not-proof",
+            lambda: correction_ignores_free_text("The revised constraint changes the bound."),
+        ),
+        IntegrityCase(
+            "correction-finding-debugged-build-is-not-proof",
+            lambda: correction_ignores_free_text("The debugged build configuration is stable."),
+        ),
+        IntegrityCase(
+            "correction-finding-corrected-format-is-not-proof",
+            lambda: correction_ignores_free_text("The corrected output formatting is readable."),
+        ),
+        IntegrityCase(
+            "structured-correction-independent-of-finding",
+            correction_uses_structured_response_not_finding,
+        ),
+        IntegrityCase(
+            "ambiguous-three-action-correction-omitted",
+            ambiguous_three_action_correction_is_omitted,
+        ),
+        IntegrityCase(
+            "coach-assistance-has-no-question-edges",
+            coach_has_only_assisted_outcome_semantics,
+        ),
+        IntegrityCase(
+            "assistance-explicit-link-avoids-last-wins",
+            assistance_requires_explicit_prompt_response_link,
+        ),
+        IntegrityCase(
+            "assistance-preserves-multiple-explicit-evidence-links",
+            assistance_preserves_all_explicit_evidence_links,
+        ),
+        IntegrityCase(
+            "triggered-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(simulation, simulation_graph, "TRIGGERED"),
+        ),
+        IntegrityCase(
+            "answered-by-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(simulation, simulation_graph, "ANSWERED_BY"),
+        ),
+        IntegrityCase(
+            "supported-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(simulation, simulation_graph, "SUPPORTED"),
+        ),
+        IntegrityCase(
+            "exposed-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(simulation, simulation_graph, "EXPOSED"),
+        ),
+        IntegrityCase(
+            "assisted-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(coach, coach_graph, "ASSISTED"),
+        ),
+        IntegrityCase(
+            "corrected-by-endpoint-substitution-rejected",
+            lambda: endpoint_substitution_rejected(integrity, integrity_graph, "CORRECTED_BY"),
+        ),
+        IntegrityCase(
             "breakpoint-relationships-preserved",
             lambda: _expect(
                 set(breakpoint_node.display_metadata.breakpoint_relationships)
@@ -334,8 +533,8 @@ def _cases() -> list[IntegrityCase]:
 CASES = _cases()
 
 
-def test_stage7_corpus_has_at_least_twenty_six_integrity_cases() -> None:
-    assert len(CASES) == 38
+def test_stage7_corpus_expands_the_original_thirty_eight_integrity_cases() -> None:
+    assert len(CASES) == 53
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda item: item.case_id)
@@ -351,6 +550,20 @@ def test_stage7_fixtures_use_production_projection_and_validator(
     CounterMapValidator().validate(bundle=fixture.bundle, graph=graph)
     assert graph.interview_session_id == fixture.bundle.interview_session_id
     assert graph.source_watermark == fixture.bundle.source_watermark
+
+
+async def test_development_fixture_api_runs_the_production_projector_and_validator() -> None:
+    responses = await development_countermap_fixtures(Settings(app_env="test"))
+
+    assert {item.fixture_id for item in responses} == {
+        "simulation-success-and-misconception",
+        "coach-assisted-improvement-open-breakpoint",
+        "delivery-and-self-correction-integrity",
+    }
+    assert all(
+        item.graph.generation_policy_version == "countermap-projector.v2"
+        for item in responses
+    )
 
 
 def _expect(value: object) -> None:

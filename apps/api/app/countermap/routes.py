@@ -14,8 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
+from app.countermap.development_fixtures import load_development_countermap_fixtures
+from app.countermap.projector import CounterMapProjector
 from app.countermap.repository import CounterMapProjectionRepository
 from app.countermap.schema import COUNTERMAP_GENERATION_POLICY_VERSION, CounterMapGraph
+from app.countermap.validator import CounterMapValidator
 from app.db.session import get_session, get_sessionmaker
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.outbox.models import OutboxEvent
@@ -73,6 +76,38 @@ class DevelopmentCounterMapInspection(BaseModel):
     outbox_generation_state: str
     last_failure_category: str | None
     outbox: list[dict[str, Any]]
+
+
+class DevelopmentCounterMapFixtureResponse(BaseModel):
+    fixture_id: str
+    label: str
+    description: str
+    graph: CounterMapGraph
+
+
+@router.get(
+    "/development/fixtures",
+    response_model=list[DevelopmentCounterMapFixtureResponse],
+)
+async def development_countermap_fixtures(
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> list[DevelopmentCounterMapFixtureResponse]:
+    _require_development(settings)
+    projector = CounterMapProjector()
+    validator = CounterMapValidator()
+    result: list[DevelopmentCounterMapFixtureResponse] = []
+    for fixture in load_development_countermap_fixtures():
+        graph = projector.project(fixture.bundle)
+        validator.validate(bundle=fixture.bundle, graph=graph)
+        result.append(
+            DevelopmentCounterMapFixtureResponse(
+                fixture_id=fixture.fixture_id,
+                label=fixture.label,
+                description=fixture.description,
+                graph=graph,
+            )
+        )
+    return result
 
 
 @router.get(

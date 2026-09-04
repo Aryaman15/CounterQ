@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 COUNTERMAP_SCHEMA_VERSION = "countermap.graph.v1"
-COUNTERMAP_GENERATION_POLICY_VERSION = "countermap-projector.v1"
+COUNTERMAP_GENERATION_POLICY_VERSION = "countermap-projector.v2"
 
 CounterMapNodeType = Literal[
     "CLAIM",
@@ -155,7 +155,7 @@ class CounterMapSummary(CounterMapContractModel):
 
 class CounterMapGraph(CounterMapContractModel):
     schema_version: Literal["countermap.graph.v1"]
-    generation_policy_version: Literal["countermap-projector.v1"]
+    generation_policy_version: Literal["countermap-projector.v2"]
     interview_session_id: UUID
     source_watermark: int = Field(ge=0)
     nodes: list[CounterMapNode]

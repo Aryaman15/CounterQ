@@ -73,6 +73,8 @@ class CounterMapGenerationService:
         async with self._sessionmaker() as read_session:
             bundle = await CounterMapSourceBuilder(read_session).build(interview_session_id)
 
+        existing_result: CounterMapGenerationResult | None = None
+        reuse_error: CounterMapGenerationError | None = None
         async with self._sessionmaker() as session, session.begin():
             if work_claim is not None:
                 await _require_work_claim(
@@ -91,19 +93,30 @@ class CounterMapGenerationService:
             projection_id = projection.id
             projection_version = projection.projection_version
             if not should_generate:
-                if projection.graph_json is None:
-                    raise CounterMapGenerationError(
+                if projection.status == "STALE":
+                    reuse_error = CounterMapGenerationError(
+                        "COUNTERMAP_PROVENANCE_MISMATCH",
+                        "Existing CounterMap request key belongs to different canonical sources",
+                    )
+                elif projection.graph_json is None:
+                    reuse_error = CounterMapGenerationError(
                         "COUNTERMAP_PROVENANCE_MISSING",
                         "Existing CounterMap is missing its graph",
                     )
-                existing_graph = CounterMapGraph.model_validate(projection.graph_json)
-                return CounterMapGenerationResult(
-                    projection_id=projection.id,
-                    projection_version=projection.projection_version,
-                    created=False,
-                    source_identity=projection.source_identity,
-                    semantic_identity=existing_graph.semantic_identity(),
-                )
+                else:
+                    existing_graph = CounterMapGraph.model_validate(projection.graph_json)
+                    existing_result = CounterMapGenerationResult(
+                        projection_id=projection.id,
+                        projection_version=projection.projection_version,
+                        created=False,
+                        source_identity=projection.source_identity,
+                        semantic_identity=existing_graph.semantic_identity(),
+                    )
+
+        if reuse_error is not None:
+            raise reuse_error
+        if existing_result is not None:
+            return existing_result
 
         try:
             graph = self._projector.project(bundle)

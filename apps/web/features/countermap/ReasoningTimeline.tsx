@@ -23,16 +23,6 @@ type ReasoningTimelineProps = {
   graph: CounterMapGraph;
 };
 
-const relationshipLabels: Record<CounterMapEdge["relationship"], string> = {
-  TRIGGERED: "prompted this question",
-  ANSWERED_BY: "answered by",
-  LED_TO: "led to",
-  SUPPORTED: "showed",
-  EXPOSED: "shaped this breakpoint",
-  CORRECTED_BY: "corrected by",
-  ASSISTED: "helped restart",
-};
-
 export function ReasoningTimeline({ graph }: ReasoningTimelineProps) {
   const nodesById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.node_id, node])),
@@ -112,7 +102,7 @@ function TimelineNode({
           <span>
             {incoming.map((edge) => {
               const source = nodesById.get(edge.from_node_id);
-              return `${source?.title ?? "Earlier moment"} ${relationshipLabels[edge.relationship]}`;
+              return `${source?.title ?? "Earlier moment"} ${relationshipLabel(edge, node)}`;
             }).join(" · ")}
           </span>
         </div>
@@ -128,7 +118,7 @@ function TimelineNode({
       <NodeTruthLine node={node} />
       {meta.why ? (
         <details className="countermap-why">
-          <summary>Why this question?</summary>
+          <summary>{whyLabel(node.node_type)}</summary>
           <p>{meta.why}</p>
         </details>
       ) : null}
@@ -193,17 +183,43 @@ function eyebrowForNode(node: CounterMapNode): string {
     return polarityLabel(metadata?.polarity ?? "MIXED");
   }
   if (node.node_type === "CODE" && node.subtype === "SELF_CORRECTION") return "Independent correction";
+  if (node.node_type === "RESPONSE" && node.subtype === "SPONTANEOUS_RESPONSE") return "Your reasoning";
   if (node.node_type === "ASSISTANCE") return "Coach intervention";
   if (node.node_type === "BREAKPOINT") return "Evidence-backed boundary";
   return {
-    CLAIM: "Candidate claim",
-    REASONING: "Candidate reasoning",
-    CODE: "Implementation moment",
-    TEST: "Visible execution",
-    QUESTION: "Delivered question",
-    RESPONSE: "Candidate response",
-    MUTATION: "Constraint change",
+    CLAIM: "You said",
+    REASONING: "Your reasoning",
+    CODE: "Your code",
+    TEST: "You tested it",
+    QUESTION: "CounterQ asked",
+    RESPONSE: "You answered",
+    MUTATION: "CounterQ changed the constraint",
   }[node.node_type] ?? "Interview moment";
+}
+
+function whyLabel(nodeType: CounterMapNode["node_type"]): string {
+  const labels: Partial<Record<CounterMapNode["node_type"], string>> = {
+    QUESTION: "Why this question?",
+    MUTATION: "Why this constraint change?",
+    ASSISTANCE: "Why this guidance?",
+  };
+  return labels[nodeType] ?? "Why this moment?";
+}
+
+function relationshipLabel(edge: CounterMapEdge, target: CounterMapNode): string {
+  if (edge.relationship === "TRIGGERED") {
+    if (target.node_type === "MUTATION") return "prompted this constraint change";
+    if (target.node_type === "ASSISTANCE") return "led to this guidance";
+    return "prompted this question";
+  }
+  return {
+    ANSWERED_BY: "received this answer",
+    LED_TO: "led to this moment",
+    SUPPORTED: "supported this evidence",
+    EXPOSED: "shaped this breakpoint",
+    CORRECTED_BY: "was corrected by this change",
+    ASSISTED: "helped shape this response",
+  }[edge.relationship];
 }
 
 function polarityLabel(value: "POSITIVE" | "NEGATIVE" | "MIXED"): string {

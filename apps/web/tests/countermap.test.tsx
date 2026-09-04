@@ -5,11 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CounterMapDemo } from "@/features/countermap/CounterMapDemo";
 import { CounterMapExperience } from "@/features/countermap/CounterMapExperience";
 import { ReasoningTimeline } from "@/features/countermap/ReasoningTimeline";
-import { counterMapDemoFixtures } from "@/features/countermap/demoFixtures";
+import { counterMapDemoFixtures } from "./counterMapFixtures";
 
 type CounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
+type DevelopmentFixture = components["schemas"]["DevelopmentCounterMapFixtureResponse"];
 
-function apiResponse(value: CounterMapResponse) {
+function apiResponse(value: unknown) {
   return { ok: true, json: async () => value } as Response;
 }
 
@@ -33,6 +34,29 @@ function readyResponse(): CounterMapResponse {
   };
 }
 
+function developmentFixtures(): DevelopmentFixture[] {
+  return [
+    {
+      fixture_id: "simulation-success-and-misconception",
+      label: "Simulation",
+      description: "An independent defense and a later misconception.",
+      graph: counterMapDemoFixtures[0].graph,
+    },
+    {
+      fixture_id: "coach-assisted-improvement-open-breakpoint",
+      label: "Coach",
+      description: "Guidance materially changed the next response.",
+      graph: counterMapDemoFixtures[1].graph,
+    },
+    {
+      fixture_id: "delivery-and-self-correction-integrity",
+      label: "Integrity",
+      description: "Only delivered wording and structured correction survive.",
+      graph: counterMapDemoFixtures[2].graph,
+    },
+  ];
+}
+
 describe("CounterMap Reasoning Timeline", () => {
   beforeEach(() => vi.unstubAllGlobals());
 
@@ -45,13 +69,58 @@ describe("CounterMap Reasoning Timeline", () => {
     expect(screen.getAllByText("Needs work").length).toBeGreaterThan(0);
   });
 
-  it("switches production fixtures without a microphone or external API", () => {
+  it("loads and switches backend-projected development fixtures", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(developmentFixtures())));
     render(<CounterMapDemo />);
-    fireEvent.click(screen.getByRole("button", { name: "Coach" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Coach" }));
     expect(screen.getByRole("heading", { name: "Coach guidance" })).toBeInTheDocument();
     expect(screen.getAllByText(/independent verification/i).length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Delivery integrity" }));
+    fireEvent.click(screen.getByRole("button", { name: "Integrity" }));
     expect(screen.getByRole("heading", { name: "Corrected independently" })).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringContaining("/api/countermap/development/fixtures"),
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it("uses candidate-facing labels and type-specific explanations", () => {
+    render(<ReasoningTimeline graph={counterMapDemoFixtures[0].graph} />);
+    expect(screen.getAllByText("You said").length).toBeGreaterThan(0);
+    expect(screen.getByText("Why this question?")).toBeInTheDocument();
+  });
+
+  it("uses mutation and guidance language instead of question-only copy", () => {
+    const simulation = counterMapDemoFixtures[0].graph;
+    const question = simulation.nodes.find((node) => node.node_type === "QUESTION");
+    if (!question) throw new Error("Simulation fixture must include a question");
+    const mutationGraph = {
+      ...simulation,
+      nodes: simulation.nodes.map((node) => node.node_id === question.node_id
+        ? { ...node, node_type: "MUTATION" as const }
+        : node),
+    };
+    const { rerender } = render(<ReasoningTimeline graph={mutationGraph} />);
+    expect(screen.getByText("Why this constraint change?")).toBeInTheDocument();
+    expect(screen.getByText(/prompted this constraint change/i)).toBeInTheDocument();
+
+    const coach = counterMapDemoFixtures[1].graph;
+    const assistance = coach.nodes.find((node) => node.node_type === "ASSISTANCE");
+    if (!assistance) throw new Error("Coach fixture must include assistance");
+    const guidanceGraph = {
+      ...coach,
+      nodes: coach.nodes.map((node) => node.node_id === assistance.node_id
+        ? {
+            ...node,
+            display_metadata: {
+              ...node.display_metadata,
+              exact_quote: node.display_metadata?.exact_quote ?? false,
+              why: "CounterQ offered this guidance in response to what you said.",
+            },
+          }
+        : node),
+    };
+    rerender(<ReasoningTimeline graph={guidanceGraph} />);
+    expect(screen.getByText("Why this guidance?")).toBeInTheDocument();
   });
 
   it("shows only actually delivered wording for an interrupted prompt", () => {

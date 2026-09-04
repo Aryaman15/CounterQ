@@ -24,6 +24,9 @@ class CounterMapProjectionRepository:
                 CounterMapProjection.interview_session_id == session_id,
                 CounterMapProjection.status == "READY",
                 CounterMapProjection.is_current.is_(True),
+                CounterMapProjection.schema_version == COUNTERMAP_SCHEMA_VERSION,
+                CounterMapProjection.generation_policy_version
+                == COUNTERMAP_GENERATION_POLICY_VERSION,
             )
         )
         return cast(CounterMapProjection | None, value)
@@ -69,6 +72,20 @@ class CounterMapProjectionRepository:
             generation_request_key=generation_request_key,
         )
         if existing is not None:
+            identity_matches = (
+                existing.source_identity == source_identity
+                and existing.source_watermark == source_watermark
+                and existing.schema_version == COUNTERMAP_SCHEMA_VERSION
+                and existing.generation_policy_version
+                == COUNTERMAP_GENERATION_POLICY_VERSION
+            )
+            if not identity_matches:
+                existing.status = "STALE"
+                existing.is_current = False
+                existing.last_failure_category = "GENERATION_IDENTITY_MISMATCH"
+                existing.updated_at = datetime.now(UTC)
+                await self._session.flush()
+                return existing, False
             if existing.status == "READY":
                 return existing, False
             existing.status = "BUILDING"

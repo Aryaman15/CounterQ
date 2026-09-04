@@ -150,7 +150,7 @@ const integrityEdges = [
 function graph(sessionId: string, nodes: CounterMapNode[], edges: CounterMapEdge[], overview: string): CounterMapGraph {
   return {
     schema_version: "countermap.graph.v1",
-    generation_policy_version: "countermap-projector.v1",
+    generation_policy_version: "countermap-projector.v2",
     interview_session_id: sessionId,
     source_watermark: Math.max(...nodes.map((item) => item.event_range?.end_sequence ?? 0)),
     nodes,

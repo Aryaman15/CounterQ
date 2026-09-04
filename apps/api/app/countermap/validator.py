@@ -14,7 +14,13 @@ from app.countermap.schema import (
     stable_edge_id,
     stable_node_id,
 )
-from app.countermap.source import CounterMapSourceBundle, DecisionSource, DeliverySource
+from app.countermap.source import (
+    CanonicalEvidenceSource,
+    CounterMapSourceBundle,
+    DecisionSource,
+    DeliverySource,
+    ResponseSource,
+)
 
 PROMPT_NODE_TYPES = {"QUESTION", "MUTATION", "ASSISTANCE"}
 PRIVATE_VALUE_MARKERS = (
@@ -218,11 +224,11 @@ class CounterMapValidator:
         for source in edge.canonical_relationship_sources:
             if source.interview_session_id != bundle.interview_session_id:
                 issues.append(_issue("EDGE_SESSION_MISMATCH", "Edge source belongs elsewhere"))
-        if not _relationship_is_canonical(bundle, nodes, edge):
+        if not _relationship_has_exact_endpoints(bundle, nodes, edge):
             issues.append(
                 _issue(
-                    "EDGE_PROVENANCE",
-                    f"{edge.relationship} is not supported by its canonical relationship",
+                    "EDGE_ENDPOINT_BINDING",
+                    f"{edge.relationship} endpoints do not resolve to its canonical relationship",
                 )
             )
         if edge.relationship == "CORRECTED_BY" and not _valid_correction(bundle, nodes, edge):
@@ -266,7 +272,9 @@ def _validate_delivery_node(
     ):
         issues.append(_issue("INTERRUPTION_LEAK", "Interrupted node leaks intended prompt text"))
     if node.node_type == "ASSISTANCE":
-        matching = [item for item in bundle.evidence if _assistance_matches(delivery, item)]
+        matching = [
+            item for item in bundle.evidence if _assistance_matches(bundle, delivery, item)
+        ]
         if bundle.mode != "COACH" or delivery.assistance_type is None or not matching:
             issues.append(
                 _issue("ASSISTANCE_UNSCOPED", "Assistance is not delivered and target-scoped")
@@ -276,13 +284,24 @@ def _validate_delivery_node(
     return issues
 
 
-def _relationship_is_canonical(
+def _relationship_has_exact_endpoints(
     bundle: CounterMapSourceBundle,
     nodes: dict[str, CounterMapNode],
     edge: CounterMapEdge,
 ) -> bool:
-    source = edge.canonical_relationship_sources[0]
+    from_node = nodes[edge.from_node_id]
+    to_node = nodes[edge.to_node_id]
+    sources = edge.canonical_relationship_sources
     if edge.relationship == "TRIGGERED":
+        if len(sources) != 1 or from_node.node_type not in {
+            "CLAIM",
+            "REASONING",
+            "CODE",
+            "TEST",
+            "RESPONSE",
+        } or to_node.node_type not in {"QUESTION", "MUTATION"}:
+            return False
+        source = sources[0]
         delivery = next(
             (item for item in bundle.deliveries if item.prompt_id == source.source_id), None
         )
@@ -292,8 +311,18 @@ def _relationship_is_canonical(
             (item for item in bundle.decisions if item.id == delivery.examiner_decision_id),
             None,
         )
-        return source.related_source_id in _delivery_targets(delivery, decision)
+        return bool(
+            source.related_source_id in _delivery_targets(delivery, decision)
+            and _source_id(to_node, "DELIVERED_PROMPT") == delivery.id
+            and _node_resolves_target(bundle, from_node, source.related_source_id)
+        )
     if edge.relationship == "ANSWERED_BY":
+        if len(sources) != 1 or from_node.node_type not in {
+            "QUESTION",
+            "MUTATION",
+        } or to_node.node_type != "RESPONSE":
+            return False
+        source = sources[0]
         delivery = next((item for item in bundle.deliveries if item.id == source.source_id), None)
         response = next(
             (item for item in bundle.responses if item.id == source.related_source_id), None
@@ -303,15 +332,35 @@ def _relationship_is_canonical(
             and delivery
             and response
             and response.prompt_id == delivery.prompt_id
+            and _source_id(from_node, "DELIVERED_PROMPT") == delivery.id
+            and _source_id(to_node, "CANDIDATE_RESPONSE") == response.id
         )
     if edge.relationship == "SUPPORTED":
+        if len(sources) != 1 or from_node.node_type not in {
+            "CLAIM",
+            "REASONING",
+            "CODE",
+            "TEST",
+            "RESPONSE",
+        } or to_node.node_type != "EVIDENCE":
+            return False
+        source = sources[0]
         evidence = next((item for item in bundle.evidence if item.id == source.source_id), None)
         return bool(
             source.source_type == "EVIDENCE_SOURCE"
             and evidence
             and source.related_source_id in {item.event_id for item in evidence.source_links}
+            and _source_id(to_node, "EVIDENCE") == evidence.id
+            and source.related_source_id in _node_event_ids(bundle, from_node)
         )
     if edge.relationship == "EXPOSED":
+        if (
+            len(sources) != 1
+            or from_node.node_type != "EVIDENCE"
+            or to_node.node_type != "BREAKPOINT"
+        ):
+            return False
+        source = sources[0]
         breakpoint = next(
             (item for item in bundle.breakpoints if item.id == source.source_id), None
         )
@@ -319,6 +368,8 @@ def _relationship_is_canonical(
             source.source_type == "BREAKPOINT_EVIDENCE"
             and breakpoint
             and source.related_source_id in {item.evidence_id for item in breakpoint.evidence_links}
+            and _source_id(from_node, "EVIDENCE") == source.related_source_id
+            and _source_id(to_node, "BREAKPOINT") == breakpoint.id
             and source.detail
             in {
                 item.relationship
@@ -327,20 +378,30 @@ def _relationship_is_canonical(
             }
         )
     if edge.relationship == "ASSISTED":
-        delivery = next((item for item in bundle.deliveries if item.id == source.source_id), None)
-        evidence = next(
-            (item for item in bundle.evidence if item.id == source.related_source_id), None
-        )
+        if from_node.node_type != "ASSISTANCE" or to_node.node_type != "RESPONSE":
+            return False
+        delivery_id = _source_id(from_node, "DELIVERED_PROMPT")
+        response_id = _source_id(to_node, "CANDIDATE_RESPONSE")
+        delivery = next((item for item in bundle.deliveries if item.id == delivery_id), None)
+        response = next((item for item in bundle.responses if item.id == response_id), None)
         return bool(
-            source.source_type == "ASSISTANCE_TARGET"
-            and delivery
-            and evidence
-            and _assistance_matches(delivery, evidence)
+            delivery
+            and response
+            and response.prompt_id == delivery.prompt_id
+            and all(
+                _assisted_source_matches(
+                    bundle,
+                    source=source,
+                    delivery=delivery,
+                    response=response,
+                )
+                for source in sources
+            )
         )
     if edge.relationship == "CORRECTED_BY":
-        return source.source_type == "CORRECTION_EVIDENCE"
+        return len(sources) == 1 and _valid_correction(bundle, nodes, edge)
     if edge.relationship == "LED_TO":
-        return _valid_event_causation(bundle, nodes, edge)
+        return len(sources) == 1 and _valid_event_causation(bundle, nodes, edge)
     return False
 
 
@@ -351,32 +412,39 @@ def _valid_correction(
 ) -> bool:
     source = edge.canonical_relationship_sources[0]
     evidence = next((item for item in bundle.evidence if item.id == source.source_id), None)
-    if evidence is None or not any(
-        marker in evidence.finding.lower()
-        for marker in (
-            "self-correct",
-            "self correct",
-            "corrected",
-            "correction",
-            "fixed",
-            "revised",
-            "debugged",
-        )
+    response = next(
+        (
+            item
+            for item in bundle.responses
+            if evidence is not None and item.id == evidence.candidate_response_id
+        ),
+        None,
+    )
+    if (
+        source.source_type != "CORRECTION_EVIDENCE"
+        or evidence is None
+        or response is None
+        or source.related_source_id != response.id
+        or nodes[edge.from_node_id].node_type != "CODE"
+        or nodes[edge.to_node_id].node_type != "CODE"
     ):
         return False
     from_snapshot = _source_id(nodes[edge.from_node_id], "CODE_SNAPSHOT")
     to_snapshot = _source_id(nodes[edge.to_node_id], "CODE_SNAPSHOT")
-    event_ids = {item.event_id for item in evidence.source_links}
+    event_ids = {item.event_id for item in evidence.source_links}.intersection(
+        response.source_event_ids
+    )
+    snapshots = {item.id: item for item in bundle.code_snapshots}
     supported_snapshots = {
-        item.id for item in bundle.code_snapshots if item.created_from_event_id in event_ids
+        item.id for item in snapshots.values() if item.created_from_event_id in event_ids
     }
-    if evidence.source_code_snapshot_id is not None:
-        supported_snapshots.add(evidence.source_code_snapshot_id)
     return bool(
         from_snapshot
         and to_snapshot
         and from_snapshot != to_snapshot
-        and {from_snapshot, to_snapshot}.issubset(supported_snapshots)
+        and len(supported_snapshots) == 2
+        and {from_snapshot, to_snapshot} == supported_snapshots
+        and snapshots[from_snapshot].server_sequence < snapshots[to_snapshot].server_sequence
     )
 
 
@@ -389,7 +457,12 @@ def _valid_event_causation(
     if source.source_type != "EVENT_CAUSATION" or source.related_source_id is None:
         return False
     target = next((item for item in bundle.events if item.id == source.related_source_id), None)
-    return bool(target and target.causation_id == source.source_id)
+    return bool(
+        target
+        and target.causation_id == source.source_id
+        and source.source_id in _node_event_ids(bundle, nodes[edge.from_node_id])
+        and source.related_source_id in _node_event_ids(bundle, nodes[edge.to_node_id])
+    )
 
 
 def _source_exists(bundle: CounterMapSourceBundle, source_type: str, source_id: UUID) -> bool:
@@ -475,16 +548,28 @@ def _delivery_targets(delivery: DeliverySource, decision: DecisionSource | None)
     return {item for item in values if item is not None}
 
 
-def _assistance_matches(delivery: DeliverySource, evidence: object) -> bool:
-    from app.countermap.source import CanonicalEvidenceSource
-
-    if not isinstance(evidence, CanonicalEvidenceSource):
+def _assistance_matches(
+    bundle: CounterMapSourceBundle,
+    delivery: DeliverySource,
+    evidence: CanonicalEvidenceSource,
+) -> bool:
+    if evidence.candidate_response_id is None:
         return False
+    response = next(
+        (item for item in bundle.responses if item.id == evidence.candidate_response_id),
+        None,
+    )
     if delivery.assistance_type is None or evidence.independence_level not in {
         "AFTER_LIGHT_GUIDANCE",
         "AFTER_STRONG_HINT",
         "DIRECTLY_TAUGHT",
     }:
+        return False
+    if response is None or response.prompt_id != delivery.prompt_id:
+        return False
+    if not set(response.source_event_ids).intersection(
+        item.event_id for item in evidence.source_links
+    ):
         return False
     if max(item.server_sequence for item in evidence.source_links) <= delivery.server_sequence:
         return False
@@ -497,6 +582,85 @@ def _assistance_matches(delivery: DeliverySource, evidence: object) -> bool:
             delivery.target_event_id
             and delivery.target_event_id in {item.event_id for item in evidence.source_links}
         )
+    )
+
+
+def _assisted_source_matches(
+    bundle: CounterMapSourceBundle,
+    *,
+    source: object,
+    delivery: DeliverySource,
+    response: ResponseSource,
+) -> bool:
+    from app.countermap.schema import CanonicalRelationshipSource
+
+    if not isinstance(source, CanonicalRelationshipSource):
+        return False
+    evidence = next(
+        (item for item in bundle.evidence if item.id == source.related_source_id),
+        None,
+    )
+    return bool(
+        source.source_type == "ASSISTANCE_TARGET"
+        and source.source_id == delivery.id
+        and evidence
+        and evidence.candidate_response_id == response.id
+        and _assistance_matches(bundle, delivery, evidence)
+    )
+
+
+def _node_event_ids(bundle: CounterMapSourceBundle, node: CounterMapNode) -> set[UUID]:
+    result = {
+        source.source_id
+        for source in node.canonical_sources
+        if source.source_type == "SESSION_EVENT"
+    }
+    for source in node.canonical_sources:
+        if source.source_type == "CANDIDATE_TRANSCRIPT":
+            result.update(
+                item.event_id
+                for item in bundle.transcripts
+                if item.id == source.source_id
+            )
+        elif source.source_type == "CANDIDATE_CLAIM":
+            result.update(
+                item.source_event_id for item in bundle.claims if item.id == source.source_id
+            )
+        elif source.source_type == "CANDIDATE_RESPONSE":
+            result.update(
+                event_id
+                for item in bundle.responses
+                if item.id == source.source_id
+                for event_id in item.source_event_ids
+            )
+        elif source.source_type == "CODE_SNAPSHOT":
+            result.update(
+                item.created_from_event_id
+                for item in bundle.code_snapshots
+                if item.id == source.source_id
+            )
+        elif source.source_type == "EXECUTION":
+            result.update(
+                item.run_event_id for item in bundle.executions if item.id == source.source_id
+            )
+        elif source.source_type == "DELIVERED_PROMPT":
+            result.update(
+                item.actual_event_id for item in bundle.deliveries if item.id == source.source_id
+            )
+    return result
+
+
+def _node_resolves_target(
+    bundle: CounterMapSourceBundle,
+    node: CounterMapNode,
+    target_id: UUID | None,
+) -> bool:
+    if target_id is None:
+        return False
+    return bool(
+        target_id == _source_id(node, "CANDIDATE_CLAIM")
+        or target_id == _source_id(node, "CODE_SNAPSHOT")
+        or target_id in _node_event_ids(bundle, node)
     )
 
 

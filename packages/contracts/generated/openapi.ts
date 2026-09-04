@@ -21,6 +21,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/countermap/development/fixtures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Countermap Fixtures */
+        get: operations["development_countermap_fixtures_api_countermap_development_fixtures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/countermap/development/sessions/{interview_session_id}/inspection": {
         parameters: {
             query?: never;
@@ -675,7 +692,7 @@ export interface components {
              * Generation Policy Version
              * @constant
              */
-            generation_policy_version: "countermap-projector.v1";
+            generation_policy_version: "countermap-projector.v2";
             /**
              * Interview Session Id
              * Format: uuid
@@ -876,6 +893,16 @@ export interface components {
              * Format: uuid
              */
             interview_session_id: string;
+        };
+        /** DevelopmentCounterMapFixtureResponse */
+        DevelopmentCounterMapFixtureResponse: {
+            /** Description */
+            description: string;
+            /** Fixture Id */
+            fixture_id: string;
+            graph: components["schemas"]["CounterMapGraph"];
+            /** Label */
+            label: string;
         };
         /** DevelopmentCounterMapInspection */
         DevelopmentCounterMapInspection: {
@@ -1676,6 +1703,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_countermap_fixtures_api_countermap_development_fixtures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentCounterMapFixtureResponse"][];
                 };
             };
         };

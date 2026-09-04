@@ -1182,7 +1182,7 @@
             "type": "array"
           },
           "generation_policy_version": {
-            "const": "countermap-projector.v1",
+            "const": "countermap-projector.v2",
             "title": "Generation Policy Version",
             "type": "string"
           },
@@ -1825,6 +1825,33 @@
           "breakpoints"
         ],
         "title": "DevelopmentCanonicalEvaluationSnapshot",
+        "type": "object"
+      },
+      "DevelopmentCounterMapFixtureResponse": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "fixture_id": {
+            "title": "Fixture Id",
+            "type": "string"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/CounterMapGraph"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fixture_id",
+          "label",
+          "description",
+          "graph"
+        ],
+        "title": "DevelopmentCounterMapFixtureResponse",
         "type": "object"
       },
       "DevelopmentCounterMapInspection": {
@@ -4091,6 +4118,31 @@
         "summary": "Development Reasoning Smoke",
         "tags": [
           "ai-gateway"
+        ]
+      }
+    },
+    "/api/countermap/development/fixtures": {
+      "get": {
+        "operationId": "development_countermap_fixtures_api_countermap_development_fixtures_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DevelopmentCounterMapFixtureResponse"
+                  },
+                  "title": "Response Development Countermap Fixtures Api Countermap Development Fixtures Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Development Countermap Fixtures",
+        "tags": [
+          "countermap"
         ]
       }
     },

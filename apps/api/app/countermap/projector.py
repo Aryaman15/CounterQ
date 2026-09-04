@@ -39,15 +39,6 @@ ASSISTED_LEVELS = {
     "AFTER_STRONG_HINT",
     "DIRECTLY_TAUGHT",
 }
-CORRECTION_MARKERS = (
-    "self-correct",
-    "self correct",
-    "corrected",
-    "correction",
-    "fixed",
-    "revised",
-    "debugged",
-)
 
 
 class CounterMapProjector:
@@ -343,13 +334,16 @@ class CounterMapProjector:
                 canonical_relationship_sources=relationship_sources,
             )
 
-        material_assistance = {
-            delivery.id: evidence
-            for delivery in bundle.deliveries
-            if delivery.assistance_type is not None
-            for evidence in bundle.evidence
-            if _assistance_materially_targets(delivery, evidence)
-        }
+        assisted_outcomes: dict[UUID, dict[UUID, list[CanonicalEvidenceSource]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
+        for delivery in bundle.deliveries:
+            if delivery.assistance_type is None:
+                continue
+            for evidence in bundle.evidence:
+                response = _explicit_assisted_response(delivery, evidence, responses_by_id)
+                if response is not None:
+                    assisted_outcomes[delivery.id][response.id].append(evidence)
 
         for delivery in bundle.deliveries:
             decision = (
@@ -364,7 +358,7 @@ class CounterMapProjector:
             if not _meaningful_delivery(delivery.actual_text):
                 continue
             if delivery.assistance_type is not None:
-                if bundle.mode != "COACH" or delivery.id not in material_assistance:
+                if bundle.mode != "COACH" or delivery.id not in assisted_outcomes:
                     continue
                 node_type: CounterMapNodeType = "ASSISTANCE"
                 title = "Coach guidance"
@@ -392,7 +386,7 @@ class CounterMapProjector:
                 ensure_snapshot=ensure_snapshot,
                 event_node_ids=event_node_ids,
             )
-            why = _why_question(nodes.get(target_anchor)) if target_anchor else None
+            why = _why_prompt(nodes.get(target_anchor), node_type) if target_anchor else None
             add_node(
                 CounterMapNode(
                     node_id=node_id,
@@ -424,7 +418,7 @@ class CounterMapProjector:
             )
             delivery_node_ids[delivery.id] = node_id
             event_node_ids[delivery.actual_event_id] = node_id
-            if target_anchor:
+            if target_anchor and node_type in {"QUESTION", "MUTATION"}:
                 target_id = _target_identity(delivery, decision)
                 add_edge(
                     target_anchor,
@@ -448,9 +442,12 @@ class CounterMapProjector:
             )
             if linked_delivery is None or linked_delivery.id not in delivery_node_ids:
                 continue
+            prompt_node_id = delivery_node_ids[linked_delivery.id]
+            if nodes[prompt_node_id].node_type not in {"QUESTION", "MUTATION"}:
+                continue
             response_node_id = ensure_response(response)
             add_edge(
-                delivery_node_ids[linked_delivery.id],
+                prompt_node_id,
                 response_node_id,
                 "ANSWERED_BY",
                 [
@@ -468,9 +465,22 @@ class CounterMapProjector:
             support_nodes: list[tuple[str, UUID, str]] = []
             if evidence.candidate_response_id in responses_by_id:
                 response = responses_by_id[evidence.candidate_response_id]
-                support_nodes.append(
-                    (ensure_response(response), response.source_event_ids[0], "CANDIDATE_RESPONSE")
+                response_evidence_events = sorted(
+                    {
+                        link.event_id
+                        for link in evidence.source_links
+                        if link.event_id in response.source_event_ids
+                    },
+                    key=str,
                 )
+                if response_evidence_events:
+                    support_nodes.append(
+                        (
+                            ensure_response(response),
+                            response_evidence_events[0],
+                            "CANDIDATE_RESPONSE",
+                        )
+                    )
             for link in evidence.source_links:
                 anchor = ensure_event_anchor(link.event_id)
                 if anchor is not None and all(anchor != existing[0] for existing in support_nodes):
@@ -532,7 +542,11 @@ class CounterMapProjector:
                     ],
                 )
 
-            correction_snapshots = _correction_snapshots(evidence, bundle, snapshots_by_id)
+            correction_snapshots = _structured_correction_snapshots(
+                evidence,
+                bundle,
+                responses_by_id,
+            )
             if len(correction_snapshots) >= 2:
                 before, after = correction_snapshots[-2:]
                 before_node = ensure_snapshot(before)
@@ -545,9 +559,9 @@ class CounterMapProjector:
                         CanonicalRelationshipSource(
                             source_type="CORRECTION_EVIDENCE",
                             source_id=evidence.id,
-                            related_source_id=evidence.originating_assessment_id,
+                            related_source_id=evidence.candidate_response_id,
                             interview_session_id=bundle.interview_session_id,
-                            detail="VALIDATED_SELF_CORRECTION",
+                            detail="STRUCTURED_CANDIDATE_RESPONSE_CORRECTION",
                         )
                     ],
                 )
@@ -615,33 +629,36 @@ class CounterMapProjector:
                     ],
                 )
 
-        for delivery_id, evidence in material_assistance.items():
+        for delivery_id, response_matches in assisted_outcomes.items():
             assistance_node_id = delivery_node_ids.get(delivery_id)
-            assisted_evidence_node_id = evidence_node_ids.get(evidence.id)
-            if assistance_node_id is None or assisted_evidence_node_id is None:
-                continue
-            target_anchor = _preferred_evidence_anchor(
-                evidence,
-                response_node_ids,
-                event_node_ids,
-            )
-            if target_anchor is None:
+            if assistance_node_id is None:
                 continue
             delivery = next(item for item in bundle.deliveries if item.id == delivery_id)
-            add_edge(
-                assistance_node_id,
-                target_anchor,
-                "ASSISTED",
-                [
-                    CanonicalRelationshipSource(
-                        source_type="ASSISTANCE_TARGET",
-                        source_id=delivery.id,
-                        related_source_id=evidence.id,
-                        interview_session_id=bundle.interview_session_id,
-                        detail="TARGET_MATCHED_ASSISTED_OUTCOME",
-                    )
-                ],
-            )
+            for response_id, evidence_matches in sorted(
+                response_matches.items(), key=lambda item: str(item[0])
+            ):
+                target_anchor = response_node_ids.get(response_id)
+                visible_evidence = sorted(
+                    (item for item in evidence_matches if item.id in evidence_node_ids),
+                    key=lambda item: str(item.id),
+                )
+                if target_anchor is None or not visible_evidence:
+                    continue
+                add_edge(
+                    assistance_node_id,
+                    target_anchor,
+                    "ASSISTED",
+                    [
+                        CanonicalRelationshipSource(
+                            source_type="ASSISTANCE_TARGET",
+                            source_id=delivery.id,
+                            related_source_id=evidence.id,
+                            interview_session_id=bundle.interview_session_id,
+                            detail="EXPLICIT_PROMPT_RESPONSE_ASSISTED_EVIDENCE",
+                        )
+                        for evidence in visible_evidence
+                    ],
+                )
 
         ranked_nodes = _assign_causal_ranks(nodes, edges)
         ordered_edges = sorted(
@@ -722,14 +739,23 @@ def _target_identity(delivery: DeliverySource, decision: DecisionSource | None) 
     return delivery.id
 
 
-def _assistance_materially_targets(
+def _explicit_assisted_response(
     delivery: DeliverySource,
     evidence: CanonicalEvidenceSource,
-) -> bool:
+    responses_by_id: dict[UUID, ResponseSource],
+) -> ResponseSource | None:
     if evidence.independence_level not in ASSISTED_LEVELS:
-        return False
+        return None
+    if evidence.candidate_response_id is None:
+        return None
+    response = responses_by_id.get(evidence.candidate_response_id)
+    if response is None or response.prompt_id != delivery.prompt_id:
+        return None
+    response_events = set(response.source_event_ids)
+    if not response_events.intersection(link.event_id for link in evidence.source_links):
+        return None
     if max(link.server_sequence for link in evidence.source_links) <= delivery.server_sequence:
-        return False
+        return None
     concept_ids = {item.id for item in evidence.concept_targets}
     skill_ids = {item.id for item in evidence.skill_targets}
     explicit_target_match = (
@@ -741,36 +767,29 @@ def _assistance_materially_targets(
     event_target_match = delivery.target_event_id is not None and any(
         link.event_id == delivery.target_event_id for link in evidence.source_links
     )
-    return explicit_target_match or event_target_match
+    return response if explicit_target_match or event_target_match else None
 
 
-def _preferred_evidence_anchor(
-    evidence: CanonicalEvidenceSource,
-    response_node_ids: dict[UUID, str],
-    event_node_ids: dict[UUID, str],
-) -> str | None:
-    if evidence.candidate_response_id is not None:
-        response = response_node_ids.get(evidence.candidate_response_id)
-        if response is not None:
-            return response
-    for link in sorted(evidence.source_links, key=lambda item: item.server_sequence):
-        if link.event_id in event_node_ids:
-            return event_node_ids[link.event_id]
-    return None
-
-
-def _correction_snapshots(
+def _structured_correction_snapshots(
     evidence: CanonicalEvidenceSource,
     bundle: CounterMapSourceBundle,
-    snapshots_by_id: dict[UUID, CodeSnapshotSource],
+    responses_by_id: dict[UUID, ResponseSource],
 ) -> list[CodeSnapshotSource]:
-    if not any(marker in evidence.finding.lower() for marker in CORRECTION_MARKERS):
+    if evidence.candidate_response_id is None:
         return []
-    event_ids = {item.event_id for item in evidence.source_links}
-    candidates = [item for item in bundle.code_snapshots if item.created_from_event_id in event_ids]
-    if evidence.source_code_snapshot_id in snapshots_by_id:
-        candidates.append(snapshots_by_id[evidence.source_code_snapshot_id])
+    response = responses_by_id.get(evidence.candidate_response_id)
+    if response is None:
+        return []
+    evidence_event_ids = {item.event_id for item in evidence.source_links}
+    structured_event_ids = evidence_event_ids.intersection(response.source_event_ids)
+    candidates = [
+        item
+        for item in bundle.code_snapshots
+        if item.created_from_event_id in structured_event_ids
+    ]
     unique = {item.id: item for item in candidates}
+    if len(unique) != 2:
+        return []
     return sorted(
         unique.values(), key=lambda item: (item.server_sequence, item.version, str(item.id))
     )
@@ -822,7 +841,10 @@ def _stage_for_evidence(
     return event.stage if event is not None else None
 
 
-def _why_question(target: CounterMapNode | None) -> str | None:
+def _why_prompt(
+    target: CounterMapNode | None,
+    node_type: CounterMapNodeType,
+) -> str | None:
     if target is None:
         return None
     labels = {
@@ -834,7 +856,12 @@ def _why_question(target: CounterMapNode | None) -> str | None:
         "EVIDENCE": "what the session had established",
         "BREAKPOINT": "that breakpoint",
     }
-    return f"CounterQ asked this in response to {labels.get(target.node_type, 'that moment')}."
+    action = {
+        "QUESTION": "asked this",
+        "MUTATION": "changed the constraint",
+        "ASSISTANCE": "offered this guidance",
+    }.get(node_type, "responded")
+    return f"CounterQ {action} in response to {labels.get(target.node_type, 'that moment')}."
 
 
 def _question_subtype(delivery: DeliverySource) -> str:
