@@ -27,6 +27,7 @@ from app.reports.schema import (
     SessionReportDocument,
     SessionReportSynthesis,
     build_candidate_document,
+    with_software_owned_assistance_labels,
 )
 from app.reports.source import SessionReportSourceBuilder
 from app.reports.validator import SessionReportValidationError, SessionReportValidator
@@ -174,8 +175,9 @@ class SessionReportGenerationService:
                 "Session Report synthesis could not be completed",
             ) from exc
 
+        admitted_report = with_software_owned_assistance_labels(gateway_result.parsed)
         try:
-            self._validator.validate(bundle=bundle, report=gateway_result.parsed)
+            self._validator.validate(bundle=bundle, report=admitted_report)
         except SessionReportValidationError as exc:
             async with self._sessionmaker() as session:
                 async with session.begin():
@@ -220,13 +222,13 @@ class SessionReportGenerationService:
                     await repository.mark_stale(report_id)
                     source_changed = True
                 else:
-                    self._validator.validate(bundle=fresh_bundle, report=gateway_result.parsed)
+                    self._validator.validate(bundle=fresh_bundle, report=admitted_report)
                     pending_report = await session.get(SessionReport, report_id)
                     if pending_report is None:
                         raise SessionReportGenerationError(
                             "REPORT_NOT_FOUND", "Pending Session Report disappeared"
                         )
-                    document = build_candidate_document(fresh_bundle, gateway_result.parsed)
+                    document = build_candidate_document(fresh_bundle, admitted_report)
                     await repository.mark_ready(
                         report=pending_report,
                         structured_report_json=document.model_dump(mode="json"),

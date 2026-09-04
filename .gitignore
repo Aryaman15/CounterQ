@@ -32,3 +32,5 @@ tmp/stage5-evidence-eval.json
 apps/api/tmp/stage5-evidence-eval.json
 tmp/stage6a-assistance-eval.json
 apps/api/tmp/stage6a-assistance-eval.json
+tmp/stage6b-report-live.json
+apps/api/tmp/stage6b-report-live.json

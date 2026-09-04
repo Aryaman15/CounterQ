@@ -2,7 +2,7 @@
   "schema_version": "stage6b-report-corpus.v1",
   "input_contract": "session-report-input.v1",
   "output_contract": "session-report-output.v1",
-  "policy": "session_report/v1",
+  "policy": "session_report/v2",
   "fixtures": [
     {"id": "strong-independent-solution", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "STRENGTH"},
     {"id": "independent-misconception-unresolved", "mode": "SIMULATION", "evidence": "NEGATIVE_INDEPENDENT", "report": "OPEN_BREAKPOINT"},
@@ -18,6 +18,7 @@
     {"id": "stale-undelivered-prompt-excluded", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "NO_PROMPT_ATTRIBUTION"},
     {"id": "starter-editor-baseline-excluded", "mode": "SIMULATION", "evidence": "STARTER_BASELINE", "report": "INSUFFICIENT_EVIDENCE"},
     {"id": "assisted-success-open-breakpoint", "mode": "COACH", "evidence": "POSITIVE_AFTER_LIGHT_GUIDANCE", "report": "ASSISTED_OPEN_BREAKPOINT"},
-    {"id": "report-regeneration-idempotency", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "VERSIONED_REGENERATION"}
+    {"id": "report-regeneration-idempotency", "mode": "SIMULATION", "evidence": "POSITIVE_INDEPENDENT", "report": "VERSIONED_REGENERATION"},
+    {"id": "paid-live-hash-map-assisted-correction", "mode": "COACH", "evidence": "LIVE_SHAPED", "report": "LIVE_SHAPED"}
   ]
 }

@@ -19,7 +19,11 @@ from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
 from app.problems.models import ProblemVersion
-from app.reports.policy import SESSION_REPORT_POLICY_KEY, SESSION_REPORT_POLICY_VERSION
+from app.reports.policy import (
+    SESSION_REPORT_POLICY_ID,
+    SESSION_REPORT_POLICY_KEY,
+    SESSION_REPORT_POLICY_VERSION,
+)
 from app.reports.repository import SessionReportRepository
 from app.reports.schema import SessionReportDocument
 from app.reports.source import SessionReportSourceBuilder, SessionReportSourceUnavailable
@@ -186,7 +190,7 @@ async def regenerate_session_report(
                 payload={
                     "interview_session_id": str(interview.id),
                     "generation_request_key": generation_key,
-                    "report_policy": "session_report.v1",
+                    "report_policy": SESSION_REPORT_POLICY_ID,
                 },
                 deduplication_key=generation_key,
                 available_at=datetime.now(UTC),

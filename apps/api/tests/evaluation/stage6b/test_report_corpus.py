@@ -7,18 +7,27 @@ import pytest
 
 from app.evals.reports.corpus import load_report_corpus
 from app.evals.reports.live import assert_live_enabled, build_review_payload, run_live
-from app.reports.policy import SESSION_REPORT_POLICY_KEY, SESSION_REPORT_POLICY_VERSION
+from app.reports.policy import (
+    SESSION_REPORT_INSTRUCTIONS,
+    SESSION_REPORT_POLICY_KEY,
+    SESSION_REPORT_POLICY_VERSION,
+)
 from app.reports.schema import (
     SESSION_REPORT_INPUT_CONTRACT_VERSION,
     SESSION_REPORT_OUTPUT_CONTRACT_VERSION,
+    AssistanceType,
+    HintLevel,
+    build_candidate_document,
+    candidate_assistance_label,
+    with_software_owned_assistance_labels,
 )
-from app.reports.validator import SessionReportValidator
+from app.reports.validator import SessionReportValidationError, SessionReportValidator
 
 
-def test_stage6b_corpus_covers_all_fifteen_frozen_scenarios() -> None:
+def test_stage6b_corpus_covers_frozen_scenarios_and_paid_live_regression() -> None:
     corpus = load_report_corpus()
 
-    assert len(corpus) == 15
+    assert len(corpus) == 16
     assert {fixture.fixture_id for fixture in corpus} == {
         "strong-independent-solution",
         "independent-misconception-unresolved",
@@ -35,6 +44,7 @@ def test_stage6b_corpus_covers_all_fifteen_frozen_scenarios() -> None:
         "starter-editor-baseline-excluded",
         "assisted-success-open-breakpoint",
         "report-regeneration-idempotency",
+        "paid-live-hash-map-assisted-correction",
     }
 
 
@@ -51,7 +61,142 @@ def test_stage6b_corpus_uses_production_contract_and_validator(fixture: object) 
 
 
 def test_stage6b_corpus_pins_only_the_new_report_policy() -> None:
-    assert f"{SESSION_REPORT_POLICY_KEY}/{SESSION_REPORT_POLICY_VERSION}" == "session_report/v1"
+    assert f"{SESSION_REPORT_POLICY_KEY}/{SESSION_REPORT_POLICY_VERSION}" == "session_report/v2"
+    assert SESSION_REPORT_INPUT_CONTRACT_VERSION == "session-report-input.v1"
+    assert SESSION_REPORT_OUTPUT_CONTRACT_VERSION == "session-report-output.v1"
+    normalized_instructions = " ".join(SESSION_REPORT_INSTRUCTIONS.split())
+    for required_guidance in (
+        "exactly one independence_level",
+        "supporting_evidence_ids",
+        'METACOGNITIVE = "Reflection prompt"',
+        "must never be assistance_label",
+    ):
+        assert required_guidance in normalized_instructions
+
+
+@pytest.mark.parametrize(
+    ("assistance_type", "hint_level", "expected"),
+    [
+        ("METACOGNITIVE", "METACOGNITIVE", "Reflection prompt"),
+        ("PROBLEM_NARROWING", "PROBLEM_NARROWING", "Problem-narrowing guidance"),
+        ("CONCEPTUAL_HINT", "CONCEPTUAL_HINT", "Conceptual hint"),
+        ("STRUCTURAL_HINT", "STRUCTURAL_HINT", "Structural hint"),
+        ("DIRECT_TEACHING", "DIRECT_TEACHING", "Direct explanation"),
+        ("DEBUGGING_HINT", "METACOGNITIVE", "Debugging hint · Reflection prompt"),
+        (
+            "CORRECTNESS_FEEDBACK",
+            "PROBLEM_NARROWING",
+            "Correctness feedback · Problem-narrowing guidance",
+        ),
+    ],
+)
+def test_candidate_assistance_labels_are_software_owned(
+    assistance_type: AssistanceType,
+    hint_level: HintLevel,
+    expected: str,
+) -> None:
+    assert candidate_assistance_label(assistance_type, hint_level) == expected
+
+
+def test_paid_live_regression_preserves_strict_relationships_and_candidate_sources() -> None:
+    fixture = next(
+        item
+        for item in load_report_corpus()
+        if item.fixture_id == "paid-live-hash-map-assisted-correction"
+    )
+    implementation, weakness, assisted = fixture.bundle.evidence
+    breakpoint = fixture.bundle.breakpoints[0]
+    assistance = fixture.report.coach_assistance[0]
+
+    SessionReportValidator().validate(bundle=fixture.bundle, report=fixture.report)
+    assert implementation.polarity == "POSITIVE"
+    assert implementation.independence_level == "INDEPENDENT"
+    assert fixture.report.strengths[0].evidence_ids == [implementation.id]
+    assert weakness.polarity == "NEGATIVE"
+    assert weakness.independence_level == "INDEPENDENT"
+    assert breakpoint.status == "OPEN"
+    assert breakpoint.severity == "MEDIUM"
+    assert breakpoint.supporting_evidence_ids == [weakness.id]
+    assert breakpoint.resolution_support_evidence_ids == [assisted.id]
+    assert fixture.report.breakpoints[0].evidence_ids == [weakness.id]
+    assert assisted.independence_level == "AFTER_LIGHT_GUIDANCE"
+    assert assistance.assistance_type == assistance.hint_level == "METACOGNITIVE"
+    assert assistance.assistance_label == "Reflection prompt"
+    assert assistance.before_help_evidence_ids == [weakness.id]
+    assert assistance.after_help_evidence_ids == [assisted.id]
+    assert assistance.independent_verification_missing is True
+    assert fixture.report.debugging.status == "INSUFFICIENT_EVIDENCE"
+    assert fixture.report.adaptability.status == "INSUFFICIENT_EVIDENCE"
+
+    evidence_by_id = {item.id: item for item in fixture.bundle.evidence}
+    material_findings = [*fixture.report.summary, *fixture.report.strengths]
+    for section in (
+        fixture.report.claim_defense,
+        fixture.report.correctness_implementation,
+        fixture.report.complexity,
+        fixture.report.edge_cases,
+        fixture.report.debugging,
+        fixture.report.adaptability,
+    ):
+        material_findings.extend(section.items)
+    for finding in material_findings:
+        cited_levels = {
+            evidence_by_id[evidence_id].independence_level
+            for evidence_id in finding.evidence_ids
+        }
+        assert len(cited_levels) <= 1
+        if cited_levels:
+            assert cited_levels == {finding.independence_level}
+
+    prompt_source, candidate_source = assisted.sources
+    assert prompt_source.source_kind == "PROMPT"
+    assert candidate_source.source_kind == "CANDIDATE_TRANSCRIPT"
+    document = build_candidate_document(fixture.bundle, fixture.report)
+    assisted_detail = next(
+        detail for detail in document.source_details if detail.evidence_id == assisted.id
+    )
+    assert assisted_detail.source_excerpt == candidate_source.candidate_safe_excerpt
+    assert assisted_detail.source_excerpt != prompt_source.candidate_safe_excerpt
+
+    raw_assistance = assistance.model_copy(
+        update={"assistance_label": fixture.bundle.delivered_assistance[0].actual_text}
+    )
+    raw_report = fixture.report.model_copy(update={"coach_assistance": [raw_assistance]})
+    with pytest.raises(SessionReportValidationError) as raw_rejected:
+        SessionReportValidator().validate(bundle=fixture.bundle, report=raw_report)
+    assert "ASSISTANCE_LABEL_MISMATCH" in {
+        issue.category for issue in raw_rejected.value.issues
+    }
+    admitted = with_software_owned_assistance_labels(raw_report)
+    SessionReportValidator().validate(bundle=fixture.bundle, report=admitted)
+    assert admitted.coach_assistance[0].assistance_label == "Reflection prompt"
+
+    mixed = fixture.report.summary[1].model_copy(
+        update={
+            "evidence_ids": [weakness.id, assisted.id],
+            "independence_level": "AFTER_LIGHT_GUIDANCE",
+        }
+    )
+    with pytest.raises(SessionReportValidationError) as mixed_rejected:
+        SessionReportValidator().validate(
+            bundle=fixture.bundle,
+            report=fixture.report.model_copy(update={"summary": [mixed]}),
+        )
+    assert "INDEPENDENCE_OVERSTATEMENT" in {
+        issue.category for issue in mixed_rejected.value.issues
+    }
+
+    false_breakpoint_support = fixture.report.summary[2].model_copy(
+        update={"breakpoint_id": breakpoint.id}
+    )
+    with pytest.raises(SessionReportValidationError) as breakpoint_rejected:
+        SessionReportValidator().validate(
+            bundle=fixture.bundle,
+            report=fixture.report.model_copy(update={"summary": [false_breakpoint_support]}),
+        )
+    assert "BREAKPOINT_EVIDENCE_MISMATCH" in {
+        issue.category for issue in breakpoint_rejected.value.issues
+    }
 
 
 def test_stage6b_live_harness_refuses_without_explicit_opt_in(

@@ -32,6 +32,7 @@ from app.reports.schema import (
     SessionReportSourceBundle,
     SessionReportSynthesis,
     build_candidate_document,
+    with_software_owned_assistance_labels,
 )
 from app.reports.source import SessionReportSourceBuilder
 from app.reports.validator import SessionReportValidationError, SessionReportValidator
@@ -92,12 +93,13 @@ async def run_live() -> dict[str, object]:
             correlation_id=f"stage6b-live:{session_id}",
             metadata={"harness": "stage6b-live", "source_identity": bundle.source_identity},
         )
+        admitted_report = with_software_owned_assistance_labels(result.parsed)
         issues: tuple[str, ...] = ()
         try:
-            SessionReportValidator().validate(bundle=bundle, report=result.parsed)
+            SessionReportValidator().validate(bundle=bundle, report=admitted_report)
         except SessionReportValidationError as exc:
             issues = tuple(sorted({issue.category for issue in exc.issues}))
-        quality = build_review_payload(bundle, result.parsed, issues)
+        quality = build_review_payload(bundle, admitted_report, issues)
         return {
             "pins": {
                 "git_revision": _git_revision(),

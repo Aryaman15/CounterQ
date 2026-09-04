@@ -18,6 +18,7 @@ from app.interviews.models import InterviewSession
 from app.outbox.claims import OutboxWorkClaim
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
+from app.reports.policy import SESSION_REPORT_POLICY_ID
 from app.reports.service import (
     SessionReportGenerationError,
     SessionReportGenerationService,
@@ -181,7 +182,7 @@ class PostSessionOutboxConsumer:
                     payload={
                         "interview_session_id": str(event.interview_session_id),
                         "generation_request_key": request_key,
-                        "report_policy": "session_report.v1",
+                        "report_policy": SESSION_REPORT_POLICY_ID,
                     },
                     deduplication_key=request_key,
                     available_at=now,

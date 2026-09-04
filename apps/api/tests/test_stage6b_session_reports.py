@@ -42,7 +42,12 @@ from app.outbox.models import OutboxEvent
 from app.problems.models import Concept, Problem
 from app.reports.models import SessionReport
 from app.reports.routes import session_report_status
-from app.reports.schema import ReportFinding, SessionReportSynthesis, build_candidate_document
+from app.reports.schema import (
+    ObservedSourceReference,
+    ReportFinding,
+    SessionReportSynthesis,
+    build_candidate_document,
+)
 from app.reports.service import (
     SessionReportGenerationError,
     SessionReportGenerationService,
@@ -634,6 +639,68 @@ def test_report_ai_envelope_keeps_candidate_text_untrusted_without_losing_ui_det
     assert "NUMERIC_SCORE" in {issue.category for issue in rejected.value.issues}
 
 
+def test_candidate_source_detail_prioritizes_candidate_demonstration_sources() -> None:
+    fixture = _fixture("strong-independent-solution")
+    evidence = fixture.bundle.evidence[0]
+    prompt = ObservedSourceReference(
+        event_id=uuid4(),
+        server_sequence=3,
+        event_type="TRANSCRIPT_FINALIZED",
+        source_kind="PROMPT",
+        candidate_safe_excerpt="What does this lookup assume?",
+    )
+    execution = ObservedSourceReference(
+        event_id=uuid4(),
+        server_sequence=2,
+        event_type="TEST_COMPLETED",
+        source_kind="EXECUTION",
+        candidate_safe_excerpt="Test Completed: passed",
+    )
+    code = ObservedSourceReference(
+        event_id=uuid4(),
+        server_sequence=1,
+        event_type="CODE_SNAPSHOT_CREATED",
+        source_kind="CODE_SNAPSHOT",
+        candidate_safe_excerpt="python code snapshot version 3",
+    )
+    transcript = ObservedSourceReference(
+        event_id=uuid4(),
+        server_sequence=4,
+        event_type="TRANSCRIPT_FINALIZED",
+        source_kind="CANDIDATE_TRANSCRIPT",
+        candidate_safe_excerpt="I store each value only after checking its complement.",
+    )
+
+    with_transcript = evidence.model_copy(
+        update={"sources": [prompt, execution, code, transcript]}
+    )
+    transcript_document = build_candidate_document(
+        fixture.bundle.model_copy(update={"evidence": [with_transcript]}),
+        fixture.report,
+    )
+    assert (
+        transcript_document.source_details[0].source_excerpt
+        == transcript.candidate_safe_excerpt
+    )
+    assert transcript_document.source_details[0].source_label == "Conversation from this interview"
+
+    with_code = evidence.model_copy(update={"sources": [prompt, execution, code]})
+    code_document = build_candidate_document(
+        fixture.bundle.model_copy(update={"evidence": [with_code]}),
+        fixture.report,
+    )
+    assert code_document.source_details[0].source_excerpt == code.candidate_safe_excerpt
+    assert code_document.source_details[0].source_label == "Code from this interview"
+
+    with_execution = evidence.model_copy(update={"sources": [prompt, execution]})
+    execution_document = build_candidate_document(
+        fixture.bundle.model_copy(update={"evidence": [with_execution]}),
+        fixture.report,
+    )
+    assert execution_document.source_details[0].source_excerpt == execution.candidate_safe_excerpt
+    assert execution_document.source_details[0].source_label == "Execution from this interview"
+
+
 def test_validator_rejects_concept_skill_prompt_and_delivery_ids_only_in_candidate_copy() -> None:
     fixture = _fixture("coach-light-hint-assisted-correction")
     identifiers = (
@@ -786,6 +853,7 @@ async def test_evidence_consumer_orders_report_work_and_is_idempotent() -> None:
                 )
             )
             assert report_event is not None
+            assert report_event.payload["report_policy"] == "session_report.v2"
             report_event_id = report_event.id
         await OutboxDispatcher(sessionmaker=sessions, publisher=publisher).dispatch_once()
         report_attempt = publisher.calls[-1][1]
@@ -963,7 +1031,7 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
         )
         regenerated = await service.generate(
             interview_session_id=session_id,
-            generation_request_key=f"session-report:{session_id}:session_report.v1:manual-2",
+            generation_request_key=f"session-report:{session_id}:session_report.v2:manual-2",
         )
         assert first.created is True
         assert duplicate.created is False
@@ -1008,7 +1076,7 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
         with pytest.raises(SessionReportGenerationError) as rejected:
             await service.generate(
                 interview_session_id=session_id,
-                generation_request_key=(f"session-report:{session_id}:session_report.v1:invalid-3"),
+                generation_request_key=(f"session-report:{session_id}:session_report.v2:invalid-3"),
             )
         assert rejected.value.category == "REPORT_VALIDATION_FAILED"
         async with sessions() as session:
@@ -1036,7 +1104,7 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
         with pytest.raises(SessionReportGenerationError) as stale:
             await service.generate(
                 interview_session_id=session_id,
-                generation_request_key=f"session-report:{session_id}:session_report.v1:stale-4",
+                generation_request_key=f"session-report:{session_id}:session_report.v2:stale-4",
             )
         assert stale.value.category == "SOURCE_CHANGED"
         async with sessions() as session:

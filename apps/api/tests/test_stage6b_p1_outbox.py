@@ -868,7 +868,7 @@ async def _replace_evidence_event_with_report_event(
             payload={
                 "interview_session_id": str(session_id),
                 "generation_request_key": request_key,
-                "report_policy": "session_report.v1",
+                "report_policy": "session_report.v2",
             },
             deduplication_key=request_key,
             available_at=now,

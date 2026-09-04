@@ -313,23 +313,18 @@ def build_candidate_document(
     bundle: SessionReportSourceBundle,
     synthesis: SessionReportSynthesis,
 ) -> SessionReportDocument:
-    details = [
-        CandidateSourceDetail(
-            evidence_id=item.id,
-            finding=item.finding,
-            attribution=candidate_attribution(item.independence_level),
-            source_label=_source_label(item),
-            source_excerpt=next(
-                (
-                    source.candidate_safe_excerpt
-                    for source in item.sources
-                    if source.candidate_safe_excerpt
-                ),
-                None,
-            ),
+    details: list[CandidateSourceDetail] = []
+    for item in bundle.evidence:
+        source = _candidate_disclosure_source(item.sources)
+        details.append(
+            CandidateSourceDetail(
+                evidence_id=item.id,
+                finding=item.finding,
+                attribution=candidate_attribution(item.independence_level),
+                source_label=_source_label(source),
+                source_excerpt=source.candidate_safe_excerpt if source is not None else None,
+            )
         )
-        for item in bundle.evidence
-    ]
     return SessionReportDocument(
         metadata=bundle.session,
         source_details=details,
@@ -365,10 +360,53 @@ def candidate_assistance_label(
     return type_label if type_label == level_label else f"{type_label} · {level_label}"
 
 
-def _source_label(evidence: ReportEvidenceSource) -> str:
-    kinds = {source.event_type for source in evidence.sources}
-    if any("CODE" in kind for kind in kinds):
+def with_software_owned_assistance_labels(
+    synthesis: SessionReportSynthesis,
+) -> SessionReportSynthesis:
+    """Replace provider-selected assistance labels with deterministic product copy."""
+
+    return synthesis.model_copy(
+        update={
+            "coach_assistance": [
+                item.model_copy(
+                    update={
+                        "assistance_label": candidate_assistance_label(
+                            item.assistance_type,
+                            item.hint_level,
+                        )
+                    }
+                )
+                for item in synthesis.coach_assistance
+            ]
+        }
+    )
+
+
+def _candidate_disclosure_source(
+    sources: list[ObservedSourceReference],
+) -> ObservedSourceReference | None:
+    candidates = [source for source in sources if source.candidate_safe_excerpt]
+    if not candidates:
+        return None
+    priority = {
+        "CANDIDATE_TRANSCRIPT": 0,
+        "CODE_SNAPSHOT": 1,
+        "EXECUTION": 2,
+        "PROMPT": 4,
+    }
+    return min(
+        candidates,
+        key=lambda source: (
+            priority.get(source.source_kind, 3),
+            source.server_sequence,
+            str(source.event_id),
+        ),
+    )
+
+
+def _source_label(source: ObservedSourceReference | None) -> str:
+    if source is not None and source.source_kind == "CODE_SNAPSHOT":
         return "Code from this interview"
-    if any(kind in {"RUN_CLICKED", "COMPILE_COMPLETED", "TEST_COMPLETED"} for kind in kinds):
+    if source is not None and source.source_kind == "EXECUTION":
         return "Execution from this interview"
     return "Conversation from this interview"
