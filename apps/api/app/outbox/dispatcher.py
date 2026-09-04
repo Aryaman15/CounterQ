@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TypeGuard
+from typing import Literal, TypeGuard
 from uuid import UUID
 
 import structlog
@@ -17,6 +17,7 @@ from app.outbox.models import OutboxEvent
 from app.outbox.publisher import BackgroundJobPublisher
 
 logger = structlog.get_logger(__name__)
+PublishOutcome = Literal["PUBLISHED", "RETRY", "FAILED"]
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,7 @@ class OutboxDispatcher:
                 )
             except Exception as exc:
                 outcome = await self._record_publish_failure(event, exc)
+                published += int(outcome == "PUBLISHED")
                 retryable += int(outcome == "RETRY")
                 failed += int(outcome == "FAILED")
             else:
@@ -83,6 +85,8 @@ class OutboxDispatcher:
                 for event in events:
                     event.status = "PROCESSING"
                     event.attempt_count += 1
+                    # Null marks this exact attempt as reserved but not yet acknowledged.
+                    event.published_at = None
                     event.last_attempt_at = now
                     event.next_retry_at = now + timedelta(seconds=self._claim_lease_seconds)
                 await session.flush()
@@ -102,7 +106,12 @@ class OutboxDispatcher:
                 event = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == claim.id).with_for_update()
                 )
-                if not _owns_publication_claim(event, claim):
+                if not _is_current_attempt(event, claim):
+                    return False
+                # An early worker owns the attempt once it persists the receipt marker.
+                if event.published_at is not None or event.status == "COMPLETED":
+                    return True
+                if event.status != "PROCESSING":
                     return False
                 event.status = "PUBLISHED"
                 event.published_at = now
@@ -114,22 +123,29 @@ class OutboxDispatcher:
         self,
         claim: ClaimedOutboxEvent,
         exc: Exception,
-    ) -> str | None:
+    ) -> PublishOutcome | None:
         now = self._clock()
         async with self._sessionmaker() as session:
             async with session.begin():
                 event = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == claim.id).with_for_update()
                 )
-                if not _owns_publication_claim(event, claim):
+                if not _is_current_attempt(event, claim):
+                    return None
+                # The enqueue may have succeeded even though its client acknowledgement failed.
+                if event.published_at is not None or event.status == "COMPLETED":
+                    return "PUBLISHED"
+                if event.status != "PROCESSING":
                     return None
                 event.last_error = type(exc).__name__[:256]
                 if event.attempt_count >= self._max_attempts:
                     event.status = "FAILED"
                     event.next_retry_at = None
+                    outcome: PublishOutcome = "FAILED"
                 else:
                     event.status = "RETRY"
                     event.next_retry_at = now + _retry_delay(event.attempt_count)
+                    outcome = "RETRY"
                 logger.warning(
                     "outbox_publish_failed",
                     outbox_event_id=str(event.id),
@@ -138,7 +154,7 @@ class OutboxDispatcher:
                     status=event.status,
                     error_class=type(exc).__name__,
                 )
-                return event.status
+                return outcome
 
 
 async def run_dispatcher_loop(
@@ -183,12 +199,8 @@ def _retry_delay(attempt: int) -> timedelta:
     return timedelta(seconds=min(300, 2 ** min(attempt, 8)))
 
 
-def _owns_publication_claim(
+def _is_current_attempt(
     event: OutboxEvent | None,
     claim: ClaimedOutboxEvent,
 ) -> TypeGuard[OutboxEvent]:
-    return bool(
-        event is not None
-        and event.attempt_count == claim.attempt
-        and event.status == "PROCESSING"
-    )
+    return bool(event is not None and event.attempt_count == claim.attempt)

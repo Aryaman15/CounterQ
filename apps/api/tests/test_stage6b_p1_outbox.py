@@ -27,7 +27,7 @@ from app.evidence.coordinator import SessionEvaluationResult, UnitEvaluationResu
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.models import SessionBudget
-from app.outbox.consumer import PostSessionOutboxConsumer
+from app.outbox.consumer import ConsumerResult, PostSessionOutboxConsumer
 from app.outbox.dispatcher import OutboxDispatcher
 from app.outbox.models import OutboxEvent
 from app.outbox.publisher import RQJobPublisher
@@ -52,11 +52,65 @@ class BlockingEvidenceCoordinator:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
+        self.calls = 0
 
     async def evaluate(self, interview_session_id: UUID) -> SessionEvaluationResult:
+        self.calls += 1
         self.started.set()
         await self.release.wait()
         return _successful_evaluation(interview_session_id)
+
+
+class CountingEvidenceCoordinator:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def evaluate(self, interview_session_id: UUID) -> SessionEvaluationResult:
+        self.calls += 1
+        return _successful_evaluation(interview_session_id)
+
+
+class ImmediateConsumerPublisher:
+    def __init__(
+        self,
+        consumer: PostSessionOutboxConsumer,
+        *,
+        raise_after_consume: bool = False,
+    ) -> None:
+        self._consumer = consumer
+        self._raise_after_consume = raise_after_consume
+        self.calls: list[tuple[UUID, int]] = []
+        self.results: list[ConsumerResult] = []
+
+    async def publish(self, *, outbox_event_id: UUID, attempt: int) -> None:
+        self.calls.append((outbox_event_id, attempt))
+        self.results.append(await self._consumer.consume(outbox_event_id, attempt))
+        if self._raise_after_consume:
+            raise ConnectionError("enqueue acknowledgement was lost")
+
+
+class ActiveConsumerPublisher:
+    def __init__(
+        self,
+        consumer: PostSessionOutboxConsumer,
+        *,
+        started: asyncio.Event,
+    ) -> None:
+        self._consumer = consumer
+        self._started = started
+        self.calls: list[tuple[UUID, int]] = []
+        self.task: asyncio.Task[ConsumerResult] | None = None
+
+    async def publish(self, *, outbox_event_id: UUID, attempt: int) -> None:
+        self.calls.append((outbox_event_id, attempt))
+        self.task = asyncio.create_task(self._consumer.consume(outbox_event_id, attempt))
+        await asyncio.wait_for(self._started.wait(), timeout=2)
+
+
+class FailingPublisher:
+    async def publish(self, *, outbox_event_id: UUID, attempt: int) -> None:
+        del outbox_event_id, attempt
+        raise ConnectionError("enqueue failed before worker acknowledgement")
 
 
 class OwnershipStealingEvidenceCoordinator:
@@ -194,6 +248,225 @@ async def test_dispatch_publish_runs_after_claim_transaction_commits() -> None:
             ).dispatch_once()
             assert result.published == 1
             assert len(publisher.calls) == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_normal_published_attempt_is_claimed_and_completed_once() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with completed_interview(sessions, key="p1-normal-handoff") as session_id:
+            coordinator = CountingEvidenceCoordinator()
+            consumer = PostSessionOutboxConsumer(
+                sessionmaker=sessions,
+                evidence_coordinator=coordinator,  # type: ignore[arg-type]
+                report_service=NoopReportService(),  # type: ignore[arg-type]
+            )
+            publisher = RecordingPublisher()
+
+            dispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=publisher,
+            ).dispatch_once()
+            event_id, attempt = publisher.calls[0]
+            async with sessions() as session:
+                published = await session.get(OutboxEvent, event_id)
+                assert published is not None
+                assert published.status == "PUBLISHED"
+                assert published.published_at is not None
+
+            completed = await consumer.consume(event_id, attempt)
+            duplicate = await consumer.consume(event_id, attempt)
+
+            async with sessions() as session:
+                event = await session.get(OutboxEvent, event_id)
+                report_event_count = await session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.interview_session_id == session_id,
+                        OutboxEvent.event_type == "GENERATE_SESSION_REPORT",
+                    )
+                )
+            assert dispatch.published == 1
+            assert completed.status == "COMPLETED"
+            assert duplicate.status == "SKIPPED"
+            assert duplicate.category == "OUTBOX_OWNERSHIP_LOST"
+            assert event is not None and event.status == "COMPLETED"
+            assert coordinator.calls == 1
+            assert report_event_count == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_fast_report_worker_completes_before_dispatcher_acknowledgement(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with completed_interview(sessions, key="p1-fast-report-worker") as session_id:
+            event_id = await _replace_evidence_event_with_report_event(sessions, session_id)
+            provider = CountingReportProvider()
+            consumer = PostSessionOutboxConsumer(
+                sessionmaker=sessions,
+                evidence_coordinator=cast(Any, None),
+                report_service=SessionReportGenerationService(
+                    sessionmaker=sessions,
+                    ai_gateway=AIGateway(
+                        settings=create_settings(env_file=tmp_path / ".env"),
+                        sessionmaker=sessions,
+                        provider=provider,
+                    ),
+                ),
+            )
+            publisher = ImmediateConsumerPublisher(consumer)
+
+            dispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=publisher,
+            ).dispatch_once()
+
+            async with sessions() as session:
+                event = await session.get(OutboxEvent, event_id)
+                reports = list(
+                    await session.scalars(
+                        select(SessionReport).where(
+                            SessionReport.interview_session_id == session_id
+                        )
+                    )
+                )
+            assert dispatch.published == 1
+            assert dispatch.retryable == 0
+            assert dispatch.failed == 0
+            assert publisher.results[0].status == "COMPLETED"
+            assert event is not None and event.status == "COMPLETED"
+            assert event.published_at is not None
+            assert len(reports) == 1
+            assert reports[0].status == "READY"
+            assert provider.calls == 1
+            redispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=publisher,
+            ).dispatch_once()
+            assert redispatch.claimed == 0
+            assert provider.calls == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_dispatcher_acknowledgement_preserves_active_early_worker_lease() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    coordinator = BlockingEvidenceCoordinator()
+    publisher: ActiveConsumerPublisher | None = None
+    try:
+        async with completed_interview(sessions, key="p1-active-early-worker"):
+            dispatch_now = datetime.now(UTC) + timedelta(seconds=1)
+            worker_now = dispatch_now + timedelta(hours=1)
+            worker_lease = worker_now + timedelta(seconds=120)
+            consumer = PostSessionOutboxConsumer(
+                sessionmaker=sessions,
+                evidence_coordinator=coordinator,  # type: ignore[arg-type]
+                report_service=NoopReportService(),  # type: ignore[arg-type]
+                clock=lambda: worker_now,
+            )
+            publisher = ActiveConsumerPublisher(consumer, started=coordinator.started)
+
+            dispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=publisher,
+                claim_lease_seconds=10,
+                clock=lambda: dispatch_now,
+            ).dispatch_once()
+            event_id, attempt = publisher.calls[0]
+            async with sessions() as session:
+                active = await session.get(OutboxEvent, event_id)
+                assert active is not None
+                assert active.status == "PROCESSING"
+                assert active.published_at == worker_now
+                assert active.next_retry_at == worker_lease
+
+            duplicate = await consumer.consume(event_id, attempt)
+            assert dispatch.published == 1
+            assert duplicate.status == "SKIPPED"
+            assert duplicate.category == "OUTBOX_OWNERSHIP_LOST"
+            assert coordinator.calls == 1
+
+            coordinator.release.set()
+            assert publisher.task is not None
+            completed = await publisher.task
+            assert completed.status == "COMPLETED"
+    finally:
+        coordinator.release.set()
+        if publisher is not None and publisher.task is not None:
+            await publisher.task
+        await engine.dispose()
+
+
+async def test_ambiguous_publish_failure_does_not_clobber_completed_worker() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with completed_interview(sessions, key="p1-ambiguous-publish") as session_id:
+            coordinator = CountingEvidenceCoordinator()
+            consumer = PostSessionOutboxConsumer(
+                sessionmaker=sessions,
+                evidence_coordinator=coordinator,  # type: ignore[arg-type]
+                report_service=NoopReportService(),  # type: ignore[arg-type]
+            )
+            publisher = ImmediateConsumerPublisher(
+                consumer,
+                raise_after_consume=True,
+            )
+
+            dispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=publisher,
+            ).dispatch_once()
+            event_id, _ = publisher.calls[0]
+
+            async with sessions() as session:
+                event = await session.get(OutboxEvent, event_id)
+                report_event_count = await session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.interview_session_id == session_id,
+                        OutboxEvent.event_type == "GENERATE_SESSION_REPORT",
+                    )
+                )
+            assert dispatch.published == 1
+            assert dispatch.retryable == 0
+            assert dispatch.failed == 0
+            assert publisher.results[0].status == "COMPLETED"
+            assert event is not None and event.status == "COMPLETED"
+            assert event.last_error is None
+            assert coordinator.calls == 1
+            assert report_event_count == 1
+    finally:
+        await engine.dispose()
+
+
+async def test_publish_failure_without_worker_acknowledgement_remains_retryable() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with completed_interview(sessions, key="p1-unacknowledged-publish"):
+            dispatch = await OutboxDispatcher(
+                sessionmaker=sessions,
+                publisher=FailingPublisher(),
+            ).dispatch_once()
+
+            async with sessions() as session:
+                event = await session.scalar(select(OutboxEvent))
+            assert dispatch.published == 0
+            assert dispatch.retryable == 1
+            assert dispatch.failed == 0
+            assert event is not None and event.status == "RETRY"
+            assert event.published_at is None
+            assert event.last_error == "ConnectionError"
     finally:
         await engine.dispose()
 

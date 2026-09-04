@@ -91,13 +91,15 @@ class PostSessionOutboxConsumer:
                 event = await session.scalar(
                     select(OutboxEvent).where(OutboxEvent.id == event_id).with_for_update()
                 )
-                if (
-                    event is None
-                    or event.attempt_count != attempt
-                    or event.status != "PUBLISHED"
-                ):
+                if event is None or event.attempt_count != attempt:
+                    return None
+                publication_acknowledged = event.status == "PUBLISHED"
+                # Receipt of the exact reserved attempt is durable proof of publication.
+                publication_reserved = event.status == "PROCESSING" and event.published_at is None
+                if not publication_acknowledged and not publication_reserved:
                     return None
                 event.status = "PROCESSING"
+                event.published_at = event.published_at or now
                 event.next_retry_at = now + timedelta(seconds=self._processing_lease_seconds)
                 event.last_error = None
                 await session.flush()
