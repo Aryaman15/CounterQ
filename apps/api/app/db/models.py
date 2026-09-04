@@ -5,6 +5,7 @@ from app.auth.models import User
 from app.evidence.models import (
     Assessment,
     AssessmentSource,
+    AssessmentUnitEvaluation,
     Breakpoint,
     BreakpointEvidence,
     Evidence,
@@ -43,6 +44,7 @@ __all__ = [
     "AIInvocation",
     "Assessment",
     "AssessmentSource",
+    "AssessmentUnitEvaluation",
     "Breakpoint",
     "BreakpointEvidence",
     "CandidateClaim",

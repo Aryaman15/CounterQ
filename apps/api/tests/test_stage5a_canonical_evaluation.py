@@ -484,7 +484,12 @@ async def test_high_confidence_proposed_assessment_cannot_bypass_validation(
 
     assert result.accepted is False
     assert "ASSESSMENT_NOT_VALIDATED" in {failure.code for failure in result.failures}
-    assert await db_session.scalar(select(func.count()).select_from(Evidence)) == 0
+    evidence_count = await db_session.scalar(
+        select(func.count())
+        .select_from(Evidence)
+        .where(Evidence.interview_session_id == fixture.graph.interview_session.id)
+    )
+    assert evidence_count == 0
 
 
 async def test_evidence_rejection_is_structured_for_invalid_semantics_and_sources(
@@ -621,7 +626,12 @@ async def test_breakpoint_policy_normalizes_identity_and_prevents_active_duplica
     assert second.created is False
     assert first.breakpoint_id == second.breakpoint_id
     assert first.breakpoint_key == "hash_table_worst_case_complexity"
-    assert await db_session.scalar(select(func.count()).select_from(Breakpoint)) == 1
+    breakpoint_count = await db_session.scalar(
+        select(func.count())
+        .select_from(Breakpoint)
+        .where(Breakpoint.first_detected_session_id == fixture.graph.interview_session.id)
+    )
+    assert breakpoint_count == 1
     links = list(
         await db_session.scalars(
             select(BreakpointEvidence)
@@ -662,7 +672,12 @@ async def test_resolved_breakpoint_is_historical_and_allows_a_new_active_recurre
 
     assert recurrence.created is True
     assert recurrence.breakpoint_id != first.breakpoint_id
-    assert await db_session.scalar(select(func.count()).select_from(Breakpoint)) == 2
+    breakpoint_count = await db_session.scalar(
+        select(func.count())
+        .select_from(Breakpoint)
+        .where(Breakpoint.first_detected_session_id == fixture.graph.interview_session.id)
+    )
+    assert breakpoint_count == 2
 
 
 async def test_breakpoint_requires_meaningful_strong_canonical_evidence(
@@ -699,7 +714,12 @@ async def test_breakpoint_requires_meaningful_strong_canonical_evidence(
 
     assert weak.eligibility.reason == "INSUFFICIENT_EVIDENCE_STRENGTH_OR_CONFIDENCE"
     assert syntax.eligibility.reason == "TRIVIAL_OR_TRANSIENT_BOUNDARY"
-    assert await db_session.scalar(select(func.count()).select_from(Breakpoint)) == 0
+    breakpoint_count = await db_session.scalar(
+        select(func.count())
+        .select_from(Breakpoint)
+        .where(Breakpoint.first_detected_session_id == fixture.graph.interview_session.id)
+    )
+    assert breakpoint_count == 0
 
 
 def test_breakpoint_fallback_key_is_deterministic_and_controlled() -> None:

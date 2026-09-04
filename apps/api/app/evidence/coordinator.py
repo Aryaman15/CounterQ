@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Literal, cast
 from uuid import UUID
@@ -16,7 +17,7 @@ from app.ai_gateway.gateway import (
     AIGatewayError,
     AIGatewayResult,
 )
-from app.ai_gateway.models import AIPolicyVersion
+from app.ai_gateway.models import AIInvocation, AIPolicyVersion
 from app.ai_gateway.provider import ReasoningProviderError
 from app.evidence.assessment_schema import AssessmentAnalysisResult, AssessmentFinding
 from app.evidence.breakpoints import (
@@ -36,6 +37,7 @@ from app.evidence.independence import IndependenceAttributionService
 from app.evidence.models import (
     Assessment,
     AssessmentSource,
+    AssessmentUnitEvaluation,
     BreakpointEvidence,
     Evidence,
 )
@@ -305,6 +307,36 @@ class SessionEvidenceEvaluationCoordinator:
                 if fresh_unit.independence_level is None:
                     raise ValueError("AssessmentUnit independence became unresolved")
 
+                existing_completion = await session.scalar(
+                    select(AssessmentUnitEvaluation).where(
+                        AssessmentUnitEvaluation.interview_session_id
+                        == fresh_unit.interview_session_id,
+                        AssessmentUnitEvaluation.unit_key == fresh_unit.unit_key,
+                        AssessmentUnitEvaluation.evaluator_policy_version_id
+                        == evaluator_policy_version_id,
+                    )
+                )
+                if existing_completion is not None:
+                    return await _evaluated_unit_result(
+                        session,
+                        fresh_unit,
+                        evaluator_policy_version_id=evaluator_policy_version_id,
+                    )
+                if not await _evaluator_policy_is_exact(
+                    session, evaluator_policy_version_id
+                ):
+                    raise ValueError("Assessment evaluator policy changed before admission")
+                invocation = await session.scalar(
+                    select(AIInvocation).where(
+                        AIInvocation.id == invocation_id,
+                        AIInvocation.interview_session_id == fresh_unit.interview_session_id,
+                        AIInvocation.ai_policy_version_id == evaluator_policy_version_id,
+                        AIInvocation.status == "SUCCEEDED",
+                    )
+                )
+                if invocation is None:
+                    raise ValueError("Successful Assessment AIInvocation is not admissible")
+
                 validation = EvidenceValidationService(session)
                 validation_policy = await validation.ensure_validation_policy_version()
                 repository = EvidenceRepository(session)
@@ -323,6 +355,18 @@ class SessionEvidenceEvaluationCoordinator:
                     if outcome[1] is not None:
                         evidence_ids.append(outcome[1])
                     breakpoint_ids.extend(outcome[2])
+                session.add(
+                    AssessmentUnitEvaluation(
+                        interview_session_id=fresh_unit.interview_session_id,
+                        unit_key=fresh_unit.unit_key,
+                        unit_kind=fresh_unit.kind.value,
+                        evaluator_policy_version_id=evaluator_policy_version_id,
+                        successful_ai_invocation_id=invocation_id,
+                        finding_count=len(analysis.findings),
+                        completed_at=datetime.now(UTC),
+                    )
+                )
+                await session.flush()
         return UnitEvaluationResult(
             unit_key=original_unit.unit_key,
             unit_kind=original_unit.kind.value,
@@ -640,14 +684,41 @@ async def _finding_independence_level(
 async def _existing_unit_result(
     session: AsyncSession, unit: AssessmentUnit
 ) -> UnitEvaluationResult | None:
+    evaluator_policy_version_id = await session.scalar(
+        select(AIPolicyVersion.id).where(
+            AIPolicyVersion.policy_key == ASSESSMENT_EVALUATOR_POLICY_KEY,
+            AIPolicyVersion.version == ASSESSMENT_EVALUATOR_POLICY_VERSION,
+        )
+    )
+    if evaluator_policy_version_id is None:
+        return None
+    completion = await session.scalar(
+        select(AssessmentUnitEvaluation.id).where(
+            AssessmentUnitEvaluation.interview_session_id == unit.interview_session_id,
+            AssessmentUnitEvaluation.unit_key == unit.unit_key,
+            AssessmentUnitEvaluation.evaluator_policy_version_id
+            == evaluator_policy_version_id,
+        )
+    )
+    result = await _evaluated_unit_result(
+        session,
+        unit,
+        evaluator_policy_version_id=evaluator_policy_version_id,
+    )
+    return result if completion is not None or result.assessment_ids else None
+
+
+async def _evaluated_unit_result(
+    session: AsyncSession,
+    unit: AssessmentUnit,
+    *,
+    evaluator_policy_version_id: UUID,
+) -> UnitEvaluationResult:
     candidates = list(
         await session.scalars(
-            select(Assessment)
-            .join(AIPolicyVersion, AIPolicyVersion.id == Assessment.ai_policy_version_id)
-            .where(
+            select(Assessment).where(
                 Assessment.interview_session_id == unit.interview_session_id,
-                AIPolicyVersion.policy_key == ASSESSMENT_EVALUATOR_POLICY_KEY,
-                AIPolicyVersion.version == ASSESSMENT_EVALUATOR_POLICY_VERSION,
+                Assessment.ai_policy_version_id == evaluator_policy_version_id,
             )
         )
     )
@@ -663,8 +734,6 @@ async def _existing_unit_result(
         )
         if source_ids == expected_sources:
             matching.append(assessment)
-    if not matching:
-        return None
     assessment_ids = tuple(assessment.id for assessment in matching)
     evidence_ids = tuple(
         await session.scalars(

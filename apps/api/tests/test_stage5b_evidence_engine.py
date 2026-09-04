@@ -37,6 +37,7 @@ from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
 from app.evidence.independence import IndependenceAttributionService
 from app.evidence.models import (
     Assessment,
+    AssessmentUnitEvaluation,
     Breakpoint,
     BreakpointEvidence,
     Evidence,
@@ -1486,6 +1487,14 @@ async def test_concept_only_skill_only_and_combined_findings_become_evidence(
                 .limit(1)
             )
         assert invocation is not None
+        # Exercise the low-level admission defense without the coordinator's
+        # unit-completion short circuit.
+        async with sessions() as session, session.begin():
+            await session.execute(
+                delete(AssessmentUnitEvaluation).where(
+                    AssessmentUnitEvaluation.interview_session_id == session_id
+                )
+            )
         no_target = AssessmentFinding.model_construct(
             assessment_dimension="TRANSFER",
             polarity="POSITIVE",

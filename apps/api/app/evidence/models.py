@@ -61,6 +61,68 @@ class SkillDimension(Base):
     )
 
 
+class AssessmentUnitEvaluation(Base):
+    """Operational proof that deterministic admission finished for one stable unit."""
+
+    __tablename__ = "assessment_unit_evaluations"
+    __table_args__ = (
+        CheckConstraint(
+            "unit_key ~ '^sha256:[0-9a-f]{64}$'",
+            name="unit_key_format",
+        ),
+        CheckConstraint("length(btrim(unit_kind)) > 0", name="unit_kind_nonempty"),
+        CheckConstraint("finding_count >= 0", name="finding_count_nonnegative"),
+        ForeignKeyConstraint(
+            ["interview_session_id", "successful_ai_invocation_id"],
+            ["ai_invocations.interview_session_id", "ai_invocations.id"],
+            name="fk_assessment_unit_evaluations_session_ai_invocation",
+        ),
+        UniqueConstraint(
+            "interview_session_id",
+            "unit_key",
+            "evaluator_policy_version_id",
+            name="uq_assessment_unit_evaluations_session_unit_policy",
+        ),
+        Index(
+            "ix_assessment_unit_evaluations_session_completed_at",
+            "interview_session_id",
+            "completed_at",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
+    interview_session_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("interview_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    unit_key: Mapped[str] = mapped_column(String(71), nullable=False)
+    unit_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    evaluator_policy_version_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("ai_policy_versions.id"), nullable=False
+    )
+    successful_ai_invocation_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("ai_invocations.id"), nullable=False
+    )
+    finding_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("CURRENT_TIMESTAMP")
+    )
+
+    interview_session: Mapped[InterviewSession] = relationship(
+        foreign_keys=[interview_session_id]
+    )
+    evaluator_policy_version: Mapped[AIPolicyVersion] = relationship(
+        foreign_keys=[evaluator_policy_version_id]
+    )
+    successful_ai_invocation: Mapped[AIInvocation] = relationship(
+        foreign_keys=[successful_ai_invocation_id]
+    )
+
+
 class Assessment(Base):
     __tablename__ = "assessments"
     __table_args__ = (

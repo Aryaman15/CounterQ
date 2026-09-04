@@ -311,7 +311,11 @@ async def test_stale_examiner_decision_can_exist_without_prompt_or_delivery(
         .where(InterviewerPrompt.examiner_decision_id == decision.id),
     )
     delivery_count = await db_session.scalar(
-        select(func.count()).select_from(InterviewerPromptDelivery)
+        select(func.count())
+        .select_from(InterviewerPromptDelivery)
+        .where(
+            InterviewerPromptDelivery.interview_session_id == graph.interview_session.id
+        )
     )
 
     assert prompt_count == 0
@@ -733,7 +737,11 @@ async def test_full_code_driven_chain_does_not_require_spoken_claim(
         sequence=1,
     )
 
-    claim_count = await db_session.scalar(select(func.count()).select_from(CandidateClaim))
+    claim_count = await db_session.scalar(
+        select(func.count())
+        .select_from(CandidateClaim)
+        .where(CandidateClaim.interview_session_id == graph.interview_session.id)
+    )
 
     assert claim_count == 0
     assert decision.target_code_snapshot_id == snapshot.id
@@ -767,7 +775,11 @@ async def test_suppressed_stale_decision_path_has_no_fake_delivery(
         .where(InterviewerPrompt.examiner_decision_id == decision.id),
     )
     deliveries = await db_session.scalar(
-        select(func.count()).select_from(InterviewerPromptDelivery)
+        select(func.count())
+        .select_from(InterviewerPromptDelivery)
+        .where(
+            InterviewerPromptDelivery.interview_session_id == graph.interview_session.id
+        )
     )
 
     assert prompts == 0
@@ -806,7 +818,11 @@ async def test_stage1_1b_deletion_behavior_preserves_optional_grouping(
     await db_session.refresh(response)
 
     delivery_count = await db_session.scalar(
-        select(func.count()).select_from(InterviewerPromptDelivery)
+        select(func.count())
+        .select_from(InterviewerPromptDelivery)
+        .where(
+            InterviewerPromptDelivery.interview_session_id == graph.interview_session.id
+        )
     )
 
     assert response.interviewer_prompt_id is None

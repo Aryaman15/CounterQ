@@ -665,8 +665,18 @@ async def test_user_delete_cascades_session_owned_observations(
 
     assert await count_rows(db_session, InterviewSession, graph.interview_session.id) == 0
     assert await count_rows(db_session, InterviewEvent, transcript_event.id) == 0
-    assert await count_rows(db_session, TranscriptSegment) == 0
-    assert await count_rows(db_session, CodeSnapshot) == 0
+    transcript_count = await db_session.scalar(
+        select(func.count())
+        .select_from(TranscriptSegment)
+        .where(TranscriptSegment.interview_session_id == graph.interview_session.id)
+    )
+    snapshot_count = await db_session.scalar(
+        select(func.count())
+        .select_from(CodeSnapshot)
+        .where(CodeSnapshot.interview_session_id == graph.interview_session.id)
+    )
+    assert transcript_count == 0
+    assert snapshot_count == 0
 
 
 async def test_invalid_constrained_text_values_are_rejected(db_session: AsyncSession) -> None:
