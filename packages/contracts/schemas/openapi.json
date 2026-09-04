@@ -273,6 +273,96 @@
         "title": "CandidateAssistanceResponse",
         "type": "object"
       },
+      "CandidateCounterMapResponse": {
+        "properties": {
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "graph": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CounterMapGraph"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "projection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Id"
+          },
+          "projection_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Version"
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Version"
+          },
+          "session": {
+            "$ref": "#/components/schemas/CounterMapSessionMetadata"
+          },
+          "status": {
+            "enum": [
+              "NOT_AVAILABLE",
+              "BUILDING",
+              "READY",
+              "FAILED",
+              "STALE"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "session",
+          "projection_id",
+          "projection_version",
+          "schema_version",
+          "generated_at",
+          "graph",
+          "message"
+        ],
+        "title": "CandidateCounterMapResponse",
+        "type": "object"
+      },
       "CandidateProblemDetail": {
         "properties": {
           "argument_schema": {
@@ -502,6 +592,133 @@
         "title": "CandidateSourceDetail",
         "type": "object"
       },
+      "CanonicalRelationshipSource": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "related_source_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Related Source Id"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "enum": [
+              "PROMPT_TARGET",
+              "RESPONSE_LINK",
+              "EVIDENCE_SOURCE",
+              "BREAKPOINT_EVIDENCE",
+              "ASSISTANCE_TARGET",
+              "CORRECTION_EVIDENCE",
+              "EVENT_CAUSATION"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id",
+          "interview_session_id",
+          "detail"
+        ],
+        "title": "CanonicalRelationshipSource",
+        "type": "object"
+      },
+      "CanonicalSourceReference": {
+        "additionalProperties": false,
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "server_sequence": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Server Sequence"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "enum": [
+              "SESSION_EVENT",
+              "CANDIDATE_TRANSCRIPT",
+              "DELIVERED_PROMPT",
+              "CANDIDATE_CLAIM",
+              "CANDIDATE_RESPONSE",
+              "CODE_SNAPSHOT",
+              "CODE_DIFF",
+              "EXECUTION",
+              "EVIDENCE",
+              "BREAKPOINT"
+            ],
+            "title": "Source Type",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id",
+          "interview_session_id"
+        ],
+        "title": "CanonicalSourceReference",
+        "type": "object"
+      },
       "CoachAssistanceFinding": {
         "additionalProperties": false,
         "properties": {
@@ -611,6 +828,577 @@
           "independent_verification_missing"
         ],
         "title": "CoachAssistanceFinding",
+        "type": "object"
+      },
+      "CounterMapAvailableAction": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "enum": [
+              "VIEW_SOURCE",
+              "DISPUTE_ASSESSMENT",
+              "COUNTERQ_ME_AGAIN"
+            ],
+            "title": "Action",
+            "type": "string"
+          },
+          "availability": {
+            "enum": [
+              "AVAILABLE",
+              "DEFERRED",
+              "UNAVAILABLE"
+            ],
+            "title": "Availability",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "maxLength": 180,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "required": [
+          "action",
+          "label",
+          "availability"
+        ],
+        "title": "CounterMapAvailableAction",
+        "type": "object"
+      },
+      "CounterMapDisplayMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "assistance_label": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistance Label"
+          },
+          "breakpoint_relationships": {
+            "items": {
+              "enum": [
+                "CREATED",
+                "REINFORCED",
+                "CONTRADICTED",
+                "RESOLUTION_SUPPORT"
+              ],
+              "type": "string"
+            },
+            "title": "Breakpoint Relationships",
+            "type": "array"
+          },
+          "breakpoint_severity": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakpoint Severity"
+          },
+          "breakpoint_status": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Breakpoint Status"
+          },
+          "code_snapshot_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Snapshot Id"
+          },
+          "code_version": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Version"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "delivery_state": {
+            "anyOf": [
+              {
+                "enum": [
+                  "DELIVERED",
+                  "PARTIALLY_DELIVERED",
+                  "INTERRUPTED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery State"
+          },
+          "exact_quote": {
+            "default": false,
+            "title": "Exact Quote",
+            "type": "boolean"
+          },
+          "execution_status": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Execution Status"
+          },
+          "independence_level": {
+            "anyOf": [
+              {
+                "enum": [
+                  "INDEPENDENT",
+                  "AFTER_PROBE",
+                  "AFTER_LIGHT_GUIDANCE",
+                  "AFTER_STRONG_HINT",
+                  "DIRECTLY_TAUGHT"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Independence Level"
+          },
+          "language": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Language"
+          },
+          "polarity": {
+            "anyOf": [
+              {
+                "enum": [
+                  "POSITIVE",
+                  "NEGATIVE",
+                  "MIXED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Polarity"
+          },
+          "strength": {
+            "anyOf": [
+              {
+                "enum": [
+                  "WEAK",
+                  "MODERATE",
+                  "STRONG"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strength"
+          },
+          "visible_failed": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Failed"
+          },
+          "visible_passed": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Passed"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "maxLength": 360,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "title": "CounterMapDisplayMetadata",
+        "type": "object"
+      },
+      "CounterMapEdge": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_relationship_sources": {
+            "items": {
+              "$ref": "#/components/schemas/CanonicalRelationshipSource"
+            },
+            "minItems": 1,
+            "title": "Canonical Relationship Sources",
+            "type": "array"
+          },
+          "edge_id": {
+            "pattern": "^cme_[0-9a-f]{24}$",
+            "title": "Edge Id",
+            "type": "string"
+          },
+          "from_node_id": {
+            "pattern": "^cmn_[0-9a-f]{24}$",
+            "title": "From Node Id",
+            "type": "string"
+          },
+          "relationship": {
+            "enum": [
+              "TRIGGERED",
+              "ANSWERED_BY",
+              "LED_TO",
+              "SUPPORTED",
+              "EXPOSED",
+              "CORRECTED_BY",
+              "ASSISTED"
+            ],
+            "title": "Relationship",
+            "type": "string"
+          },
+          "to_node_id": {
+            "pattern": "^cmn_[0-9a-f]{24}$",
+            "title": "To Node Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "edge_id",
+          "from_node_id",
+          "to_node_id",
+          "relationship",
+          "canonical_relationship_sources"
+        ],
+        "title": "CounterMapEdge",
+        "type": "object"
+      },
+      "CounterMapEventRange": {
+        "additionalProperties": false,
+        "properties": {
+          "end_sequence": {
+            "minimum": 1.0,
+            "title": "End Sequence",
+            "type": "integer"
+          },
+          "start_sequence": {
+            "minimum": 1.0,
+            "title": "Start Sequence",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start_sequence",
+          "end_sequence"
+        ],
+        "title": "CounterMapEventRange",
+        "type": "object"
+      },
+      "CounterMapGraph": {
+        "additionalProperties": false,
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/CounterMapEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "generation_policy_version": {
+            "const": "countermap-projector.v1",
+            "title": "Generation Policy Version",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/CounterMapNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": "countermap.graph.v1",
+            "title": "Schema Version",
+            "type": "string"
+          },
+          "source_watermark": {
+            "minimum": 0.0,
+            "title": "Source Watermark",
+            "type": "integer"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/CounterMapSummary"
+          }
+        },
+        "required": [
+          "schema_version",
+          "generation_policy_version",
+          "interview_session_id",
+          "source_watermark",
+          "nodes",
+          "edges",
+          "summary"
+        ],
+        "title": "CounterMapGraph",
+        "type": "object"
+      },
+      "CounterMapNode": {
+        "additionalProperties": false,
+        "properties": {
+          "available_actions": {
+            "items": {
+              "$ref": "#/components/schemas/CounterMapAvailableAction"
+            },
+            "title": "Available Actions",
+            "type": "array"
+          },
+          "canonical_sources": {
+            "items": {
+              "$ref": "#/components/schemas/CanonicalSourceReference"
+            },
+            "minItems": 1,
+            "title": "Canonical Sources",
+            "type": "array"
+          },
+          "causal_rank": {
+            "minimum": 0.0,
+            "title": "Causal Rank",
+            "type": "integer"
+          },
+          "display_metadata": {
+            "$ref": "#/components/schemas/CounterMapDisplayMetadata"
+          },
+          "event_range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CounterMapEventRange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "node_id": {
+            "pattern": "^cmn_[0-9a-f]{24}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "node_type": {
+            "enum": [
+              "CLAIM",
+              "REASONING",
+              "CODE",
+              "TEST",
+              "QUESTION",
+              "RESPONSE",
+              "EVIDENCE",
+              "BREAKPOINT",
+              "ASSISTANCE",
+              "MUTATION"
+            ],
+            "title": "Node Type",
+            "type": "string"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "subtype": {
+            "maxLength": 96,
+            "minLength": 1,
+            "title": "Subtype",
+            "type": "string"
+          },
+          "summary": {
+            "maxLength": 700,
+            "minLength": 1,
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "node_type",
+          "subtype",
+          "canonical_sources",
+          "title",
+          "summary",
+          "causal_rank"
+        ],
+        "title": "CounterMapNode",
+        "type": "object"
+      },
+      "CounterMapSessionMetadata": {
+        "properties": {
+          "completed_at": {
+            "format": "date-time",
+            "title": "Completed At",
+            "type": "string"
+          },
+          "duration_seconds": {
+            "title": "Duration Seconds",
+            "type": "integer"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_title": {
+            "title": "Problem Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_title",
+          "mode",
+          "language",
+          "completed_at",
+          "duration_seconds"
+        ],
+        "title": "CounterMapSessionMetadata",
+        "type": "object"
+      },
+      "CounterMapSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "node_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Node Counts",
+            "type": "object"
+          },
+          "overview": {
+            "maxLength": 360,
+            "minLength": 1,
+            "title": "Overview",
+            "type": "string"
+          },
+          "relationship_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Relationship Counts",
+            "type": "object"
+          },
+          "title": {
+            "maxLength": 140,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "overview",
+          "node_counts",
+          "relationship_counts"
+        ],
+        "title": "CounterMapSummary",
         "type": "object"
       },
       "CreateRealtimeSessionRequest": {
@@ -1037,6 +1825,196 @@
           "breakpoints"
         ],
         "title": "DevelopmentCanonicalEvaluationSnapshot",
+        "type": "object"
+      },
+      "DevelopmentCounterMapInspection": {
+        "properties": {
+          "edge_count": {
+            "title": "Edge Count",
+            "type": "integer"
+          },
+          "generated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generated At"
+          },
+          "generation_policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Generation Policy Version"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "last_failure_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Failure Category"
+          },
+          "node_count": {
+            "title": "Node Count",
+            "type": "integer"
+          },
+          "node_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Node Counts",
+            "type": "object"
+          },
+          "outbox": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Outbox",
+            "type": "array"
+          },
+          "outbox_generation_state": {
+            "title": "Outbox Generation State",
+            "type": "string"
+          },
+          "projection_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Id"
+          },
+          "projection_status": {
+            "title": "Projection Status",
+            "type": "string"
+          },
+          "projection_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Version"
+          },
+          "relationship_counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Relationship Counts",
+            "type": "object"
+          },
+          "schema_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Version"
+          },
+          "source_watermark": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Watermark"
+          },
+          "validation_outcome": {
+            "title": "Validation Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "projection_status",
+          "projection_id",
+          "projection_version",
+          "schema_version",
+          "generation_policy_version",
+          "source_watermark",
+          "generated_at",
+          "node_count",
+          "edge_count",
+          "node_counts",
+          "relationship_counts",
+          "validation_outcome",
+          "outbox_generation_state",
+          "last_failure_category",
+          "outbox"
+        ],
+        "title": "DevelopmentCounterMapInspection",
+        "type": "object"
+      },
+      "DevelopmentCounterMapRegenerationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "idempotency_key"
+        ],
+        "title": "DevelopmentCounterMapRegenerationRequest",
+        "type": "object"
+      },
+      "DevelopmentCounterMapRegenerationResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "outbox_event_id": {
+            "format": "uuid",
+            "title": "Outbox Event Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outbox_event_id",
+          "created",
+          "status"
+        ],
+        "title": "DevelopmentCounterMapRegenerationResponse",
         "type": "object"
       },
       "DevelopmentExaminerClaim": {
@@ -3113,6 +4091,145 @@
         "summary": "Development Reasoning Smoke",
         "tags": [
           "ai-gateway"
+        ]
+      }
+    },
+    "/api/countermap/development/sessions/{interview_session_id}/inspection": {
+      "get": {
+        "operationId": "development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentCounterMapInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Countermap Inspection",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
+    "/api/countermap/development/sessions/{interview_session_id}/regenerate": {
+      "post": {
+        "operationId": "regenerate_countermap_api_countermap_development_sessions__interview_session_id__regenerate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentCounterMapRegenerationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentCounterMapRegenerationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regenerate Countermap",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
+    "/api/countermap/sessions/{interview_session_id}": {
+      "get": {
+        "operationId": "countermap_status_api_countermap_sessions__interview_session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCounterMapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Countermap Status",
+        "tags": [
+          "countermap"
         ]
       }
     },

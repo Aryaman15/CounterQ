@@ -2,6 +2,7 @@
 
 from app.ai_gateway.models import AIInvocation, AIPolicyVersion
 from app.auth.models import User
+from app.countermap.models import CounterMapProjection
 from app.evidence.models import (
     Assessment,
     AssessmentSource,
@@ -52,6 +53,7 @@ __all__ = [
     "CandidateResponseSource",
     "CodeDiff",
     "CodeSnapshot",
+    "CounterMapProjection",
     "Concept",
     "ConceptAlias",
     "ConceptRelationship",

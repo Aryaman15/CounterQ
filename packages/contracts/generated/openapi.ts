@@ -21,6 +21,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/countermap/development/sessions/{interview_session_id}/inspection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Countermap Inspection */
+        get: operations["development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/countermap/development/sessions/{interview_session_id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Regenerate Countermap */
+        post: operations["regenerate_countermap_api_countermap_development_sessions__interview_session_id__regenerate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/countermap/sessions/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Countermap Status */
+        get: operations["countermap_status_api_countermap_sessions__interview_session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/evidence/development/session-evaluation": {
         parameters: {
             query?: never;
@@ -364,6 +415,26 @@ export interface components {
             /** Target Skill Dimension Id */
             target_skill_dimension_id: string | null;
         };
+        /** CandidateCounterMapResponse */
+        CandidateCounterMapResponse: {
+            /** Generated At */
+            generated_at: string | null;
+            graph: components["schemas"]["CounterMapGraph"] | null;
+            /** Message */
+            message: string;
+            /** Projection Id */
+            projection_id: string | null;
+            /** Projection Version */
+            projection_version: number | null;
+            /** Schema Version */
+            schema_version: string | null;
+            session: components["schemas"]["CounterMapSessionMetadata"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "NOT_AVAILABLE" | "BUILDING" | "READY" | "FAILED" | "STALE";
+        };
         /** CandidateProblemDetail */
         CandidateProblemDetail: {
             /** Argument Schema */
@@ -441,6 +512,52 @@ export interface components {
             /** Source Label */
             source_label: string;
         };
+        /** CanonicalRelationshipSource */
+        CanonicalRelationshipSource: {
+            /** Detail */
+            detail: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Related Source Id */
+            related_source_id?: string | null;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "PROMPT_TARGET" | "RESPONSE_LINK" | "EVIDENCE_SOURCE" | "BREAKPOINT_EVIDENCE" | "ASSISTANCE_TARGET" | "CORRECTION_EVIDENCE" | "EVENT_CAUSATION";
+        };
+        /** CanonicalSourceReference */
+        CanonicalSourceReference: {
+            /** Content Hash */
+            content_hash?: string | null;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Server Sequence */
+            server_sequence?: number | null;
+            /**
+             * Source Id
+             * Format: uuid
+             */
+            source_id: string;
+            /**
+             * Source Type
+             * @enum {string}
+             */
+            source_type: "SESSION_EVENT" | "CANDIDATE_TRANSCRIPT" | "DELIVERED_PROMPT" | "CANDIDATE_CLAIM" | "CANDIDATE_RESPONSE" | "CODE_SNAPSHOT" | "CODE_DIFF" | "EXECUTION" | "EVIDENCE" | "BREAKPOINT";
+            /** Version */
+            version?: number | null;
+        };
         /** CoachAssistanceFinding */
         CoachAssistanceFinding: {
             /** After Help Evidence Ids */
@@ -467,6 +584,171 @@ export interface components {
             independent_verification_missing: boolean;
             /** Later Independence Level */
             later_independence_level: ("INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT") | null;
+            /** Title */
+            title: string;
+        };
+        /** CounterMapAvailableAction */
+        CounterMapAvailableAction: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "VIEW_SOURCE" | "DISPUTE_ASSESSMENT" | "COUNTERQ_ME_AGAIN";
+            /**
+             * Availability
+             * @enum {string}
+             */
+            availability: "AVAILABLE" | "DEFERRED" | "UNAVAILABLE";
+            /** Label */
+            label: string;
+            /** Reason */
+            reason?: string | null;
+        };
+        /** CounterMapDisplayMetadata */
+        CounterMapDisplayMetadata: {
+            /** Assistance Label */
+            assistance_label?: string | null;
+            /** Breakpoint Relationships */
+            breakpoint_relationships?: ("CREATED" | "REINFORCED" | "CONTRADICTED" | "RESOLUTION_SUPPORT")[];
+            /** Breakpoint Severity */
+            breakpoint_severity?: string | null;
+            /** Breakpoint Status */
+            breakpoint_status?: string | null;
+            /** Code Snapshot Id */
+            code_snapshot_id?: string | null;
+            /** Code Version */
+            code_version?: number | null;
+            /** Content Hash */
+            content_hash?: string | null;
+            /** Delivery State */
+            delivery_state?: ("DELIVERED" | "PARTIALLY_DELIVERED" | "INTERRUPTED") | null;
+            /**
+             * Exact Quote
+             * @default false
+             */
+            exact_quote: boolean;
+            /** Execution Status */
+            execution_status?: string | null;
+            /** Independence Level */
+            independence_level?: ("INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT") | null;
+            /** Language */
+            language?: string | null;
+            /** Polarity */
+            polarity?: ("POSITIVE" | "NEGATIVE" | "MIXED") | null;
+            /** Strength */
+            strength?: ("WEAK" | "MODERATE" | "STRONG") | null;
+            /** Visible Failed */
+            visible_failed?: number | null;
+            /** Visible Passed */
+            visible_passed?: number | null;
+            /** Why */
+            why?: string | null;
+        };
+        /** CounterMapEdge */
+        CounterMapEdge: {
+            /** Canonical Relationship Sources */
+            canonical_relationship_sources: components["schemas"]["CanonicalRelationshipSource"][];
+            /** Edge Id */
+            edge_id: string;
+            /** From Node Id */
+            from_node_id: string;
+            /**
+             * Relationship
+             * @enum {string}
+             */
+            relationship: "TRIGGERED" | "ANSWERED_BY" | "LED_TO" | "SUPPORTED" | "EXPOSED" | "CORRECTED_BY" | "ASSISTED";
+            /** To Node Id */
+            to_node_id: string;
+        };
+        /** CounterMapEventRange */
+        CounterMapEventRange: {
+            /** End Sequence */
+            end_sequence: number;
+            /** Start Sequence */
+            start_sequence: number;
+        };
+        /** CounterMapGraph */
+        CounterMapGraph: {
+            /** Edges */
+            edges: components["schemas"]["CounterMapEdge"][];
+            /**
+             * Generation Policy Version
+             * @constant
+             */
+            generation_policy_version: "countermap-projector.v1";
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Nodes */
+            nodes: components["schemas"]["CounterMapNode"][];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: "countermap.graph.v1";
+            /** Source Watermark */
+            source_watermark: number;
+            summary: components["schemas"]["CounterMapSummary"];
+        };
+        /** CounterMapNode */
+        CounterMapNode: {
+            /** Available Actions */
+            available_actions?: components["schemas"]["CounterMapAvailableAction"][];
+            /** Canonical Sources */
+            canonical_sources: components["schemas"]["CanonicalSourceReference"][];
+            /** Causal Rank */
+            causal_rank: number;
+            display_metadata?: components["schemas"]["CounterMapDisplayMetadata"];
+            event_range?: components["schemas"]["CounterMapEventRange"] | null;
+            /** Node Id */
+            node_id: string;
+            /**
+             * Node Type
+             * @enum {string}
+             */
+            node_type: "CLAIM" | "REASONING" | "CODE" | "TEST" | "QUESTION" | "RESPONSE" | "EVIDENCE" | "BREAKPOINT" | "ASSISTANCE" | "MUTATION";
+            /** Stage */
+            stage?: string | null;
+            /** Subtype */
+            subtype: string;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+        };
+        /** CounterMapSessionMetadata */
+        CounterMapSessionMetadata: {
+            /**
+             * Completed At
+             * Format: date-time
+             */
+            completed_at: string;
+            /** Duration Seconds */
+            duration_seconds: number;
+            /** Language */
+            language: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /** Problem Title */
+            problem_title: string;
+        };
+        /** CounterMapSummary */
+        CounterMapSummary: {
+            /** Node Counts */
+            node_counts: {
+                [key: string]: number;
+            };
+            /** Overview */
+            overview: string;
+            /** Relationship Counts */
+            relationship_counts: {
+                [key: string]: number;
+            };
             /** Title */
             title: string;
         };
@@ -594,6 +876,67 @@ export interface components {
              * Format: uuid
              */
             interview_session_id: string;
+        };
+        /** DevelopmentCounterMapInspection */
+        DevelopmentCounterMapInspection: {
+            /** Edge Count */
+            edge_count: number;
+            /** Generated At */
+            generated_at: string | null;
+            /** Generation Policy Version */
+            generation_policy_version: string | null;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /** Last Failure Category */
+            last_failure_category: string | null;
+            /** Node Count */
+            node_count: number;
+            /** Node Counts */
+            node_counts: {
+                [key: string]: number;
+            };
+            /** Outbox */
+            outbox: {
+                [key: string]: unknown;
+            }[];
+            /** Outbox Generation State */
+            outbox_generation_state: string;
+            /** Projection Id */
+            projection_id: string | null;
+            /** Projection Status */
+            projection_status: string;
+            /** Projection Version */
+            projection_version: number | null;
+            /** Relationship Counts */
+            relationship_counts: {
+                [key: string]: number;
+            };
+            /** Schema Version */
+            schema_version: string | null;
+            /** Source Watermark */
+            source_watermark: number | null;
+            /** Validation Outcome */
+            validation_outcome: string;
+        };
+        /** DevelopmentCounterMapRegenerationRequest */
+        DevelopmentCounterMapRegenerationRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** DevelopmentCounterMapRegenerationResponse */
+        DevelopmentCounterMapRegenerationResponse: {
+            /** Created */
+            created: boolean;
+            /**
+             * Outbox Event Id
+             * Format: uuid
+             */
+            outbox_event_id: string;
+            /** Status */
+            status: string;
         };
         /** DevelopmentExaminerClaim */
         DevelopmentExaminerClaim: {
@@ -1324,6 +1667,103 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DevelopmentReasoningSmokeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentCounterMapInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regenerate_countermap_api_countermap_development_sessions__interview_session_id__regenerate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentCounterMapRegenerationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentCounterMapRegenerationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    countermap_status_api_countermap_sessions__interview_session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCounterMapResponse"];
                 };
             };
             /** @description Validation Error */

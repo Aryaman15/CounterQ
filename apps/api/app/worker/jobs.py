@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.ai_gateway.gateway import AIGateway
 from app.ai_gateway.provider_factory import build_reasoning_provider
 from app.config.settings import get_settings
+from app.countermap.service import CounterMapGenerationService
 from app.db.registry import register_orm_models
 from app.db.session import build_engine
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
@@ -42,10 +43,9 @@ async def _consume(outbox_event_id: UUID, attempt: int) -> dict[str, str | None]
         report_service=SessionReportGenerationService(
             sessionmaker=sessionmaker,
             ai_gateway=gateway,
-            reasoning_timeout_seconds=(
-                settings.session_report_reasoning_timeout_seconds
-            ),
+            reasoning_timeout_seconds=(settings.session_report_reasoning_timeout_seconds),
         ),
+        countermap_service=CounterMapGenerationService(sessionmaker=sessionmaker),
         max_attempts=settings.outbox_max_attempts,
         processing_lease_seconds=settings.outbox_claim_lease_seconds,
     )

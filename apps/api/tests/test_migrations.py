@@ -12,11 +12,11 @@ from sqlalchemy.engine import make_url
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage6b_unit_evaluation_head() -> None:
+def test_alembic_configuration_has_stage7a_countermap_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609040118"
+    assert script.get_current_head() == "202609050119"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -46,7 +46,7 @@ def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
         get_settings.cache_clear()
 
 
-def test_stage6b_table_boundary_is_explicit() -> None:
+def test_stage7a_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -65,6 +65,7 @@ def test_stage6b_table_boundary_is_explicit() -> None:
         "concept_aliases",
         "concept_relationships",
         "concepts",
+        "countermap_projections",
         "examiner_decisions",
         "evidence",
         "evidence_concepts",
@@ -94,7 +95,6 @@ def test_stage6b_table_boundary_is_explicit() -> None:
         "concept_mastery",
         "countermap_edges",
         "countermap_nodes",
-        "countermap_projections",
         "retest_recommendations",
     }.isdisjoint(table_names)
 
@@ -121,6 +121,28 @@ def test_stage6b_unit_evaluation_ledger_is_content_free() -> None:
         "successful_ai_invocation_id",
         "unit_key",
         "unit_kind",
+    }
+
+
+def test_stage7a_countermap_projection_columns_are_explicit() -> None:
+    columns = asyncio.run(table_columns("countermap_projections"))
+
+    assert columns == {
+        "created_at",
+        "generated_at",
+        "generation_policy_version",
+        "generation_request_key",
+        "graph_json",
+        "id",
+        "interview_session_id",
+        "is_current",
+        "last_failure_category",
+        "projection_version",
+        "schema_version",
+        "source_identity",
+        "source_watermark",
+        "status",
+        "updated_at",
     }
 
 

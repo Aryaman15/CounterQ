@@ -1,4 +1,4 @@
-"""Idempotent consumers for the bounded Stage 6B post-session chain."""
+"""Idempotent consumers for the bounded post-session derived-work chain."""
 
 from __future__ import annotations
 
@@ -13,6 +13,12 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.countermap.schema import COUNTERMAP_GENERATION_POLICY_VERSION
+from app.countermap.service import (
+    CounterMapGenerationError,
+    CounterMapGenerationService,
+    initial_countermap_generation_key,
+)
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
 from app.interviews.models import InterviewSession
 from app.outbox.claims import OutboxWorkClaim
@@ -43,6 +49,7 @@ class PostSessionOutboxConsumer:
         sessionmaker: async_sessionmaker[AsyncSession],
         evidence_coordinator: SessionEvidenceEvaluationCoordinator,
         report_service: SessionReportGenerationService,
+        countermap_service: CounterMapGenerationService | None = None,
         max_attempts: int = 5,
         processing_lease_seconds: int = 120,
         clock: Callable[[], datetime] | None = None,
@@ -50,6 +57,7 @@ class PostSessionOutboxConsumer:
         self._sessionmaker = sessionmaker
         self._evidence_coordinator = evidence_coordinator
         self._report_service = report_service
+        self._countermap_service = countermap_service
         self._max_attempts = max_attempts
         self._processing_lease_seconds = processing_lease_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -71,13 +79,15 @@ class PostSessionOutboxConsumer:
                 return await self._finalize_evidence(event, attempt)
             if event.event_type == "GENERATE_SESSION_REPORT":
                 return await self._generate_report(event, attempt)
+            if event.event_type == "GENERATE_COUNTERMAP":
+                return await self._generate_countermap(event, attempt)
             return await self._record_failure(
                 event.id,
                 attempt,
                 "UNSUPPORTED_OUTBOX_EVENT",
                 permanent=True,
             )
-        except SessionReportGenerationError as exc:
+        except (SessionReportGenerationError, CounterMapGenerationError) as exc:
             return await self._record_failure(event.id, attempt, exc.category)
         except Exception as exc:
             return await self._record_failure(event.id, attempt, type(exc).__name__)
@@ -188,7 +198,57 @@ class PostSessionOutboxConsumer:
                     available_at=now,
                     source_watermark=interview.last_server_sequence,
                 )
+                countermap_key = initial_countermap_generation_key(event.interview_session_id)
+                await OutboxRepository(session).enqueue(
+                    aggregate_type="InterviewSession",
+                    aggregate_id=event.interview_session_id,
+                    interview_session_id=event.interview_session_id,
+                    event_type="GENERATE_COUNTERMAP",
+                    payload={
+                        "interview_session_id": str(event.interview_session_id),
+                        "generation_request_key": countermap_key,
+                        "generation_policy": COUNTERMAP_GENERATION_POLICY_VERSION,
+                    },
+                    deduplication_key=countermap_key,
+                    available_at=now,
+                    source_watermark=interview.last_server_sequence,
+                )
                 _mark_completed(current, now)
+        return ConsumerResult(event.id, "COMPLETED")
+
+    async def _generate_countermap(
+        self,
+        event: OutboxEvent,
+        attempt: int,
+    ) -> ConsumerResult:
+        request_key = event.payload.get("generation_request_key")
+        if not isinstance(request_key, str) or not request_key:
+            return await self._record_failure(
+                event.id,
+                attempt,
+                "INVALID_COUNTERMAP_REQUEST",
+                permanent=True,
+            )
+        if self._countermap_service is None:
+            return await self._record_failure(
+                event.id,
+                attempt,
+                "COUNTERMAP_SERVICE_UNAVAILABLE",
+                permanent=True,
+            )
+        await self._countermap_service.generate(
+            interview_session_id=event.interview_session_id,
+            generation_request_key=request_key,
+            work_claim=OutboxWorkClaim(event.id, attempt),
+        )
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                current = await session.scalar(
+                    select(OutboxEvent).where(OutboxEvent.id == event.id).with_for_update()
+                )
+                if not _owns_work_claim(current, attempt):
+                    return ConsumerResult(event.id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
+                _mark_completed(current, self._clock())
         return ConsumerResult(event.id, "COMPLETED")
 
     async def _generate_report(self, event: OutboxEvent, attempt: int) -> ConsumerResult:
@@ -266,7 +326,5 @@ def _owns_work_claim(
     attempt: int,
 ) -> TypeGuard[OutboxEvent]:
     return bool(
-        event is not None
-        and event.attempt_count == attempt
-        and event.status == "PROCESSING"
+        event is not None and event.attempt_count == attempt and event.status == "PROCESSING"
     )

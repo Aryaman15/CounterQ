@@ -4,6 +4,8 @@ import type { components } from "@counterq/contracts/openapi";
 import { ChevronDown, FileCheck2, RotateCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { CounterMapExperience } from "@/features/countermap/CounterMapExperience";
+
 type ReportResponse = components["schemas"]["CandidateSessionReportResponse"];
 type ReportDocument = components["schemas"]["SessionReportDocument"];
 type ReportFinding = components["schemas"]["ReportFinding"];
@@ -245,6 +247,7 @@ function ReadyReport({
             <ol>{report.next_actions.map((item, index) => <li key={`${item.action}-${index}`}>{item.action}</li>)}</ol>
           ) : <InsufficientEvidence />}
         </section>
+        <CounterMapExperience interviewSessionId={interviewSessionId} />
       </main>
     </ReportShell>
   );

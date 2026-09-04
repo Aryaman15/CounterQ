@@ -39,6 +39,7 @@
     "eval:stage6a:live": "uv run --directory apps/api python -m app.evals.assistance.live",
     "eval:stage6b": "uv run --directory apps/api pytest tests/evaluation/stage6b tests/test_stage6b_session_reports.py tests/test_stage6b_p1_outbox.py tests/test_stage6b_p1_zero_finding.py -q",
     "eval:stage6b:live": "uv run --directory apps/api python -m app.evals.reports.live",
+    "eval:stage7": "uv run --directory apps/api pytest tests/evaluation/stage7 tests/test_stage7a_countermap.py -q",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",
