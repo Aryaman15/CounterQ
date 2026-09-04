@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CounterMapDemo } from "@/features/countermap/CounterMapDemo";
 import { CounterMapExperience } from "@/features/countermap/CounterMapExperience";
 import { ReasoningTimeline } from "@/features/countermap/ReasoningTimeline";
-import { counterMapDemoFixtures } from "./counterMapFixtures";
+import { counterMapUiSamples } from "./counterMapUiSamples";
 
 type CounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
 type DevelopmentFixture = components["schemas"]["DevelopmentCounterMapFixtureResponse"];
@@ -15,7 +15,7 @@ function apiResponse(value: unknown) {
 }
 
 function readyResponse(): CounterMapResponse {
-  const fixture = counterMapDemoFixtures[0];
+  const graph = counterMapUiSamples[0];
   return {
     status: "READY",
     session: {
@@ -29,7 +29,7 @@ function readyResponse(): CounterMapResponse {
     projection_version: 1,
     schema_version: "countermap.graph.v1",
     generated_at: "2026-09-05T10:00:03Z",
-    graph: fixture.graph,
+    graph,
     message: "Your evidence-backed reasoning map is ready.",
   };
 }
@@ -40,19 +40,19 @@ function developmentFixtures(): DevelopmentFixture[] {
       fixture_id: "simulation-success-and-misconception",
       label: "Simulation",
       description: "An independent defense and a later misconception.",
-      graph: counterMapDemoFixtures[0].graph,
+      graph: counterMapUiSamples[0],
     },
     {
       fixture_id: "coach-assisted-improvement-open-breakpoint",
       label: "Coach",
       description: "Guidance materially changed the next response.",
-      graph: counterMapDemoFixtures[1].graph,
+      graph: counterMapUiSamples[1],
     },
     {
       fixture_id: "delivery-and-self-correction-integrity",
       label: "Integrity",
       description: "Only delivered wording and structured correction survive.",
-      graph: counterMapDemoFixtures[2].graph,
+      graph: counterMapUiSamples[2],
     },
   ];
 }
@@ -61,7 +61,7 @@ describe("CounterMap Reasoning Timeline", () => {
   beforeEach(() => vi.unstubAllGlobals());
 
   it("renders causal steps and branches from the shared graph contract", () => {
-    render(<ReasoningTimeline graph={counterMapDemoFixtures[0].graph} />);
+    render(<ReasoningTimeline graph={counterMapUiSamples[0]} />);
     expect(screen.getByRole("list", { name: /reasoning timeline/i })).toBeInTheDocument();
     expect(screen.getAllByText("Parallel branches").length).toBeGreaterThan(0);
     expect(screen.getByText(/prompted this question/i)).toBeInTheDocument();
@@ -84,13 +84,13 @@ describe("CounterMap Reasoning Timeline", () => {
   });
 
   it("uses candidate-facing labels and type-specific explanations", () => {
-    render(<ReasoningTimeline graph={counterMapDemoFixtures[0].graph} />);
+    render(<ReasoningTimeline graph={counterMapUiSamples[0]} />);
     expect(screen.getAllByText("You said").length).toBeGreaterThan(0);
     expect(screen.getByText("Why this question?")).toBeInTheDocument();
   });
 
   it("uses mutation and guidance language instead of question-only copy", () => {
-    const simulation = counterMapDemoFixtures[0].graph;
+    const simulation = counterMapUiSamples[0];
     const question = simulation.nodes.find((node) => node.node_type === "QUESTION");
     if (!question) throw new Error("Simulation fixture must include a question");
     const mutationGraph = {
@@ -103,7 +103,7 @@ describe("CounterMap Reasoning Timeline", () => {
     expect(screen.getByText("Why this constraint change?")).toBeInTheDocument();
     expect(screen.getByText(/prompted this constraint change/i)).toBeInTheDocument();
 
-    const coach = counterMapDemoFixtures[1].graph;
+    const coach = counterMapUiSamples[1];
     const assistance = coach.nodes.find((node) => node.node_type === "ASSISTANCE");
     if (!assistance) throw new Error("Coach fixture must include assistance");
     const guidanceGraph = {
@@ -124,14 +124,14 @@ describe("CounterMap Reasoning Timeline", () => {
   });
 
   it("shows only actually delivered wording for an interrupted prompt", () => {
-    render(<ReasoningTimeline graph={counterMapDemoFixtures[2].graph} />);
+    render(<ReasoningTimeline graph={counterMapUiSamples[2]} />);
     expect(screen.getByText("What invariant")).toBeInTheDocument();
     expect(screen.queryByText(/moves backward/i)).not.toBeInTheDocument();
     expect(screen.getByText(/only the delivered words/i)).toBeInTheDocument();
   });
 
   it("keeps future retest actions visibly non-operational", () => {
-    render(<ReasoningTimeline graph={counterMapDemoFixtures[1].graph} />);
+    render(<ReasoningTimeline graph={counterMapUiSamples[1]} />);
     const retest = screen.getByRole("button", { name: /CounterQ me again/i });
     expect(retest).toBeDisabled();
     expect(retest).toHaveTextContent("Later");
