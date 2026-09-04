@@ -27,6 +27,7 @@ from app.ai_gateway.provider import (
 from app.auth.models import User
 from app.config.settings import create_settings
 from app.db.session import build_engine
+from app.evals.reports import live as report_live
 from app.evidence.coordinator import SessionEvaluationResult, UnitEvaluationResult
 from app.evidence.models import Evidence
 from app.interviews.completion import InterviewCompletionService
@@ -89,6 +90,78 @@ class ReportProvider:
             estimated_cost=Decimal("0.0002"),
             currency="USD",
         )
+
+
+def test_session_report_timeout_is_dedicated_and_configurable(tmp_path: Path) -> None:
+    defaults = create_settings(env_file=tmp_path / "missing.env")
+    assert defaults.reasoning_timeout_seconds == 20.0
+    assert defaults.session_report_reasoning_timeout_seconds == 60.0
+
+    env_file = tmp_path / "report-timeout.env"
+    env_file.write_text(
+        "COUNTERQ_SESSION_REPORT_REASONING_TIMEOUT_SECONDS=73\n",
+        encoding="utf-8",
+    )
+    configured = create_settings(env_file=env_file)
+    assert configured.reasoning_timeout_seconds == 20.0
+    assert configured.session_report_reasoning_timeout_seconds == 73.0
+
+
+async def test_stage6b_live_harness_uses_configured_report_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_file = tmp_path / "report-live-timeout.env"
+    env_file.write_text(
+        "COUNTERQ_SESSION_REPORT_REASONING_TIMEOUT_SECONDS=73\n",
+        encoding="utf-8",
+    )
+    runtime_settings = create_settings(env_file=env_file)
+    engine = build_engine(runtime_settings)
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: UUID | None = None
+    problem_id: UUID | None = None
+    session_id: UUID | None = None
+    try:
+        async with sessions() as session, session.begin():
+            development = await create_development_interview(
+                session,
+                initial_stage="IMPLEMENTATION",
+            )
+            user_id = development.user.id
+            problem_id = development.problem.id
+            session_id = development.interview_session.id
+            await InterviewCompletionService(session).complete(
+                session_id=session_id,
+                reason="USER_ENDED",
+                expected_state_version=0,
+                idempotency_key="stage6b-live-report-timeout",
+            )
+        provider = ReportProvider(_insufficient_report_output())
+        monkeypatch.setenv(report_live.LIVE_OPT_IN, "1")
+        monkeypatch.setenv(report_live.LIVE_SESSION_ID, str(session_id))
+        monkeypatch.setattr(report_live, "get_settings", lambda: runtime_settings)
+        monkeypatch.setattr(report_live, "build_reasoning_provider", lambda _settings: provider)
+
+        await report_live.run_live()
+
+        assert provider.calls == 1
+        assert provider.requests[0].purpose == "session_report"
+        assert provider.requests[0].timeout_seconds == 73.0
+        assert runtime_settings.reasoning_timeout_seconds == 20.0
+    finally:
+        if user_id is not None:
+            async with sessions() as session, session.begin():
+                if session_id is not None:
+                    await session.execute(
+                        delete(AIInvocation).where(
+                            AIInvocation.interview_session_id == session_id
+                        )
+                    )
+                await session.execute(delete(User).where(User.id == user_id))
+                if problem_id is not None:
+                    await session.execute(delete(Problem).where(Problem.id == problem_id))
+        await engine.dispose()
 
 
 class RecordingPublisher:
@@ -863,8 +936,9 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
             problem_id = fixture.graph.problem.id
             concept_id = fixture.concept.id
         provider = ReportProvider(_valid_report_output(evidence.id))
+        runtime_settings = create_settings(env_file=tmp_path / ".env")
         gateway = AIGateway(
-            settings=create_settings(env_file=tmp_path / ".env"),
+            settings=runtime_settings,
             sessionmaker=sessions,
             provider=provider,
         )
@@ -874,6 +948,9 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
         service = SessionReportGenerationService(
             sessionmaker=sessions,
             ai_gateway=gateway,
+            reasoning_timeout_seconds=(
+                runtime_settings.session_report_reasoning_timeout_seconds
+            ),
         )
 
         first = await service.generate(
@@ -894,6 +971,7 @@ async def test_report_generation_is_idempotent_versioned_and_exactly_provenanced
         assert regenerated.report_version == 2
         assert provider.calls == 2
         assert all(request.purpose == "session_report" for request in provider.requests)
+        assert all(request.timeout_seconds == 60.0 for request in provider.requests)
         assert all(
             "session-report-input.v1" in request.input_content for request in provider.requests
         )
@@ -1024,12 +1102,16 @@ async def test_structured_report_retry_consumes_two_dedicated_report_calls(
 
         provider = ReportProvider(_insufficient_report_output())
         provider.output_sequence = [{"not": "the report contract"}, _insufficient_report_output()]
+        runtime_settings = create_settings(env_file=tmp_path / ".env")
         service = SessionReportGenerationService(
             sessionmaker=sessions,
             ai_gateway=AIGateway(
-                settings=create_settings(env_file=tmp_path / ".env"),
+                settings=runtime_settings,
                 sessionmaker=sessions,
                 provider=provider,
+            ),
+            reasoning_timeout_seconds=(
+                runtime_settings.session_report_reasoning_timeout_seconds
             ),
         )
 
@@ -1046,6 +1128,7 @@ async def test_structured_report_retry_consumes_two_dedicated_report_calls(
         assert budget is not None
         assert report is not None and report.status == "READY"
         assert provider.calls == 2
+        assert all(request.timeout_seconds == 60.0 for request in provider.requests)
         assert budget.report_reasoning_used == 2
         assert budget.deep_reasoning_used == 0
     finally:

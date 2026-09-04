@@ -42,6 +42,9 @@ async def _consume(outbox_event_id: UUID, attempt: int) -> dict[str, str | None]
         report_service=SessionReportGenerationService(
             sessionmaker=sessionmaker,
             ai_gateway=gateway,
+            reasoning_timeout_seconds=(
+                settings.session_report_reasoning_timeout_seconds
+            ),
         ),
         max_attempts=settings.outbox_max_attempts,
         processing_lease_seconds=settings.outbox_claim_lease_seconds,

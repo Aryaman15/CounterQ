@@ -14,9 +14,11 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_gateway.gateway import AIGateway
+from app.ai_gateway.models import AIInvocation
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
     ReasoningEffort,
+    ReasoningProviderError,
     ReasoningRequest,
     ReasoningUsage,
 )
@@ -24,6 +26,7 @@ from app.auth.models import User
 from app.config.settings import create_settings
 from app.db.session import build_engine
 from app.evidence.coordinator import SessionEvaluationResult, UnitEvaluationResult
+from app.evidence.models import AssessmentUnitEvaluation, Breakpoint, Evidence
 from app.interviews.completion import InterviewCompletionService
 from app.interviews.dev_factory import create_development_interview
 from app.interviews.models import SessionBudget
@@ -183,6 +186,26 @@ class CountingReportProvider(BlockingReportProvider):
         self.release.set()
 
 
+class TimeoutReportProvider:
+    provider_name = "stage6b-timeout-fake"
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.requests: list[ReasoningRequest] = []
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        del model, reasoning_effort
+        self.calls += 1
+        self.requests.append(request)
+        raise ReasoningProviderError("TIMEOUT", "Injected report timeout")
+
+
 class RecordingQueue:
     def __init__(self) -> None:
         self.calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
@@ -319,6 +342,7 @@ async def test_fast_report_worker_completes_before_dispatcher_acknowledgement(
                         sessionmaker=sessions,
                         provider=provider,
                     ),
+                    reasoning_timeout_seconds=60.0,
                 ),
             )
             publisher = ImmediateConsumerPublisher(consumer)
@@ -453,14 +477,20 @@ async def test_publish_failure_without_worker_acknowledgement_remains_retryable(
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        async with completed_interview(sessions, key="p1-unacknowledged-publish"):
+        async with completed_interview(
+            sessions, key="p1-unacknowledged-publish"
+        ) as session_id:
             dispatch = await OutboxDispatcher(
                 sessionmaker=sessions,
                 publisher=FailingPublisher(),
             ).dispatch_once()
 
             async with sessions() as session:
-                event = await session.scalar(select(OutboxEvent))
+                event = await session.scalar(
+                    select(OutboxEvent).where(
+                        OutboxEvent.interview_session_id == session_id
+                    )
+                )
             assert dispatch.published == 0
             assert dispatch.retryable == 1
             assert dispatch.failed == 0
@@ -623,6 +653,7 @@ async def test_stale_report_worker_cannot_ready_and_recovery_reuses_report_versi
                     sessionmaker=sessions,
                     provider=provider,
                 ),
+                reasoning_timeout_seconds=60.0,
             )
             consumer = PostSessionOutboxConsumer(
                 sessionmaker=sessions,
@@ -701,6 +732,7 @@ async def test_report_budget_exhaustion_records_coherent_report_and_outbox_failu
                         sessionmaker=sessions,
                         provider=provider,
                     ),
+                    reasoning_timeout_seconds=60.0,
                 ),
                 max_attempts=1,
             )
@@ -720,6 +752,93 @@ async def test_report_budget_exhaustion_records_coherent_report_and_outbox_failu
             assert report is not None and report.status == "FAILED"
             assert report.last_failure_category == "BUDGET_EXHAUSTED"
             assert provider.calls == 0
+    finally:
+        await engine.dispose()
+
+
+async def test_report_timeout_is_durably_retryable_without_inner_retry(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with completed_interview(sessions, key="p1-report-timeout") as session_id:
+            event_id = await _replace_evidence_event_with_report_event(sessions, session_id)
+            publisher = RecordingPublisher()
+            await OutboxDispatcher(sessionmaker=sessions, publisher=publisher).dispatch_once()
+            _, attempt = publisher.calls[-1]
+            provider = TimeoutReportProvider()
+            runtime_settings = create_settings(env_file=tmp_path / ".env")
+            consumer = PostSessionOutboxConsumer(
+                sessionmaker=sessions,
+                evidence_coordinator=cast(Any, None),
+                report_service=SessionReportGenerationService(
+                    sessionmaker=sessions,
+                    ai_gateway=AIGateway(
+                        settings=runtime_settings,
+                        sessionmaker=sessions,
+                        provider=provider,
+                    ),
+                    reasoning_timeout_seconds=(
+                        runtime_settings.session_report_reasoning_timeout_seconds
+                    ),
+                ),
+            )
+
+            result = await consumer.consume(event_id, attempt)
+
+            async with sessions() as session:
+                event = await session.get(OutboxEvent, event_id)
+                report = await session.scalar(
+                    select(SessionReport).where(
+                        SessionReport.interview_session_id == session_id
+                    )
+                )
+                budget = await session.get(SessionBudget, session_id)
+                invocation = await session.scalar(
+                    select(AIInvocation).where(
+                        AIInvocation.interview_session_id == session_id,
+                        AIInvocation.purpose == "session_report",
+                    )
+                )
+                evidence_count = await session.scalar(
+                    select(func.count())
+                    .select_from(Evidence)
+                    .where(Evidence.interview_session_id == session_id)
+                )
+                breakpoint_count = await session.scalar(
+                    select(func.count())
+                    .select_from(Breakpoint)
+                    .where(Breakpoint.first_detected_session_id == session_id)
+                )
+                unit_evaluation_count = await session.scalar(
+                    select(func.count())
+                    .select_from(AssessmentUnitEvaluation)
+                    .where(AssessmentUnitEvaluation.interview_session_id == session_id)
+                )
+            assert result.status == "RETRY"
+            assert result.category == "TIMEOUT"
+            assert event is not None and event.status == "RETRY"
+            assert event.next_retry_at is not None
+            assert report is not None and report.status == "FAILED"
+            assert report.last_failure_category == "TIMEOUT"
+            assert report.structured_report_json is None
+            assert budget is not None
+            assert budget.max_report_reasoning_calls == 4
+            assert budget.report_reasoning_used == 1
+            assert budget.deep_reasoning_used == 0
+            assert invocation is not None and invocation.status == "TIMED_OUT"
+            assert provider.calls == 1
+            assert provider.requests[0].timeout_seconds == 60.0
+            assert evidence_count == 0
+            assert breakpoint_count == 0
+            assert unit_evaluation_count == 0
+            async with sessions() as session, session.begin():
+                await session.execute(
+                    delete(AIInvocation).where(
+                        AIInvocation.interview_session_id == session_id
+                    )
+                )
     finally:
         await engine.dispose()
 

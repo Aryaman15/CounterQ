@@ -88,6 +88,7 @@ async def run_live() -> dict[str, object]:
             instructions=SESSION_REPORT_INSTRUCTIONS,
             input_content=bundle.serialize_for_ai(),
             output_model=SessionReportSynthesis,
+            timeout_seconds=settings.session_report_reasoning_timeout_seconds,
             correlation_id=f"stage6b-live:{session_id}",
             metadata={"harness": "stage6b-live", "source_identity": bundle.source_identity},
         )

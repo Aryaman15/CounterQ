@@ -106,6 +106,11 @@ class Settings(BaseSettings):
         default=20.0,
         validation_alias="COUNTERQ_REASONING_TIMEOUT_SECONDS",
     )
+    session_report_reasoning_timeout_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        validation_alias="COUNTERQ_SESSION_REPORT_REASONING_TIMEOUT_SECONDS",
+    )
     live_examiner_autostart: bool = Field(
         default=False,
         validation_alias="COUNTERQ_LIVE_EXAMINER_AUTOSTART",

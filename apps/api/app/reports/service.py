@@ -62,10 +62,14 @@ class SessionReportGenerationService:
         *,
         sessionmaker: async_sessionmaker[AsyncSession],
         ai_gateway: AIGateway,
+        reasoning_timeout_seconds: float,
         validator: SessionReportValidator | None = None,
     ) -> None:
+        if reasoning_timeout_seconds <= 0:
+            raise ValueError("Session Report reasoning timeout must be positive")
         self._sessionmaker = sessionmaker
         self._gateway = ai_gateway
+        self._reasoning_timeout_seconds = reasoning_timeout_seconds
         self._validator = validator or SessionReportValidator()
 
     async def generate(
@@ -129,6 +133,7 @@ class SessionReportGenerationService:
                         instructions=SESSION_REPORT_INSTRUCTIONS,
                         input_content=bundle.serialize_for_ai(),
                         output_model=SessionReportSynthesis,
+                        timeout_seconds=self._reasoning_timeout_seconds,
                         correlation_id=f"{generation_request_key}:attempt:{attempt}",
                         metadata={
                             "report_id": str(report_id),
