@@ -692,7 +692,7 @@ export interface components {
              * Generation Policy Version
              * @constant
              */
-            generation_policy_version: "countermap-projector.v2";
+            generation_policy_version: "countermap-projector.v3";
             /**
              * Interview Session Id
              * Format: uuid

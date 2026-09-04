@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict, deque
 from collections.abc import Callable
+from typing import Literal
 from uuid import UUID
 
 from app.countermap.schema import (
@@ -45,20 +46,29 @@ class CounterMapProjector:
     def project(self, bundle: CounterMapSourceBundle) -> CounterMapGraph:
         nodes: dict[str, CounterMapNode] = {}
         edges: dict[str, CounterMapEdge] = {}
-        event_node_ids: dict[UUID, str] = {}
+        claim_node_ids: dict[UUID, str] = {}
+        reasoning_node_ids: dict[UUID, str] = {}
         response_node_ids: dict[UUID, str] = {}
         snapshot_node_ids: dict[UUID, str] = {}
+        execution_node_ids: dict[UUID, str] = {}
         evidence_node_ids: dict[UUID, str] = {}
         delivery_node_ids: dict[UUID, str] = {}
 
         events = {item.id: item for item in bundle.events}
         transcripts_by_event = {item.event_id: item for item in bundle.transcripts}
-        claims_by_event = {item.source_event_id: item for item in bundle.claims}
+        claims_by_event: dict[UUID, list[ClaimSource]] = defaultdict(list)
+        for claim in bundle.claims:
+            claims_by_event[claim.source_event_id].append(claim)
+        for claims in claims_by_event.values():
+            claims.sort(key=lambda item: str(item.id))
         claims_by_id = {item.id: item for item in bundle.claims}
         responses_by_id = {item.id: item for item in bundle.responses}
-        response_by_event = {
-            event_id: item for item in bundle.responses for event_id in item.source_event_ids
-        }
+        responses_by_event: dict[UUID, list[ResponseSource]] = defaultdict(list)
+        for response in bundle.responses:
+            for event_id in response.source_event_ids:
+                responses_by_event[event_id].append(response)
+        for responses in responses_by_event.values():
+            responses.sort(key=lambda item: str(item.id))
         snapshots_by_id = {item.id: item for item in bundle.code_snapshots}
         snapshot_by_event = {item.created_from_event_id: item for item in bundle.code_snapshots}
         executions_by_event = {item.run_event_id: item for item in bundle.executions}
@@ -123,28 +133,78 @@ class CounterMapProjector:
                 )
             )
             response_node_ids[response.id] = node_id
-            for event_id in response.source_event_ids:
-                event_node_ids[event_id] = node_id
             return node_id
 
-        def ensure_snapshot(snapshot: CodeSnapshotSource, *, correction: bool = False) -> str:
+        def ensure_claim(claim: ClaimSource) -> str:
+            existing = claim_node_ids.get(claim.id)
+            if existing:
+                return existing
+            node_id = stable_node_id("CLAIM", claim.id)
+            exact_quote = bool(claim.verbatim_excerpt)
+            add_node(
+                CounterMapNode(
+                    node_id=node_id,
+                    node_type="CLAIM",
+                    subtype=claim.claim_type,
+                    canonical_sources=[
+                        CanonicalSourceReference(
+                            source_type="CANDIDATE_CLAIM",
+                            source_id=claim.id,
+                            interview_session_id=bundle.interview_session_id,
+                            server_sequence=claim.source_server_sequence,
+                        ),
+                        CanonicalSourceReference(
+                            source_type="SESSION_EVENT",
+                            source_id=claim.source_event_id,
+                            interview_session_id=bundle.interview_session_id,
+                            server_sequence=claim.source_server_sequence,
+                        ),
+                    ],
+                    title="You said",
+                    summary=_bounded(claim.verbatim_excerpt or claim.normalized_claim),
+                    causal_rank=0,
+                    stage=(
+                        events[claim.source_event_id].stage
+                        if claim.source_event_id in events
+                        else None
+                    ),
+                    event_range=CounterMapEventRange(
+                        start_sequence=claim.source_server_sequence,
+                        end_sequence=claim.source_server_sequence,
+                    ),
+                    display_metadata=CounterMapDisplayMetadata(exact_quote=exact_quote),
+                )
+            )
+            claim_node_ids[claim.id] = node_id
+            return node_id
+
+        def ensure_snapshot(
+            snapshot: CodeSnapshotSource,
+            *,
+            correction_subtype: Literal["SELF_CORRECTION", "CORRECTION"] | None = None,
+        ) -> str:
             existing = snapshot_node_ids.get(snapshot.id)
             if existing:
-                if correction:
+                if correction_subtype:
                     existing_node = nodes[existing]
-                    nodes[existing] = existing_node.model_copy(
-                        update={
-                            "subtype": "SELF_CORRECTION",
-                            "title": "Corrected independently",
-                        }
-                    )
+                    existing_subtype = existing_node.subtype
+                    # Conflicting canonical evidence is projected conservatively.
+                    if existing_subtype != "CORRECTION":
+                        effective_subtype = correction_subtype
+                        nodes[existing] = existing_node.model_copy(
+                            update={
+                                "subtype": effective_subtype,
+                                "title": _correction_title(effective_subtype),
+                            }
+                        )
                 return existing
             node_id = stable_node_id("CODE", snapshot.id)
+            subtype = correction_subtype or "DECISION"
             add_node(
                 CounterMapNode(
                     node_id=node_id,
                     node_type="CODE",
-                    subtype="SELF_CORRECTION" if correction else "DECISION",
+                    subtype=subtype,
                     canonical_sources=[
                         CanonicalSourceReference(
                             source_type="CODE_SNAPSHOT",
@@ -161,7 +221,7 @@ class CounterMapProjector:
                             server_sequence=snapshot.server_sequence,
                         ),
                     ],
-                    title="Corrected independently" if correction else "Your code",
+                    title=_correction_title(subtype) if correction_subtype else "Your code",
                     summary=(
                         f"{snapshot.language.upper()} code snapshot v{snapshot.version}, "
                         "preserved from this moment."
@@ -189,101 +249,64 @@ class CounterMapProjector:
                 )
             )
             snapshot_node_ids[snapshot.id] = node_id
-            event_node_ids[snapshot.created_from_event_id] = node_id
             return node_id
 
-        def ensure_event_anchor(event_id: UUID) -> str | None:
-            existing = event_node_ids.get(event_id)
+        def ensure_execution(event_id: UUID) -> str | None:
+            execution = executions_by_event.get(event_id)
+            if execution is None:
+                return None
+            existing = execution_node_ids.get(execution.id)
             if existing:
                 return existing
-            response = response_by_event.get(event_id)
-            if response:
-                return ensure_response(response)
-            claim = claims_by_event.get(event_id)
-            if claim:
-                node_id = stable_node_id("CLAIM", claim.id)
-                exact_quote = bool(claim.verbatim_excerpt)
-                add_node(
-                    CounterMapNode(
-                        node_id=node_id,
-                        node_type="CLAIM",
-                        subtype=claim.claim_type,
-                        canonical_sources=[
-                            CanonicalSourceReference(
-                                source_type="CANDIDATE_CLAIM",
-                                source_id=claim.id,
-                                interview_session_id=bundle.interview_session_id,
-                                server_sequence=claim.source_server_sequence,
-                            ),
-                            CanonicalSourceReference(
-                                source_type="SESSION_EVENT",
-                                source_id=claim.source_event_id,
-                                interview_session_id=bundle.interview_session_id,
-                                server_sequence=claim.source_server_sequence,
-                            ),
-                        ],
-                        title="You said",
-                        summary=_bounded(claim.verbatim_excerpt or claim.normalized_claim),
-                        causal_rank=0,
-                        stage=events[event_id].stage if event_id in events else None,
-                        event_range=CounterMapEventRange(
-                            start_sequence=claim.source_server_sequence,
-                            end_sequence=claim.source_server_sequence,
+            node_id = stable_node_id("TEST", execution.id)
+            add_node(
+                CounterMapNode(
+                    node_id=node_id,
+                    node_type="TEST",
+                    subtype="VISIBLE_RUN",
+                    canonical_sources=[
+                        CanonicalSourceReference(
+                            source_type="EXECUTION",
+                            source_id=execution.id,
+                            interview_session_id=bundle.interview_session_id,
+                            server_sequence=execution.server_sequence,
                         ),
-                        display_metadata=CounterMapDisplayMetadata(exact_quote=exact_quote),
-                    )
+                        CanonicalSourceReference(
+                            source_type="SESSION_EVENT",
+                            source_id=execution.run_event_id,
+                            interview_session_id=bundle.interview_session_id,
+                            server_sequence=execution.server_sequence,
+                        ),
+                    ],
+                    title="You tested it",
+                    summary=_execution_summary(
+                        execution.status,
+                        execution.visible_passed,
+                        execution.visible_failed,
+                    ),
+                    causal_rank=0,
+                    stage=events[event_id].stage if event_id in events else None,
+                    event_range=CounterMapEventRange(
+                        start_sequence=execution.server_sequence,
+                        end_sequence=execution.server_sequence,
+                    ),
+                    display_metadata=CounterMapDisplayMetadata(
+                        execution_status=execution.status,
+                        visible_passed=execution.visible_passed,
+                        visible_failed=execution.visible_failed,
+                        language=execution.language,
+                    ),
                 )
-                event_node_ids[event_id] = node_id
-                return node_id
-            snapshot = snapshot_by_event.get(event_id)
-            if snapshot:
-                return ensure_snapshot(snapshot)
-            execution = executions_by_event.get(event_id)
-            if execution:
-                node_id = stable_node_id("TEST", execution.id)
-                add_node(
-                    CounterMapNode(
-                        node_id=node_id,
-                        node_type="TEST",
-                        subtype="VISIBLE_RUN",
-                        canonical_sources=[
-                            CanonicalSourceReference(
-                                source_type="EXECUTION",
-                                source_id=execution.id,
-                                interview_session_id=bundle.interview_session_id,
-                                server_sequence=execution.server_sequence,
-                            ),
-                            CanonicalSourceReference(
-                                source_type="SESSION_EVENT",
-                                source_id=execution.run_event_id,
-                                interview_session_id=bundle.interview_session_id,
-                                server_sequence=execution.server_sequence,
-                            ),
-                        ],
-                        title="You tested it",
-                        summary=_execution_summary(
-                            execution.status,
-                            execution.visible_passed,
-                            execution.visible_failed,
-                        ),
-                        causal_rank=0,
-                        stage=events[event_id].stage if event_id in events else None,
-                        event_range=CounterMapEventRange(
-                            start_sequence=execution.server_sequence,
-                            end_sequence=execution.server_sequence,
-                        ),
-                        display_metadata=CounterMapDisplayMetadata(
-                            execution_status=execution.status,
-                            visible_passed=execution.visible_passed,
-                            visible_failed=execution.visible_failed,
-                            language=execution.language,
-                        ),
-                    )
-                )
-                event_node_ids[event_id] = node_id
-                return node_id
+            )
+            execution_node_ids[execution.id] = node_id
+            return node_id
+
+        def ensure_reasoning(event_id: UUID) -> str | None:
             transcript = transcripts_by_event.get(event_id)
             if transcript and transcript.speaker == "CANDIDATE":
+                existing = reasoning_node_ids.get(transcript.id)
+                if existing:
+                    return existing
                 node_id = stable_node_id("REASONING", transcript.id)
                 add_node(
                     CounterMapNode(
@@ -309,9 +332,28 @@ class CounterMapProjector:
                         display_metadata=CounterMapDisplayMetadata(exact_quote=True),
                     )
                 )
-                event_node_ids[event_id] = node_id
+                reasoning_node_ids[transcript.id] = node_id
                 return node_id
             return None
+
+        def ensure_event_anchor(event_id: UUID) -> str | None:
+            # A canonical event carrying material code or execution truth must not be
+            # collapsed into the broader CandidateResponse that happens to contain it.
+            snapshot = snapshot_by_event.get(event_id)
+            if snapshot is not None:
+                return ensure_snapshot(snapshot)
+            execution_anchor = ensure_execution(event_id)
+            if execution_anchor is not None:
+                return execution_anchor
+            responses = responses_by_event.get(event_id, [])
+            if len(responses) == 1:
+                return ensure_response(responses[0])
+            claims = claims_by_event.get(event_id, [])
+            if len(claims) == 1:
+                return ensure_claim(claims[0])
+            # Multiple claims from one event have no safe generic winner. Prefer the
+            # broader observed reasoning, or omit the anchor when none exists.
+            return ensure_reasoning(event_id)
 
         def add_edge(
             source_node_id: str,
@@ -341,9 +383,11 @@ class CounterMapProjector:
             if delivery.assistance_type is None:
                 continue
             for evidence in bundle.evidence:
-                response = _explicit_assisted_response(delivery, evidence, responses_by_id)
-                if response is not None:
-                    assisted_outcomes[delivery.id][response.id].append(evidence)
+                matched_response = _explicit_assisted_response(
+                    delivery, evidence, responses_by_id
+                )
+                if matched_response is not None:
+                    assisted_outcomes[delivery.id][matched_response.id].append(evidence)
 
         for delivery in bundle.deliveries:
             decision = (
@@ -382,9 +426,9 @@ class CounterMapProjector:
                 decision,
                 claims_by_id=claims_by_id,
                 snapshots_by_id=snapshots_by_id,
+                ensure_claim=ensure_claim,
                 ensure_event_anchor=ensure_event_anchor,
                 ensure_snapshot=ensure_snapshot,
-                event_node_ids=event_node_ids,
             )
             why = _why_prompt(nodes.get(target_anchor), node_type) if target_anchor else None
             add_node(
@@ -417,7 +461,6 @@ class CounterMapProjector:
                 )
             )
             delivery_node_ids[delivery.id] = node_id
-            event_node_ids[delivery.actual_event_id] = node_id
             if target_anchor and node_type in {"QUESTION", "MUTATION"}:
                 target_id = _target_identity(delivery, decision)
                 add_edge(
@@ -463,28 +506,34 @@ class CounterMapProjector:
 
         for evidence in bundle.evidence:
             support_nodes: list[tuple[str, UUID, str]] = []
-            if evidence.candidate_response_id in responses_by_id:
-                response = responses_by_id[evidence.candidate_response_id]
-                response_evidence_events = sorted(
-                    {
-                        link.event_id
-                        for link in evidence.source_links
-                        if link.event_id in response.source_event_ids
-                    },
-                    key=str,
-                )
-                if response_evidence_events:
-                    support_nodes.append(
-                        (
-                            ensure_response(response),
-                            response_evidence_events[0],
-                            "CANDIDATE_RESPONSE",
-                        )
-                    )
             for link in evidence.source_links:
-                anchor = ensure_event_anchor(link.event_id)
-                if anchor is not None and all(anchor != existing[0] for existing in support_nodes):
-                    support_nodes.append((anchor, link.event_id, link.source_role))
+                snapshot = snapshot_by_event.get(link.event_id)
+                execution = executions_by_event.get(link.event_id)
+                evidence_response = (
+                    responses_by_id.get(evidence.candidate_response_id)
+                    if evidence.candidate_response_id is not None
+                    else None
+                )
+                support_anchor: str | None
+                if snapshot is not None:
+                    support_anchor = ensure_snapshot(snapshot)
+                    role = "CODE_SNAPSHOT"
+                elif execution is not None:
+                    support_anchor = ensure_execution(link.event_id)
+                    role = "EXECUTION"
+                elif (
+                    evidence_response is not None
+                    and link.event_id in evidence_response.source_event_ids
+                ):
+                    support_anchor = ensure_response(evidence_response)
+                    role = "CANDIDATE_RESPONSE"
+                else:
+                    support_anchor = ensure_event_anchor(link.event_id)
+                    role = link.source_role
+                if support_anchor is not None and all(
+                    support_anchor != existing[0] for existing in support_nodes
+                ):
+                    support_nodes.append((support_anchor, link.event_id, role))
             if not support_nodes:
                 continue
             evidence_node_id = stable_node_id("EVIDENCE", evidence.id)
@@ -550,7 +599,21 @@ class CounterMapProjector:
             if len(correction_snapshots) >= 2:
                 before, after = correction_snapshots[-2:]
                 before_node = ensure_snapshot(before)
-                after_node = ensure_snapshot(after, correction=True)
+                correction_response = (
+                    responses_by_id.get(evidence.candidate_response_id)
+                    if evidence.candidate_response_id is not None
+                    else None
+                )
+                if correction_response is None:
+                    continue
+                correction_subtype: Literal["SELF_CORRECTION", "CORRECTION"] = (
+                    "SELF_CORRECTION"
+                    if _independent_correction(
+                        evidence, correction_response, bundle.deliveries
+                    )
+                    else "CORRECTION"
+                )
+                after_node = ensure_snapshot(after, correction_subtype=correction_subtype)
                 add_edge(
                     before_node,
                     after_node,
@@ -637,7 +700,12 @@ class CounterMapProjector:
             for response_id, evidence_matches in sorted(
                 response_matches.items(), key=lambda item: str(item[0])
             ):
-                target_anchor = response_node_ids.get(response_id)
+                assisted_response = responses_by_id.get(response_id)
+                target_anchor = (
+                    ensure_response(assisted_response)
+                    if assisted_response is not None
+                    else None
+                )
                 visible_evidence = sorted(
                     (item for item in evidence_matches if item.id in evidence_node_ids),
                     key=lambda item: str(item.id),
@@ -703,9 +771,9 @@ def _delivery_target_anchor(
     *,
     claims_by_id: dict[UUID, ClaimSource],
     snapshots_by_id: dict[UUID, CodeSnapshotSource],
+    ensure_claim: Callable[[ClaimSource], str],
     ensure_event_anchor: Callable[[UUID], str | None],
     ensure_snapshot: Callable[..., str],
-    event_node_ids: dict[UUID, str],
 ) -> str | None:
     target_claim_id = delivery.target_claim_id or (decision.target_claim_id if decision else None)
     target_event_id = delivery.target_event_id or (decision.target_event_id if decision else None)
@@ -715,24 +783,20 @@ def _delivery_target_anchor(
     if target_claim_id is not None:
         claim = claims_by_id.get(target_claim_id)
         if claim is not None:
-            return ensure_event_anchor(claim.source_event_id)
-    if target_event_id is not None:
-        return ensure_event_anchor(target_event_id)
+            return ensure_claim(claim)
     if target_snapshot_id is not None and target_snapshot_id in snapshots_by_id:
         return ensure_snapshot(snapshots_by_id[target_snapshot_id])
-    if delivery.actual_event_id in event_node_ids:
-        return event_node_ids[delivery.actual_event_id]
+    if target_event_id is not None:
+        return ensure_event_anchor(target_event_id)
     return None
 
 
 def _target_identity(delivery: DeliverySource, decision: DecisionSource | None) -> UUID:
     for value in (
-        delivery.target_claim_id,
-        delivery.target_event_id,
-        delivery.source_code_snapshot_id,
-        decision.target_claim_id if decision else None,
-        decision.target_event_id if decision else None,
-        decision.target_code_snapshot_id if decision else None,
+        delivery.target_claim_id or (decision.target_claim_id if decision else None),
+        delivery.source_code_snapshot_id
+        or (decision.target_code_snapshot_id if decision else None),
+        delivery.target_event_id or (decision.target_event_id if decision else None),
     ):
         if value is not None:
             return value
@@ -793,6 +857,24 @@ def _structured_correction_snapshots(
     return sorted(
         unique.values(), key=lambda item: (item.server_sequence, item.version, str(item.id))
     )
+
+
+def _independent_correction(
+    evidence: CanonicalEvidenceSource,
+    response: ResponseSource,
+    deliveries: list[DeliverySource],
+) -> bool:
+    if evidence.independence_level != "INDEPENDENT" or response.prompt_id is not None:
+        return False
+    return not any(
+        delivery.assistance_type is not None
+        and delivery.prompt_id == response.prompt_id
+        for delivery in deliveries
+    )
+
+
+def _correction_title(subtype: str) -> str:
+    return "Corrected independently" if subtype == "SELF_CORRECTION" else "Updated code"
 
 
 def _assign_causal_ranks(

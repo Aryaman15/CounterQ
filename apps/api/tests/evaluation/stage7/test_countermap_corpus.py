@@ -9,7 +9,7 @@ import pytest
 from app.config.settings import Settings
 from app.countermap.projector import CounterMapProjector
 from app.countermap.routes import development_countermap_fixtures
-from app.countermap.schema import CounterMapGraph, stable_edge_id, stable_node_id
+from app.countermap.schema import CounterMapEdge, CounterMapGraph, stable_edge_id, stable_node_id
 from app.countermap.validator import CounterMapValidationError, CounterMapValidator
 from app.evals.countermap.corpus import CounterMapCorpusFixture, load_countermap_corpus
 
@@ -178,6 +178,441 @@ def _cases() -> list[IntegrityCase]:
             update={"responses": [response], "evidence": [evidence]}
         )
         assert not _has_edge(CounterMapProjector().project(changed), "CORRECTED_BY")
+
+    def correction_bundle(
+        independence_level: str,
+        *,
+        prompt_bound: bool = False,
+        assistance_linked: bool = False,
+    ) -> CounterMapCorpusFixture:
+        response = integrity.bundle.responses[0]
+        deliveries = integrity.bundle.deliveries
+        mode = integrity.bundle.mode
+        if prompt_bound or assistance_linked:
+            response = response.model_copy(
+                update={"prompt_id": integrity.bundle.deliveries[0].prompt_id}
+            )
+        if assistance_linked:
+            mode = "COACH"
+            deliveries = [
+                integrity.bundle.deliveries[0].model_copy(
+                    update={
+                        "prompt_kind": "INSTRUCTION",
+                        "prompt_origin": "SYSTEM",
+                        "probe_strategy": None,
+                        "examiner_decision_id": None,
+                        "assistance_type": "CONCEPTUAL_HINT",
+                        "hint_level": "CONCEPTUAL_HINT",
+                        "target_event_id": integrity.bundle.events[0].id,
+                        "server_sequence": 1,
+                    }
+                )
+            ]
+        evidence = integrity.bundle.evidence[0].model_copy(
+            update={"independence_level": independence_level}
+        )
+        bundle = integrity.bundle.model_copy(
+            update={
+                "mode": mode,
+                "responses": [response],
+                "deliveries": deliveries,
+                "evidence": [evidence],
+            }
+        )
+        return CounterMapCorpusFixture(
+            fixture_id=f"correction-{independence_level.lower()}",
+            label="Correction",
+            description="Structured correction subtype test fixture.",
+            bundle=bundle,
+        )
+
+    def assert_correction_subtype(
+        level: str,
+        expected: str,
+        *,
+        prompt_bound: bool = False,
+        assistance_linked: bool = False,
+    ) -> None:
+        fixture = correction_bundle(
+            level,
+            prompt_bound=prompt_bound,
+            assistance_linked=assistance_linked,
+        )
+        graph = CounterMapProjector().project(fixture.bundle)
+        CounterMapValidator().validate(bundle=fixture.bundle, graph=graph)
+        correction = next(
+            node
+            for node in graph.nodes
+            if node.node_type == "CODE" and node.subtype in {"SELF_CORRECTION", "CORRECTION"}
+        )
+        assert correction.subtype == expected
+        assert (correction.title == "Corrected independently") is (
+            expected == "SELF_CORRECTION"
+        )
+
+    def validator_rejects_assisted_self_correction() -> None:
+        fixture = correction_bundle("AFTER_LIGHT_GUIDANCE", assistance_linked=True)
+        graph = CounterMapProjector().project(fixture.bundle)
+        correction = next(
+            node
+            for node in graph.nodes
+            if node.node_type == "CODE" and node.subtype == "CORRECTION"
+        )
+        corrupted = correction.model_copy(
+            update={"subtype": "SELF_CORRECTION", "title": "Corrected independently"}
+        )
+        changed = graph.model_copy(
+            update={
+                "nodes": [
+                    corrupted if node.node_id == correction.node_id else node
+                    for node in graph.nodes
+                ]
+            }
+        )
+        _assert_validation_category(fixture, changed, "CORRECTION_INDEPENDENCE")
+
+    def multi_claim_fixture(*, reverse_claims: bool = False) -> CounterMapCorpusFixture:
+        first_claim = simulation.bundle.claims[0]
+        second_claim = first_claim.model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000201"),
+                "claim_type": "INVARIANT",
+                "normalized_claim": "Insert only after checking the complement.",
+                "verbatim_excerpt": None,
+            }
+        )
+        target_response = simulation.bundle.responses[0].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000202"),
+                "prompt_id": None,
+                "source_event_ids": [first_claim.source_event_id],
+                "start_sequence": 1,
+                "end_sequence": 1,
+            }
+        )
+        second_decision = simulation.bundle.decisions[0].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000203"),
+                "target_claim_id": second_claim.id,
+            }
+        )
+        second_delivery = simulation.bundle.deliveries[0].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000204"),
+                "prompt_id": UUID("7a000000-0000-4000-8000-000000000205"),
+                "examiner_decision_id": second_decision.id,
+                "target_claim_id": second_claim.id,
+                "actual_transcript_segment_id": UUID(
+                    "7a000000-0000-4000-8000-000000000206"
+                ),
+                "actual_text": "Why must insertion happen after the check?",
+                "intended_text": "Why must insertion happen after the check?",
+            }
+        )
+        claims = [first_claim, second_claim]
+        if reverse_claims:
+            claims.reverse()
+        bundle = simulation.bundle.model_copy(
+            update={
+                "claims": claims,
+                "responses": [*simulation.bundle.responses, target_response],
+                "decisions": [*simulation.bundle.decisions, second_decision],
+                "deliveries": [*simulation.bundle.deliveries, second_delivery],
+            }
+        )
+        return CounterMapCorpusFixture(
+            fixture_id="multi-claim-same-event",
+            label="Claims",
+            description="Two distinct claims share one canonical event.",
+            bundle=bundle,
+        )
+
+    def triggered_claim_bindings(graph: CounterMapGraph) -> dict[UUID, UUID]:
+        nodes = {node.node_id: node for node in graph.nodes}
+        result: dict[UUID, UUID] = {}
+        for edge in graph.edges:
+            if edge.relationship != "TRIGGERED":
+                continue
+            source = edge.canonical_relationship_sources[0]
+            from_claim = next(
+                (
+                    item.source_id
+                    for item in nodes[edge.from_node_id].canonical_sources
+                    if item.source_type == "CANDIDATE_CLAIM"
+                ),
+                None,
+            )
+            if from_claim is not None and source.related_source_id is not None:
+                result[source.related_source_id] = from_claim
+        return result
+
+    def exact_multi_claim_targets() -> None:
+        fixture = multi_claim_fixture()
+        graph = CounterMapProjector().project(fixture.bundle)
+        CounterMapValidator().validate(bundle=fixture.bundle, graph=graph)
+        expected = {claim.id: claim.id for claim in fixture.bundle.claims}
+        assert triggered_claim_bindings(graph) == expected
+
+    def swapped_multi_claim_targets_are_rejected() -> None:
+        fixture = multi_claim_fixture()
+        graph = CounterMapProjector().project(fixture.bundle)
+        triggered = [edge for edge in graph.edges if edge.relationship == "TRIGGERED"]
+        assert len(triggered) == 2
+        swapped: list[CounterMapEdge] = []
+        for edge, other in zip(triggered, reversed(triggered), strict=True):
+            swapped.append(
+                edge.model_copy(
+                    update={
+                        "from_node_id": other.from_node_id,
+                        "edge_id": stable_edge_id(
+                            other.from_node_id,
+                            edge.to_node_id,
+                            edge.relationship,
+                            *(item.source_id for item in edge.canonical_relationship_sources),
+                        ),
+                    }
+                )
+            )
+        changed = graph.model_copy(
+            update={
+                "edges": [
+                    *[edge for edge in graph.edges if edge.relationship != "TRIGGERED"],
+                    *swapped,
+                ]
+            }
+        )
+        _assert_validation_category(fixture, changed, "EDGE_ENDPOINT_BINDING")
+
+    def multi_claim_order_is_deterministic() -> None:
+        first = CounterMapProjector().project(multi_claim_fixture().bundle)
+        second = CounterMapProjector().project(
+            multi_claim_fixture(reverse_claims=True).bundle
+        )
+        assert first.model_dump(mode="json") == second.model_dump(mode="json")
+
+    def generic_multi_claim_event_uses_response() -> None:
+        fixture = multi_claim_fixture()
+        delivery = fixture.bundle.deliveries[0].model_copy(update={"target_claim_id": None})
+        decision = fixture.bundle.decisions[0].model_copy(update={"target_claim_id": None})
+        changed_bundle = fixture.bundle.model_copy(
+            update={"deliveries": [delivery], "decisions": [decision]}
+        )
+        graph = CounterMapProjector().project(changed_bundle)
+        CounterMapValidator().validate(bundle=changed_bundle, graph=graph)
+        triggered = next(edge for edge in graph.edges if edge.relationship == "TRIGGERED")
+        source_node = next(node for node in graph.nodes if node.node_id == triggered.from_node_id)
+        assert source_node.node_type == "RESPONSE"
+
+    def response_with_material_code() -> None:
+        response = simulation.bundle.responses[0].model_copy(
+            update={
+                "source_event_ids": [
+                    simulation.bundle.events[2].id,
+                    simulation.bundle.events[3].id,
+                ],
+                "end_sequence": 4,
+            }
+        )
+        evidence = simulation.bundle.evidence[0].model_copy(
+            update={
+                "source_links": [
+                    simulation.bundle.evidence[0].source_links[0].model_copy(
+                        update={
+                            "event_id": simulation.bundle.events[3].id,
+                            "server_sequence": 4,
+                        }
+                    )
+                ],
+                "source_code_snapshot_id": simulation.bundle.code_snapshots[0].id,
+            }
+        )
+        later_event = simulation.bundle.events[0].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000208"),
+                "server_sequence": 7,
+                "event_type": "CODE_SNAPSHOT_CREATED",
+                "source": "NATIVE_EDITOR",
+                "stage": "IMPLEMENTATION",
+            }
+        )
+        later_snapshot = simulation.bundle.code_snapshots[0].model_copy(
+            update={
+                "id": UUID("7a000000-0000-4000-8000-000000000207"),
+                "version": 2,
+                "parent_snapshot_id": simulation.bundle.code_snapshots[0].id,
+                "content_hash": "sha256:" + "2" * 64,
+                "created_from_event_id": later_event.id,
+                "server_sequence": 7,
+            }
+        )
+        changed = simulation.bundle.model_copy(
+            update={
+                "source_watermark": 7,
+                "events": [*simulation.bundle.events, later_event],
+                "responses": [response],
+                "evidence": [evidence, *simulation.bundle.evidence[1:]],
+                "code_snapshots": [*simulation.bundle.code_snapshots, later_snapshot],
+            }
+        )
+        graph = CounterMapProjector().project(changed)
+        CounterMapValidator().validate(bundle=changed, graph=graph)
+        evidence_node = next(
+            node
+            for node in graph.nodes
+            if any(
+                source.source_type == "EVIDENCE" and source.source_id == evidence.id
+                for source in node.canonical_sources
+            )
+        )
+        supported = next(
+            edge
+            for edge in graph.edges
+            if edge.relationship == "SUPPORTED" and edge.to_node_id == evidence_node.node_id
+        )
+        code = next(node for node in graph.nodes if node.node_id == supported.from_node_id)
+        assert code.node_type == "CODE"
+        assert code.display_metadata.code_snapshot_id == simulation.bundle.code_snapshots[0].id
+        assert code.display_metadata.code_version == 1
+        assert (
+            code.display_metadata.content_hash
+            == simulation.bundle.code_snapshots[0].content_hash
+        )
+        assert _has_node(graph, "RESPONSE")
+        assert all(
+            node.display_metadata.code_snapshot_id != later_snapshot.id
+            for node in graph.nodes
+            if node.node_type == "CODE"
+        )
+
+    def routine_response_code_is_not_materialized() -> None:
+        response = simulation.bundle.responses[0].model_copy(
+            update={
+                "source_event_ids": [
+                    simulation.bundle.events[2].id,
+                    simulation.bundle.events[3].id,
+                ],
+                "end_sequence": 4,
+            }
+        )
+        evidence = simulation.bundle.evidence[0].model_copy(
+            update={"source_code_snapshot_id": simulation.bundle.code_snapshots[0].id}
+        )
+        changed = simulation.bundle.model_copy(
+            update={
+                "responses": [response],
+                "evidence": [evidence, *simulation.bundle.evidence[1:]],
+            }
+        )
+        graph = CounterMapProjector().project(changed)
+        CounterMapValidator().validate(bundle=changed, graph=graph)
+        assert not _has_node(graph, "CODE")
+
+    def meaningful_execution_resolves_to_test() -> None:
+        evidence = simulation.bundle.evidence[2]
+        evidence_event = evidence.source_links[0].event_id
+        graph = CounterMapProjector().project(simulation.bundle)
+        CounterMapValidator().validate(bundle=simulation.bundle, graph=graph)
+        evidence_node = next(
+            node
+            for node in graph.nodes
+            if any(
+                source.source_type == "EVIDENCE" and source.source_id == evidence.id
+                for source in node.canonical_sources
+            )
+        )
+        supported = next(
+            edge
+            for edge in graph.edges
+            if edge.relationship == "SUPPORTED"
+            and edge.to_node_id == evidence_node.node_id
+            and edge.canonical_relationship_sources[0].related_source_id == evidence_event
+        )
+        source_node = next(node for node in graph.nodes if node.node_id == supported.from_node_id)
+        assert source_node.node_type == "TEST"
+        assert any(
+            source.source_type == "EXECUTION"
+            and source.source_id == simulation.bundle.executions[0].id
+            for source in source_node.canonical_sources
+        )
+
+    def exact_code_prompt_target() -> None:
+        delivery = integrity.bundle.deliveries[0]
+        triggered = next(edge for edge in integrity_graph.edges if edge.relationship == "TRIGGERED")
+        source_node = next(
+            node for node in integrity_graph.nodes if node.node_id == triggered.from_node_id
+        )
+        assert source_node.node_type == "CODE"
+        assert source_node.display_metadata.code_snapshot_id == delivery.source_code_snapshot_id
+        assert triggered.canonical_relationship_sources[0].related_source_id == (
+            delivery.source_code_snapshot_id
+        )
+
+    def swapped_code_prompt_target_is_rejected() -> None:
+        triggered = next(edge for edge in integrity_graph.edges if edge.relationship == "TRIGGERED")
+        wrong_code = next(
+            node
+            for node in integrity_graph.nodes
+            if node.node_type == "CODE" and node.node_id != triggered.from_node_id
+        )
+        changed_edge = triggered.model_copy(
+            update={
+                "from_node_id": wrong_code.node_id,
+                "edge_id": stable_edge_id(
+                    wrong_code.node_id,
+                    triggered.to_node_id,
+                    triggered.relationship,
+                    *(item.source_id for item in triggered.canonical_relationship_sources),
+                ),
+            }
+        )
+        changed = integrity_graph.model_copy(
+            update={
+                "edges": [
+                    changed_edge if edge.edge_id == triggered.edge_id else edge
+                    for edge in integrity_graph.edges
+                ]
+            }
+        )
+        _assert_validation_category(integrity, changed, "EDGE_ENDPOINT_BINDING")
+
+    def response_cannot_replace_execution_evidence_source() -> None:
+        evidence = simulation.bundle.evidence[2]
+        evidence_node = next(
+            node
+            for node in simulation_graph.nodes
+            if any(
+                source.source_type == "EVIDENCE" and source.source_id == evidence.id
+                for source in node.canonical_sources
+            )
+        )
+        supported = next(
+            edge
+            for edge in simulation_graph.edges
+            if edge.relationship == "SUPPORTED" and edge.to_node_id == evidence_node.node_id
+        )
+        response_node = next(
+            node for node in simulation_graph.nodes if node.node_type == "RESPONSE"
+        )
+        changed_edge = supported.model_copy(
+            update={
+                "from_node_id": response_node.node_id,
+                "edge_id": stable_edge_id(
+                    response_node.node_id,
+                    supported.to_node_id,
+                    supported.relationship,
+                    *(item.source_id for item in supported.canonical_relationship_sources),
+                ),
+            }
+        )
+        changed = simulation_graph.model_copy(
+            update={
+                "edges": [
+                    changed_edge if edge.edge_id == supported.edge_id else edge
+                    for edge in simulation_graph.edges
+                ]
+            }
+        )
+        _assert_validation_category(simulation, changed, "EDGE_ENDPOINT_BINDING")
 
     def coach_has_only_assisted_outcome_semantics() -> None:
         assert _has_node(coach_graph, "ASSISTANCE")
@@ -474,6 +909,76 @@ def _cases() -> list[IntegrityCase]:
             ambiguous_three_action_correction_is_omitted,
         ),
         IntegrityCase(
+            "independent-spontaneous-correction-is-self-correction",
+            lambda: assert_correction_subtype("INDEPENDENT", "SELF_CORRECTION"),
+        ),
+        IntegrityCase(
+            "after-probe-correction-is-not-self-correction",
+            lambda: assert_correction_subtype("AFTER_PROBE", "CORRECTION"),
+        ),
+        IntegrityCase(
+            "after-light-guidance-correction-is-not-self-correction",
+            lambda: assert_correction_subtype("AFTER_LIGHT_GUIDANCE", "CORRECTION"),
+        ),
+        IntegrityCase(
+            "after-strong-hint-correction-is-not-self-correction",
+            lambda: assert_correction_subtype("AFTER_STRONG_HINT", "CORRECTION"),
+        ),
+        IntegrityCase(
+            "directly-taught-correction-is-not-self-correction",
+            lambda: assert_correction_subtype("DIRECTLY_TAUGHT", "CORRECTION"),
+        ),
+        IntegrityCase(
+            "prompt-bound-correction-is-not-independent",
+            lambda: assert_correction_subtype(
+                "INDEPENDENT", "CORRECTION", prompt_bound=True
+            ),
+        ),
+        IntegrityCase(
+            "assistance-linked-correction-is-not-independent",
+            lambda: assert_correction_subtype(
+                "AFTER_LIGHT_GUIDANCE", "CORRECTION", assistance_linked=True
+            ),
+        ),
+        IntegrityCase(
+            "validator-rejects-assisted-self-correction-label",
+            validator_rejects_assisted_self_correction,
+        ),
+        IntegrityCase("same-event-claims-bind-exactly", exact_multi_claim_targets),
+        IntegrityCase(
+            "same-event-claim-endpoint-swap-rejected",
+            swapped_multi_claim_targets_are_rejected,
+        ),
+        IntegrityCase(
+            "same-event-claim-order-deterministic",
+            multi_claim_order_is_deterministic,
+        ),
+        IntegrityCase(
+            "generic-multi-claim-event-uses-broader-response",
+            generic_multi_claim_event_uses_response,
+        ),
+        IntegrityCase(
+            "response-material-code-keeps-exact-code-source",
+            response_with_material_code,
+        ),
+        IntegrityCase(
+            "routine-response-code-is-not-materialized",
+            routine_response_code_is_not_materialized,
+        ),
+        IntegrityCase(
+            "meaningful-execution-source-resolves-to-test",
+            meaningful_execution_resolves_to_test,
+        ),
+        IntegrityCase("exact-code-prompt-target", exact_code_prompt_target),
+        IntegrityCase(
+            "code-prompt-target-substitution-rejected",
+            swapped_code_prompt_target_is_rejected,
+        ),
+        IntegrityCase(
+            "response-cannot-replace-execution-evidence-source",
+            response_cannot_replace_execution_evidence_source,
+        ),
+        IntegrityCase(
             "coach-assistance-has-no-question-edges",
             coach_has_only_assisted_outcome_semantics,
         ),
@@ -533,8 +1038,8 @@ def _cases() -> list[IntegrityCase]:
 CASES = _cases()
 
 
-def test_stage7_corpus_expands_the_original_thirty_eight_integrity_cases() -> None:
-    assert len(CASES) == 53
+def test_stage7_corpus_expands_the_original_fifty_three_integrity_cases() -> None:
+    assert len(CASES) == 71
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda item: item.case_id)
@@ -561,7 +1066,7 @@ async def test_development_fixture_api_runs_the_production_projector_and_validat
         "delivery-and-self-correction-integrity",
     }
     assert all(
-        item.graph.generation_policy_version == "countermap-projector.v2"
+        item.graph.generation_policy_version == "countermap-projector.v3"
         for item in responses
     )
 

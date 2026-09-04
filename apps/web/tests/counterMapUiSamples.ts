@@ -89,7 +89,7 @@ function edge(
 function graph(nodes: CounterMapNode[], edges: CounterMapEdge[]): CounterMapGraph {
   return {
     schema_version: "countermap.graph.v1",
-    generation_policy_version: "countermap-projector.v2",
+    generation_policy_version: "countermap-projector.v3",
     interview_session_id: sessionId,
     source_watermark: nodes.length,
     nodes,

@@ -69,6 +69,7 @@ class CounterMapValidator:
             issues.extend(self._validate_node(bundle, node))
         for edge in graph.edges:
             issues.extend(self._validate_edge(bundle, nodes, edge))
+        issues.extend(_validate_correction_subtypes(bundle, nodes, graph.edges))
 
         deliveries: dict[UUID, list[CounterMapNode]] = defaultdict(list)
         for node in graph.nodes:
@@ -311,10 +312,12 @@ def _relationship_has_exact_endpoints(
             (item for item in bundle.decisions if item.id == delivery.examiner_decision_id),
             None,
         )
+        exact_target = _delivery_target(delivery, decision)
         return bool(
-            source.related_source_id in _delivery_targets(delivery, decision)
+            exact_target is not None
+            and source.related_source_id == exact_target
             and _source_id(to_node, "DELIVERED_PROMPT") == delivery.id
-            and _node_resolves_target(bundle, from_node, source.related_source_id)
+            and _node_resolves_target(bundle, from_node, exact_target)
         )
     if edge.relationship == "ANSWERED_BY":
         if len(sources) != 1 or from_node.node_type not in {
@@ -351,7 +354,12 @@ def _relationship_has_exact_endpoints(
             and evidence
             and source.related_source_id in {item.event_id for item in evidence.source_links}
             and _source_id(to_node, "EVIDENCE") == evidence.id
-            and source.related_source_id in _node_event_ids(bundle, from_node)
+            and _node_resolves_evidence_source(
+                bundle,
+                from_node,
+                evidence,
+                source.related_source_id,
+            )
         )
     if edge.relationship == "EXPOSED":
         if (
@@ -410,6 +418,8 @@ def _valid_correction(
     nodes: dict[str, CounterMapNode],
     edge: CounterMapEdge,
 ) -> bool:
+    if len(edge.canonical_relationship_sources) != 1:
+        return False
     source = edge.canonical_relationship_sources[0]
     evidence = next((item for item in bundle.evidence if item.id == source.source_id), None)
     response = next(
@@ -438,13 +448,84 @@ def _valid_correction(
     supported_snapshots = {
         item.id for item in snapshots.values() if item.created_from_event_id in event_ids
     }
+    before = snapshots.get(from_snapshot) if from_snapshot is not None else None
+    after = snapshots.get(to_snapshot) if to_snapshot is not None else None
     return bool(
-        from_snapshot
-        and to_snapshot
+        before
+        and after
         and from_snapshot != to_snapshot
         and len(supported_snapshots) == 2
         and {from_snapshot, to_snapshot} == supported_snapshots
-        and snapshots[from_snapshot].server_sequence < snapshots[to_snapshot].server_sequence
+        and before.server_sequence < after.server_sequence
+    )
+
+
+def _validate_correction_subtypes(
+    bundle: CounterMapSourceBundle,
+    nodes: dict[str, CounterMapNode],
+    edges: list[CounterMapEdge],
+) -> list[CounterMapValidationIssue]:
+    issues: list[CounterMapValidationIssue] = []
+    incoming: dict[str, list[CounterMapEdge]] = defaultdict(list)
+    for edge in edges:
+        if edge.relationship == "CORRECTED_BY" and edge.to_node_id in nodes:
+            incoming[edge.to_node_id].append(edge)
+    for node in nodes.values():
+        correction_edges = incoming.get(node.node_id, [])
+        if node.node_type != "CODE":
+            continue
+        if node.subtype == "SELF_CORRECTION" and not correction_edges:
+            issues.append(
+                _issue(
+                    "CORRECTION_INDEPENDENCE",
+                    "Self-correction label lacks structured correction provenance",
+                )
+            )
+            continue
+        if not correction_edges:
+            continue
+        independent = all(
+            _independent_correction_edge(bundle, nodes, edge) for edge in correction_edges
+        )
+        expected_subtype = "SELF_CORRECTION" if independent else "CORRECTION"
+        expected_title = "Corrected independently" if independent else "Updated code"
+        if node.subtype != expected_subtype or node.title != expected_title:
+            issues.append(
+                _issue(
+                    "CORRECTION_INDEPENDENCE",
+                    "Correction subtype overstates or changes canonical independence",
+                )
+            )
+    return issues
+
+
+def _independent_correction_edge(
+    bundle: CounterMapSourceBundle,
+    nodes: dict[str, CounterMapNode],
+    edge: CounterMapEdge,
+) -> bool:
+    if not _valid_correction(bundle, nodes, edge):
+        return False
+    source = edge.canonical_relationship_sources[0]
+    evidence = next((item for item in bundle.evidence if item.id == source.source_id), None)
+    response = next(
+        (
+            item
+            for item in bundle.responses
+            if evidence is not None and item.id == evidence.candidate_response_id
+        ),
+        None,
+    )
+    return bool(
+        evidence
+        and response
+        and evidence.independence_level == "INDEPENDENT"
+        and response.prompt_id is None
+        and not any(
+            delivery.assistance_type is not None
+            and response.prompt_id == delivery.prompt_id
+            for delivery in bundle.deliveries
+        )
     )
 
 
@@ -531,21 +612,16 @@ def _exact_source_values(bundle: CounterMapSourceBundle, node: CounterMapNode) -
     return result
 
 
-def _delivery_targets(delivery: DeliverySource, decision: DecisionSource | None) -> set[UUID]:
-    values = {
-        delivery.target_claim_id,
-        delivery.target_event_id,
-        delivery.source_code_snapshot_id,
-    }
-    if decision is not None:
-        values.update(
-            {
-                decision.target_claim_id,
-                decision.target_event_id,
-                decision.target_code_snapshot_id,
-            }
-        )
-    return {item for item in values if item is not None}
+def _delivery_target(delivery: DeliverySource, decision: DecisionSource | None) -> UUID | None:
+    for value in (
+        delivery.target_claim_id or (decision.target_claim_id if decision else None),
+        delivery.source_code_snapshot_id
+        or (decision.target_code_snapshot_id if decision else None),
+        delivery.target_event_id or (decision.target_event_id if decision else None),
+    ):
+        if value is not None:
+            return value
+    return None
 
 
 def _assistance_matches(
@@ -657,10 +733,75 @@ def _node_resolves_target(
 ) -> bool:
     if target_id is None:
         return False
+    claim = next((item for item in bundle.claims if item.id == target_id), None)
+    if claim is not None:
+        return _source_id(node, "CANDIDATE_CLAIM") == claim.id
+    snapshot = next((item for item in bundle.code_snapshots if item.id == target_id), None)
+    if snapshot is not None:
+        return _source_id(node, "CODE_SNAPSHOT") == snapshot.id
+    return _node_resolves_event_anchor(bundle, node, target_id)
+
+
+def _node_resolves_evidence_source(
+    bundle: CounterMapSourceBundle,
+    node: CounterMapNode,
+    evidence: CanonicalEvidenceSource,
+    event_id: UUID | None,
+) -> bool:
+    if event_id is None:
+        return False
+    response_id = evidence.candidate_response_id
+    return _node_resolves_event_anchor(
+        bundle,
+        node,
+        event_id,
+        response_id=response_id,
+    )
+
+
+def _node_resolves_event_anchor(
+    bundle: CounterMapSourceBundle,
+    node: CounterMapNode,
+    event_id: UUID,
+    *,
+    response_id: UUID | None = None,
+) -> bool:
+    snapshot = next(
+        (item for item in bundle.code_snapshots if item.created_from_event_id == event_id),
+        None,
+    )
+    if snapshot is not None:
+        return _source_id(node, "CODE_SNAPSHOT") == snapshot.id
+    execution = next((item for item in bundle.executions if item.run_event_id == event_id), None)
+    if execution is not None:
+        return _source_id(node, "EXECUTION") == execution.id
+    if response_id is not None:
+        response = next(
+            (
+                item
+                for item in bundle.responses
+                if item.id == response_id and event_id in item.source_event_ids
+            ),
+            None,
+        )
+        if response is not None:
+            return _source_id(node, "CANDIDATE_RESPONSE") == response.id
+    responses = [item for item in bundle.responses if event_id in item.source_event_ids]
+    if len(responses) == 1:
+        return _source_id(node, "CANDIDATE_RESPONSE") == responses[0].id
+    claims = [item for item in bundle.claims if item.source_event_id == event_id]
+    if len(claims) == 1:
+        return _source_id(node, "CANDIDATE_CLAIM") == claims[0].id
+    transcript = next(
+        (
+            item
+            for item in bundle.transcripts
+            if item.event_id == event_id and item.speaker == "CANDIDATE"
+        ),
+        None,
+    )
     return bool(
-        target_id == _source_id(node, "CANDIDATE_CLAIM")
-        or target_id == _source_id(node, "CODE_SNAPSHOT")
-        or target_id in _node_event_ids(bundle, node)
+        transcript and _source_id(node, "CANDIDATE_TRANSCRIPT") == transcript.id
     )
 
 

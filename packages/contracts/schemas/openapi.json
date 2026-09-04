@@ -1182,7 +1182,7 @@
             "type": "array"
           },
           "generation_policy_version": {
-            "const": "countermap-projector.v2",
+            "const": "countermap-projector.v3",
             "title": "Generation Policy Version",
             "type": "string"
           },
