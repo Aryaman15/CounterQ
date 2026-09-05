@@ -1,6 +1,5 @@
 "use client";
 
-import type { components } from "@counterq/contracts/openapi";
 import {
   ArrowDown,
   Braces,
@@ -11,19 +10,29 @@ import {
   ShieldCheck,
   TestTube2,
   TriangleAlert,
+  type LucideIcon,
 } from "lucide-react";
 import { useMemo } from "react";
 
-type CounterMapGraph = components["schemas"]["CounterMapGraph"];
-type CounterMapNode = components["schemas"]["CounterMapNode"];
-type CounterMapEdge = components["schemas"]["CounterMapEdge"];
-type CounterMapDisplayMetadata = NonNullable<CounterMapNode["display_metadata"]>;
+import {
+  eyebrowForNode,
+  relationshipLabel,
+  truthMarkers,
+  whyLabel,
+  type CounterMapEdge,
+  type CounterMapGraph,
+  type CounterMapNode,
+} from "./counterMapPresentation";
 
-type ReasoningTimelineProps = {
+export function ReasoningTimeline({
+  graph,
+  selectedNodeId = null,
+  onSelectNode,
+}: {
   graph: CounterMapGraph;
-};
-
-export function ReasoningTimeline({ graph }: ReasoningTimelineProps) {
+  selectedNodeId?: string | null;
+  onSelectNode?: (node: CounterMapNode) => void;
+}) {
   const nodesById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.node_id, node])),
     [graph.nodes],
@@ -40,7 +49,13 @@ export function ReasoningTimeline({ graph }: ReasoningTimelineProps) {
     for (const node of graph.nodes) {
       result.set(node.causal_rank, [...(result.get(node.causal_rank) ?? []), node]);
     }
-    return [...result.entries()].sort(([left], [right]) => left - right);
+    return [...result.entries()]
+      .sort(([left], [right]) => left - right)
+      .map(([rank, nodes]) => [rank, [...nodes].sort((left, right) => (
+        (left.event_range?.start_sequence ?? Number.MAX_SAFE_INTEGER)
+          - (right.event_range?.start_sequence ?? Number.MAX_SAFE_INTEGER)
+        || left.node_id.localeCompare(right.node_id)
+      ))] as const);
   }, [graph.nodes]);
 
   if (!graph.nodes.length) {
@@ -48,7 +63,7 @@ export function ReasoningTimeline({ graph }: ReasoningTimelineProps) {
       <div className="countermap-empty">
         <ShieldCheck size={22} aria-hidden="true" />
         <h3>No material causal moments to map.</h3>
-        <p>CounterQ kept the projection small because this session did not establish enough linked evidence.</p>
+        <p>CounterQ kept this review small because the session did not establish enough linked evidence.</p>
       </div>
     );
   }
@@ -73,6 +88,8 @@ export function ReasoningTimeline({ graph }: ReasoningTimelineProps) {
                 node={node}
                 incoming={incomingByNode.get(node.node_id) ?? []}
                 nodesById={nodesById}
+                selected={selectedNodeId === node.node_id}
+                onSelect={onSelectNode}
               />
             ))}
           </div>
@@ -86,23 +103,31 @@ function TimelineNode({
   node,
   incoming,
   nodesById,
+  selected,
+  onSelect,
 }: {
   node: CounterMapNode;
   incoming: CounterMapEdge[];
   nodesById: Map<string, CounterMapNode>;
+  selected: boolean;
+  onSelect?: (node: CounterMapNode) => void;
 }) {
   const Icon = iconForNode(node.node_type);
-  const meta: Partial<CounterMapDisplayMetadata> = node.display_metadata ?? {};
-  const availableActions = node.available_actions ?? [];
+  const metadata = node.display_metadata;
+  const markers = truthMarkers(node);
   return (
-    <article className={`countermap-node countermap-node-${node.node_type.toLowerCase()}`}>
+    <article
+      className={`countermap-node countermap-node-${node.node_type.toLowerCase()}`}
+      data-selected={selected ? "true" : "false"}
+      data-subtype={node.subtype.toLowerCase()}
+    >
       {incoming.length ? (
         <div className="countermap-incoming" aria-label="Causal connections">
           <GitBranch size={13} aria-hidden="true" />
           <span>
             {incoming.map((edge) => {
               const source = nodesById.get(edge.from_node_id);
-              return `${source?.title ?? "Earlier moment"} ${relationshipLabel(edge, node)}`;
+              return `${source?.title ?? "Earlier moment"} ${relationshipLabel(edge.relationship, node.node_type)}`;
             }).join(" · ")}
           </span>
         </div>
@@ -114,48 +139,38 @@ function TimelineNode({
           <h3>{node.title}</h3>
         </div>
       </div>
-      {meta.exact_quote ? <blockquote>{node.summary}</blockquote> : <p className="countermap-node-summary">{node.summary}</p>}
-      <NodeTruthLine node={node} />
-      {meta.why ? (
+      {metadata?.exact_quote
+        ? <blockquote>{node.summary}</blockquote>
+        : <p className="countermap-node-summary">{node.summary}</p>}
+      {markers.length ? <p className="countermap-truth-line">{markers.join(" · ")}</p> : null}
+      {metadata?.why ? (
         <details className="countermap-why">
           <summary>{whyLabel(node.node_type)}</summary>
-          <p>{meta.why}</p>
+          <p>{metadata.why}</p>
         </details>
       ) : null}
-      {availableActions.length ? (
-        <div className="countermap-actions" aria-label="Available actions">
-          {availableActions.map((action) => (
-            <button
-              type="button"
-              key={action.action}
-              disabled={action.availability !== "AVAILABLE"}
-              title={action.reason ?? undefined}
-            >
-              {action.label}{action.availability === "AVAILABLE" ? "" : " · Later"}
-            </button>
-          ))}
+      {onSelect ? (
+        <button
+          type="button"
+          className="countermap-open-node"
+          aria-label={`${node.node_type === "CODE" ? "View code at this moment" : "Inspect this moment"}: ${node.title}`}
+          onClick={() => onSelect(node)}
+        >
+          {node.node_type === "CODE" ? "View code at this moment" : "Inspect this moment"}
+        </button>
+      ) : null}
+      {node.node_type === "BREAKPOINT" ? (
+        <div className="countermap-actions" aria-label="Retest availability">
+          <button type="button" disabled title="Retesting becomes available in a later stage.">
+            CounterQ me again · Later
+          </button>
         </div>
       ) : null}
     </article>
   );
 }
 
-function NodeTruthLine({ node }: { node: CounterMapNode }) {
-  const meta: Partial<CounterMapDisplayMetadata> = node.display_metadata ?? {};
-  const parts: string[] = [];
-  if (meta.independence_level) parts.push(independenceLabel(meta.independence_level));
-  if (meta.polarity) parts.push(polarityLabel(meta.polarity));
-  if (meta.breakpoint_status) {
-    parts.push(meta.breakpoint_status === "OPEN" ? "Still needs independent verification" : titleCase(meta.breakpoint_status));
-  }
-  if (meta.assistance_label) parts.push(meta.assistance_label);
-  if (meta.code_version) parts.push(`Code snapshot v${meta.code_version}`);
-  if (meta.delivery_state && meta.delivery_state !== "DELIVERED") parts.push("Only the delivered words are shown");
-  if (!parts.length) return null;
-  return <p className="countermap-truth-line">{parts.join(" · ")}</p>;
-}
-
-function iconForNode(nodeType: CounterMapNode["node_type"]) {
+function iconForNode(nodeType: CounterMapNode["node_type"]): LucideIcon {
   return {
     CLAIM: MessageSquareText,
     REASONING: MessageSquareText,
@@ -168,74 +183,4 @@ function iconForNode(nodeType: CounterMapNode["node_type"]) {
     ASSISTANCE: Lightbulb,
     MUTATION: GitBranch,
   }[nodeType];
-}
-
-function eyebrowForNode(node: CounterMapNode): string {
-  if (node.node_type === "EVIDENCE") {
-    const metadata = node.display_metadata;
-    if (
-      metadata?.polarity === "POSITIVE"
-      && metadata.strength === "STRONG"
-      && metadata.independence_level === "INDEPENDENT"
-    ) {
-      return "Strong demonstration";
-    }
-    return polarityLabel(metadata?.polarity ?? "MIXED");
-  }
-  if (node.node_type === "CODE" && node.subtype === "SELF_CORRECTION") return "Independent correction";
-  if (node.node_type === "RESPONSE" && node.subtype === "SPONTANEOUS_RESPONSE") return "Your reasoning";
-  if (node.node_type === "ASSISTANCE") return "Coach intervention";
-  if (node.node_type === "BREAKPOINT") return "Evidence-backed boundary";
-  return {
-    CLAIM: "You said",
-    REASONING: "Your reasoning",
-    CODE: "Your code",
-    TEST: "You tested it",
-    QUESTION: "CounterQ asked",
-    RESPONSE: "You answered",
-    MUTATION: "CounterQ changed the constraint",
-  }[node.node_type] ?? "Interview moment";
-}
-
-function whyLabel(nodeType: CounterMapNode["node_type"]): string {
-  const labels: Partial<Record<CounterMapNode["node_type"], string>> = {
-    QUESTION: "Why this question?",
-    MUTATION: "Why this constraint change?",
-    ASSISTANCE: "Why this guidance?",
-  };
-  return labels[nodeType] ?? "Why this moment?";
-}
-
-function relationshipLabel(edge: CounterMapEdge, target: CounterMapNode): string {
-  if (edge.relationship === "TRIGGERED") {
-    if (target.node_type === "MUTATION") return "prompted this constraint change";
-    if (target.node_type === "ASSISTANCE") return "led to this guidance";
-    return "prompted this question";
-  }
-  return {
-    ANSWERED_BY: "received this answer",
-    LED_TO: "led to this moment",
-    SUPPORTED: "supported this evidence",
-    EXPOSED: "shaped this breakpoint",
-    CORRECTED_BY: "was corrected by this change",
-    ASSISTED: "helped shape this response",
-  }[edge.relationship];
-}
-
-function polarityLabel(value: "POSITIVE" | "NEGATIVE" | "MIXED"): string {
-  return { POSITIVE: "Positive evidence", NEGATIVE: "Needs work", MIXED: "Mixed evidence" }[value];
-}
-
-function independenceLabel(value: string): string {
-  return {
-    INDEPENDENT: "Independently demonstrated",
-    AFTER_PROBE: "Demonstrated after interviewer challenge",
-    AFTER_LIGHT_GUIDANCE: "Improved after light guidance",
-    AFTER_STRONG_HINT: "Improved after a strong hint",
-    DIRECTLY_TAUGHT: "Demonstrated after explanation",
-  }[value] ?? titleCase(value);
-}
-
-function titleCase(value: string): string {
-  return value.toLowerCase().replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }

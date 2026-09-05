@@ -4,7 +4,7 @@ import type { components } from "@counterq/contracts/openapi";
 import { Network, RotateCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { ReasoningTimeline } from "./ReasoningTimeline";
+import { CounterMapSurface } from "./CounterMapSurface";
 
 type DemoFixture = components["schemas"]["DevelopmentCounterMapFixtureResponse"];
 
@@ -42,8 +42,8 @@ export function CounterMapDemo() {
         <div className="report-wordmark">
           <span aria-hidden="true">CQ</span> CounterQ
         </div>
-        <p className="countermap-kicker">Stage 7A · Deterministic preview</p>
-        <h1>Reasoning, reconstructed from evidence.</h1>
+        <p className="countermap-kicker">CounterMap · Interview reconstruction</p>
+        <h1>The interview, mapped to the moment.</h1>
         <p>
           {selected?.description
             ?? "Production projection over deterministic canonical development fixtures."}
@@ -71,7 +71,14 @@ export function CounterMapDemo() {
               <h2 id="countermap-demo-title">{selected.graph.summary.title}</h2>
               <span>{selected.graph.summary.overview}</span>
             </div>
-            <ReasoningTimeline graph={selected.graph} />
+            <CounterMapSurface
+              graph={selected.graph}
+              detailUrlForNode={(nodeId) => (
+                `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
+                + `/api/countermap/development/fixtures/${selected.fixture_id}`
+                + `/nodes/${encodeURIComponent(nodeId)}`
+              )}
+            />
           </>
         ) : requestFailed ? (
           <div className="countermap-state countermap-state-failed" role="status">

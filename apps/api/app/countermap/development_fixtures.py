@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from uuid import UUID, uuid5
 
@@ -388,7 +389,7 @@ def _integrity() -> CounterMapSourceBundle:
     snapshots = [
         _snapshot(key, session_id, events[0], 1),
         _snapshot(key, session_id, events[1], 2, parent=1),
-        _snapshot(key, session_id, events[2], 3, parent=2),
+        _snapshot(key, session_id, events[2], 5, parent=2),
     ]
     return CounterMapSourceBundle(
         interview_session_id=session_id,
@@ -532,16 +533,81 @@ def _snapshot(
     parent: int | None = None,
 ) -> CodeSnapshotSource:
     del session_id
+    source_code = development_source_code_for_key(key, version)
     return CodeSnapshotSource(
         id=_id(key, f"snapshot-{version}"),
         version=version,
         parent_snapshot_id=_id(key, f"snapshot-{parent}") if parent else None,
         language="python",
-        content_hash=f"sha256:{version:064x}",
+        content_hash=hashlib.sha256(source_code.encode("utf-8")).hexdigest(),
         created_from_event_id=event.id,
         server_sequence=event.server_sequence,
         stage=event.stage,
     )
+
+
+def development_source_code(fixture_id: str, version: int) -> str | None:
+    key_by_fixture = {
+        "simulation-success-and-misconception": "simulation",
+        "coach-assisted-improvement-open-breakpoint": "coach",
+        "delivery-and-self-correction-integrity": "integrity",
+    }
+    key = key_by_fixture.get(fixture_id)
+    if key is None:
+        return None
+    try:
+        return development_source_code_for_key(key, version)
+    except KeyError:
+        return None
+
+
+def development_source_code_for_key(key: str, version: int) -> str:
+    sources = {
+        ("simulation", 1): (
+            "def two_sum(values, target):\n"
+            "    seen = {}\n"
+            "    for index, value in enumerate(values):\n"
+            "        complement = target - value\n"
+            "        if complement in seen:\n"
+            "            return [seen[complement], index]\n"
+            "        seen[value] = index\n"
+        ),
+        ("integrity", 1): (
+            "def longest_unique(text):\n"
+            "    left = 0\n"
+            "    best = 0\n"
+            "    last = {}\n"
+            "    for right, char in enumerate(text):\n"
+            "        if char in last:\n"
+            "            left = last[char] + 1\n"
+            "        last[char] = right\n"
+            "        best = max(best, right - left + 1)\n"
+            "    return best\n"
+        ),
+        ("integrity", 2): (
+            "def longest_unique(text):\n"
+            "    left = 0\n"
+            "    best = 0\n"
+            "    last = {}\n"
+            "    for right, char in enumerate(text):\n"
+            "        if char in last:\n"
+            "            left = max(left, last[char] + 1)\n"
+            "        last[char] = right\n"
+            "        best = max(best, right - left + 1)\n"
+            "    return best\n"
+        ),
+        ("integrity", 5): (
+            "def longest_unique(text):\n"
+            "    left = best = 0\n"
+            "    last = {}\n"
+            "    for right, char in enumerate(text):\n"
+            "        left = max(left, last.get(char, -1) + 1)\n"
+            "        last[char] = right\n"
+            "        best = max(best, right - left + 1)\n"
+            "    return best\n"
+        ),
+    }
+    return sources[(key, version)]
 
 
 def _target(key: str, canonical_key: str, display_name: str) -> EvidenceTarget:

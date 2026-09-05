@@ -38,6 +38,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/countermap/development/fixtures/{fixture_id}/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Countermap Node Detail */
+        get: operations["development_countermap_node_detail_api_countermap_development_fixtures__fixture_id__nodes__node_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/countermap/development/sessions/{interview_session_id}/inspection": {
         parameters: {
             query?: never;
@@ -81,6 +98,23 @@ export interface paths {
         };
         /** Countermap Status */
         get: operations["countermap_status_api_countermap_sessions__interview_session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/countermap/sessions/{interview_session_id}/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Countermap Node Detail */
+        get: operations["countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -432,6 +466,102 @@ export interface components {
             /** Target Skill Dimension Id */
             target_skill_dimension_id: string | null;
         };
+        /** CandidateBreakpointDetail */
+        CandidateBreakpointDetail: {
+            /** Concept */
+            concept: string;
+            /** Evidence */
+            evidence: components["schemas"]["CandidateBreakpointEvidenceDetail"][];
+            /** Independent Verification Required */
+            independent_verification_required: boolean;
+            /** Severity */
+            severity: string;
+            /** Skill */
+            skill: string;
+            /** Status */
+            status: string;
+            /** Summary */
+            summary: string;
+        };
+        /** CandidateBreakpointEvidenceDetail */
+        CandidateBreakpointEvidenceDetail: {
+            /** Finding */
+            finding: string;
+            /** Independence Level */
+            independence_level: string;
+            /**
+             * Polarity
+             * @enum {string}
+             */
+            polarity: "POSITIVE" | "NEGATIVE" | "MIXED";
+            /**
+             * Relationship
+             * @enum {string}
+             */
+            relationship: "CREATED" | "REINFORCED" | "CONTRADICTED" | "RESOLUTION_SUPPORT";
+        };
+        /** CandidateCodeDiffDetail */
+        CandidateCodeDiffDetail: {
+            /** Change Summary */
+            change_summary?: string | null;
+            /** Diff Content */
+            diff_content: string;
+            /** Diff Format */
+            diff_format: string;
+            /** From Version */
+            from_version: number;
+            /** To Version */
+            to_version: number;
+        };
+        /** CandidateCodeSnapshotDetail */
+        CandidateCodeSnapshotDetail: {
+            /**
+             * Context
+             * @default This is the code CounterQ was reacting to.
+             */
+            context: string;
+            diff?: components["schemas"]["CandidateCodeDiffDetail"] | null;
+            /** Language */
+            language: string;
+            /**
+             * Snapshot Id
+             * Format: uuid
+             */
+            snapshot_id: string;
+            /** Source Code */
+            source_code: string;
+            /** Version */
+            version: number;
+        };
+        /** CandidateCounterMapNodeDetailResponse */
+        CandidateCounterMapNodeDetailResponse: {
+            breakpoint?: components["schemas"]["CandidateBreakpointDetail"] | null;
+            code?: components["schemas"]["CandidateCodeSnapshotDetail"] | null;
+            delivered_prompt?: components["schemas"]["CandidateDeliveredPromptDetail"] | null;
+            evidence?: components["schemas"]["CandidateEvidenceDetail"] | null;
+            execution?: components["schemas"]["CandidateExecutionDetail"] | null;
+            /** Message */
+            message?: string | null;
+            /** Node Id */
+            node_id: string;
+            /**
+             * Node Type
+             * @enum {string}
+             */
+            node_type: "CLAIM" | "REASONING" | "CODE" | "TEST" | "QUESTION" | "RESPONSE" | "EVIDENCE" | "BREAKPOINT" | "ASSISTANCE" | "MUTATION";
+            /**
+             * Source Status
+             * @enum {string}
+             */
+            source_status: "AVAILABLE" | "UNAVAILABLE";
+            /** Stage */
+            stage: string | null;
+            statement?: components["schemas"]["CandidateTextDetail"] | null;
+            /** Summary */
+            summary: string;
+            /** Title */
+            title: string;
+        };
         /** CandidateCounterMapResponse */
         CandidateCounterMapResponse: {
             /** Generated At */
@@ -451,6 +581,70 @@ export interface components {
              * @enum {string}
              */
             status: "NOT_AVAILABLE" | "BUILDING" | "READY" | "FAILED" | "STALE";
+        };
+        /** CandidateDeliveredPromptDetail */
+        CandidateDeliveredPromptDetail: {
+            /** Assistance Label */
+            assistance_label?: string | null;
+            /** Concepts */
+            concepts: string[];
+            /**
+             * Delivery State
+             * @enum {string}
+             */
+            delivery_state: "DELIVERED" | "PARTIALLY_DELIVERED" | "INTERRUPTED";
+            /** Skills */
+            skills: string[];
+            /** Text */
+            text: string;
+            /** Why */
+            why?: string | null;
+        };
+        /** CandidateEvidenceDetail */
+        CandidateEvidenceDetail: {
+            /** Concepts */
+            concepts: string[];
+            /** Finding */
+            finding: string;
+            /**
+             * Independence Level
+             * @enum {string}
+             */
+            independence_level: "INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT";
+            /**
+             * Polarity
+             * @enum {string}
+             */
+            polarity: "POSITIVE" | "NEGATIVE" | "MIXED";
+            /** Skills */
+            skills: string[];
+            /**
+             * Strength
+             * @enum {string}
+             */
+            strength: "WEAK" | "MODERATE" | "STRONG";
+            /** Supporting Moments */
+            supporting_moments: number[];
+        };
+        /** CandidateExecutionDetail */
+        CandidateExecutionDetail: {
+            /** Code Snapshot Version */
+            code_snapshot_version: number;
+            /** Language */
+            language: string;
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /** Status */
+            status: string;
+            /** Visible Failed */
+            visible_failed: number;
+            /** Visible Passed */
+            visible_passed: number;
+            /** Visible Tests */
+            visible_tests: components["schemas"]["CandidateVisibleTestDetail"][];
         };
         /** CandidateProblemDetail */
         CandidateProblemDetail: {
@@ -528,6 +722,30 @@ export interface components {
             source_excerpt: string | null;
             /** Source Label */
             source_label: string;
+        };
+        /** CandidateTextDetail */
+        CandidateTextDetail: {
+            /** Exact Quote */
+            exact_quote: boolean;
+            /** Text */
+            text: string;
+        };
+        /** CandidateVisibleTestDetail */
+        CandidateVisibleTestDetail: {
+            /** Actual Output */
+            actual_output?: string | null;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Expected Output */
+            expected_output?: string | null;
+            /** Input */
+            input: {
+                [key: string]: unknown;
+            };
+            /** Status */
+            status: string;
+            /** Test Identifier */
+            test_identifier: string;
         };
         /** CanonicalRelationshipSource */
         CanonicalRelationshipSource: {
@@ -1727,6 +1945,38 @@ export interface operations {
             };
         };
     };
+    development_countermap_node_detail_api_countermap_development_fixtures__fixture_id__nodes__node_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                fixture_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCounterMapNodeDetailResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get: {
         parameters: {
             query?: never;
@@ -1811,6 +2061,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidateCounterMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCounterMapNodeDetailResponse"];
                 };
             };
             /** @description Validation Error */

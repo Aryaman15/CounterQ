@@ -14,7 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
-from app.countermap.development_fixtures import load_development_countermap_fixtures
+from app.countermap.detail import (
+    CandidateCounterMapNodeDetailResponse,
+    CounterMapNodeDetailResolver,
+    CounterMapNodeNotFound,
+    assemble_candidate_detail,
+    attach_development_source,
+)
+from app.countermap.development_fixtures import (
+    development_source_code,
+    load_development_countermap_fixtures,
+)
 from app.countermap.projector import CounterMapProjector
 from app.countermap.repository import CounterMapProjectionRepository
 from app.countermap.schema import COUNTERMAP_GENERATION_POLICY_VERSION, CounterMapGraph
@@ -199,6 +209,36 @@ async def countermap_status(
     )
 
 
+@router.get(
+    "/sessions/{interview_session_id}/nodes/{node_id}",
+    response_model=CandidateCounterMapNodeDetailResponse,
+)
+async def countermap_node_detail(
+    interview_session_id: UUID,
+    node_id: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateCounterMapNodeDetailResponse:
+    interview, _configuration, _problem = await _session_facts(session, interview_session_id)
+    if interview.status != "COMPLETED" or interview.completed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CounterMap is available only after interview completion",
+        )
+    projection = await CounterMapProjectionRepository(session).current_ready(interview.id)
+    if projection is None or projection.graph_json is None:
+        raise HTTPException(status_code=409, detail="CounterMap detail is not ready")
+    try:
+        graph = CounterMapGraph.model_validate(projection.graph_json)
+        return await CounterMapNodeDetailResolver(session).resolve(
+            session_id=interview.id,
+            projection=projection,
+            graph=graph,
+            node_id=node_id,
+        )
+    except (ValidationError, CounterMapNodeNotFound) as exc:
+        raise HTTPException(status_code=404, detail="CounterMap node was not found") from exc
+
+
 @router.post(
     "/development/sessions/{interview_session_id}/regenerate",
     response_model=DevelopmentCounterMapRegenerationResponse,
@@ -316,6 +356,39 @@ async def development_countermap_inspection(
             }
             for item in outbox
         ],
+    )
+
+
+@router.get(
+    "/development/fixtures/{fixture_id}/nodes/{node_id}",
+    response_model=CandidateCounterMapNodeDetailResponse,
+)
+async def development_countermap_node_detail(
+    fixture_id: str,
+    node_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> CandidateCounterMapNodeDetailResponse:
+    _require_development(settings)
+    fixture = next(
+        (item for item in load_development_countermap_fixtures() if item.fixture_id == fixture_id),
+        None,
+    )
+    if fixture is None:
+        raise HTTPException(status_code=404, detail="CounterMap fixture was not found")
+    graph = CounterMapProjector().project(fixture.bundle)
+    CounterMapValidator().validate(bundle=fixture.bundle, graph=graph)
+    node = next((item for item in graph.nodes if item.node_id == node_id), None)
+    if node is None:
+        raise HTTPException(status_code=404, detail="CounterMap node was not found")
+    try:
+        detail = assemble_candidate_detail(node=node, bundle=fixture.bundle)
+    except CounterMapNodeNotFound as exc:
+        raise HTTPException(status_code=404, detail="CounterMap node was not found") from exc
+    return attach_development_source(
+        detail=detail,
+        node=node,
+        bundle=fixture.bundle,
+        source_code_for_version=lambda version: development_source_code(fixture_id, version),
     )
 
 

@@ -165,7 +165,9 @@ def _cases() -> list[IntegrityCase]:
             update={
                 "source_links": [
                     *integrity.bundle.evidence[0].source_links,
-                    integrity.bundle.evidence[0].source_links[0].model_copy(
+                    integrity.bundle.evidence[0]
+                    .source_links[0]
+                    .model_copy(
                         update={
                             "event_id": integrity.bundle.events[2].id,
                             "server_sequence": 3,
@@ -246,9 +248,7 @@ def _cases() -> list[IntegrityCase]:
             if node.node_type == "CODE" and node.subtype in {"SELF_CORRECTION", "CORRECTION"}
         )
         assert correction.subtype == expected
-        assert (correction.title == "Corrected independently") is (
-            expected == "SELF_CORRECTION"
-        )
+        assert (correction.title == "Corrected independently") is (expected == "SELF_CORRECTION")
 
     def validator_rejects_assisted_self_correction() -> None:
         fixture = correction_bundle("AFTER_LIGHT_GUIDANCE", assistance_linked=True)
@@ -302,9 +302,7 @@ def _cases() -> list[IntegrityCase]:
                 "prompt_id": UUID("7a000000-0000-4000-8000-000000000205"),
                 "examiner_decision_id": second_decision.id,
                 "target_claim_id": second_claim.id,
-                "actual_transcript_segment_id": UUID(
-                    "7a000000-0000-4000-8000-000000000206"
-                ),
+                "actual_transcript_segment_id": UUID("7a000000-0000-4000-8000-000000000206"),
                 "actual_text": "Why must insertion happen after the check?",
                 "intended_text": "Why must insertion happen after the check?",
             }
@@ -385,9 +383,7 @@ def _cases() -> list[IntegrityCase]:
 
     def multi_claim_order_is_deterministic() -> None:
         first = CounterMapProjector().project(multi_claim_fixture().bundle)
-        second = CounterMapProjector().project(
-            multi_claim_fixture(reverse_claims=True).bundle
-        )
+        second = CounterMapProjector().project(multi_claim_fixture(reverse_claims=True).bundle)
         assert first.model_dump(mode="json") == second.model_dump(mode="json")
 
     def generic_multi_claim_event_uses_response() -> None:
@@ -416,7 +412,9 @@ def _cases() -> list[IntegrityCase]:
         evidence = simulation.bundle.evidence[0].model_copy(
             update={
                 "source_links": [
-                    simulation.bundle.evidence[0].source_links[0].model_copy(
+                    simulation.bundle.evidence[0]
+                    .source_links[0]
+                    .model_copy(
                         update={
                             "event_id": simulation.bundle.events[3].id,
                             "server_sequence": 4,
@@ -474,8 +472,7 @@ def _cases() -> list[IntegrityCase]:
         assert code.display_metadata.code_snapshot_id == simulation.bundle.code_snapshots[0].id
         assert code.display_metadata.code_version == 1
         assert (
-            code.display_metadata.content_hash
-            == simulation.bundle.code_snapshots[0].content_hash
+            code.display_metadata.content_hash == simulation.bundle.code_snapshots[0].content_hash
         )
         assert _has_node(graph, "RESPONSE")
         assert all(
@@ -661,9 +658,7 @@ def _cases() -> list[IntegrityCase]:
     def assistance_preserves_all_explicit_evidence_links() -> None:
         linked = coach.bundle.evidence[1]
         second_linked = linked.model_copy(
-            update={
-                "id": UUID("7a000000-0000-4000-8000-000000000114")
-            }
+            update={"id": UUID("7a000000-0000-4000-8000-000000000114")}
         )
         changed = coach.bundle.model_copy(
             update={"evidence": [*coach.bundle.evidence, second_linked]}
@@ -671,9 +666,10 @@ def _cases() -> list[IntegrityCase]:
         graph = CounterMapProjector().project(changed)
         CounterMapValidator().validate(bundle=changed, graph=graph)
         assisted = next(item for item in graph.edges if item.relationship == "ASSISTED")
-        assert {
-            source.related_source_id for source in assisted.canonical_relationship_sources
-        } == {linked.id, second_linked.id}
+        assert {source.related_source_id for source in assisted.canonical_relationship_sources} == {
+            linked.id,
+            second_linked.id,
+        }
 
     def endpoint_substitution_rejected(
         fixture: CounterMapCorpusFixture,
@@ -696,8 +692,7 @@ def _cases() -> list[IntegrityCase]:
         changed = graph.model_copy(
             update={
                 "edges": [
-                    changed_edge if item.edge_id == edge.edge_id else item
-                    for item in graph.edges
+                    changed_edge if item.edge_id == edge.edge_id else item for item in graph.edges
                 ]
             }
         )
@@ -815,9 +810,7 @@ def _cases() -> list[IntegrityCase]:
         ),
         IntegrityCase("stale-decision-excluded", lambda: stale_or_rejected("STALE")),
         IntegrityCase("rejected-decision-excluded", lambda: stale_or_rejected("REJECTED")),
-        IntegrityCase(
-            "authorized-undelivered-excluded", authorized_but_undelivered
-        ),
+        IntegrityCase("authorized-undelivered-excluded", authorized_but_undelivered),
         IntegrityCase("cancelled-prompt-excluded", cancelled),
         IntegrityCase(
             "interrupted-actual-wording", lambda: _expect(question.summary == "What invariant")
@@ -880,7 +873,7 @@ def _cases() -> list[IntegrityCase]:
         IntegrityCase(
             "later-code-does-not-rewrite-history",
             lambda: _expect(
-                all(node.display_metadata.code_version != 3 for node in snapshot_nodes)
+                all(node.display_metadata.code_version != 5 for node in snapshot_nodes)
             ),
         ),
         IntegrityCase("correction-not-inferred-from-diff", correction_not_from_diff),
@@ -930,9 +923,7 @@ def _cases() -> list[IntegrityCase]:
         ),
         IntegrityCase(
             "prompt-bound-correction-is-not-independent",
-            lambda: assert_correction_subtype(
-                "INDEPENDENT", "CORRECTION", prompt_bound=True
-            ),
+            lambda: assert_correction_subtype("INDEPENDENT", "CORRECTION", prompt_bound=True),
         ),
         IntegrityCase(
             "assistance-linked-correction-is-not-independent",
@@ -1066,8 +1057,7 @@ async def test_development_fixture_api_runs_the_production_projector_and_validat
         "delivery-and-self-correction-integrity",
     }
     assert all(
-        item.graph.generation_policy_version == "countermap-projector.v3"
-        for item in responses
+        item.graph.generation_policy_version == "countermap-projector.v3" for item in responses
     )
 
 

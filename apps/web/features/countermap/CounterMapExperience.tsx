@@ -4,7 +4,7 @@ import type { components } from "@counterq/contracts/openapi";
 import { Network, RotateCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
-import { ReasoningTimeline } from "./ReasoningTimeline";
+import { CounterMapSurface } from "./CounterMapSurface";
 
 type CounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
 type CounterMapInspection = components["schemas"]["DevelopmentCounterMapInspection"];
@@ -58,7 +58,7 @@ export function CounterMapExperience({
     <section className="countermap-experience" aria-labelledby="countermap-title">
       <header className="countermap-header">
         <div>
-          <p className="countermap-kicker">CounterMap · Reasoning Timeline</p>
+          <p className="countermap-kicker">CounterMap · Session causality</p>
           <h2 id="countermap-title">How your interview unfolded</h2>
           <p>Only material moments with canonical causal support appear here.</p>
         </div>
@@ -74,7 +74,13 @@ export function CounterMapExperience({
           ) : null}
         </div>
       ) : response?.status === "READY" && response.graph ? (
-        <ReasoningTimeline graph={response.graph} />
+        <CounterMapSurface
+          graph={response.graph}
+          detailUrlForNode={(nodeId) => (
+            `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
+            + `/api/countermap/sessions/${interviewSessionId}/nodes/${encodeURIComponent(nodeId)}`
+          )}
+        />
       ) : response?.status === "NOT_AVAILABLE" ? (
         <div className="countermap-state countermap-state-empty" role="status">
           <Network size={22} aria-hidden="true" />

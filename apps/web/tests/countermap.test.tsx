@@ -73,6 +73,7 @@ describe("CounterMap Reasoning Timeline", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(developmentFixtures())));
     render(<CounterMapDemo />);
     fireEvent.click(await screen.findByRole("button", { name: "Coach" }));
+    fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(screen.getByRole("heading", { name: "Coach guidance" })).toBeInTheDocument();
     expect(screen.getAllByText(/independent verification/i).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "Integrity" }));
@@ -127,7 +128,7 @@ describe("CounterMap Reasoning Timeline", () => {
     render(<ReasoningTimeline graph={counterMapUiSamples[2]} />);
     expect(screen.getByText("What invariant")).toBeInTheDocument();
     expect(screen.queryByText(/moves backward/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/only the delivered words/i)).toBeInTheDocument();
+    expect(screen.getByText(/delivered portion only/i)).toBeInTheDocument();
   });
 
   it("keeps future retest actions visibly non-operational", () => {
@@ -141,7 +142,9 @@ describe("CounterMap Reasoning Timeline", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(readyResponse())));
     render(<CounterMapExperience interviewSessionId="session-7" />);
     expect(await screen.findByRole("heading", { name: /how your interview unfolded/i })).toBeInTheDocument();
-    expect(await screen.findByRole("heading", { name: "CounterQ asked" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: /interactive countermap graph/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
+    expect(screen.getByRole("heading", { name: "CounterQ asked" })).toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
       expect.stringContaining("/api/countermap/sessions/session-7"),
       expect.objectContaining({ cache: "no-store" }),
@@ -159,6 +162,37 @@ describe("CounterMap Reasoning Timeline", () => {
     render(<CounterMapExperience interviewSessionId="session-8" />);
     expect(await screen.findByRole("heading", { name: /CounterMap is unavailable/i })).toBeInTheDocument();
     expect(screen.getByText(/report and interview evidence are still safe/i)).toBeInTheDocument();
+  });
+
+  it("renders the projection building state with meaningful preparation copy", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse({
+      ...readyResponse(),
+      status: "BUILDING",
+      graph: null,
+      projection_id: null,
+      projection_version: null,
+      schema_version: null,
+      generated_at: null,
+      message: "CounterQ is tracing the evidence-backed story of your interview.",
+    })));
+    render(<CounterMapExperience interviewSessionId="session-building" pollIntervalMs={60_000} />);
+
+    expect(await screen.findByRole("heading", { name: /tracing the evidence-backed story/i })).toBeInTheDocument();
+    expect(screen.getByText(/tracing the evidence-backed story of your interview/i)).toBeInTheDocument();
+  });
+
+  it("renders the stale projection as an updating state", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse({
+      ...readyResponse(),
+      status: "STALE",
+      graph: null,
+      generated_at: null,
+      message: "Your reasoning map is being rebuilt from updated interview evidence.",
+    })));
+    render(<CounterMapExperience interviewSessionId="session-stale" pollIntervalMs={60_000} />);
+
+    expect(await screen.findByRole("heading", { name: /updating your reasoning map/i })).toBeInTheDocument();
+    expect(screen.getByText(/rebuilt from updated interview evidence/i)).toBeInTheDocument();
   });
 
   it("renders not-available as a settled empty state", async () => {

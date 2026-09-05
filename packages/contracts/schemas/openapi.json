@@ -273,6 +273,311 @@
         "title": "CandidateAssistanceResponse",
         "type": "object"
       },
+      "CandidateBreakpointDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "concept": {
+            "title": "Concept",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateBreakpointEvidenceDetail"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "independent_verification_required": {
+            "title": "Independent Verification Required",
+            "type": "boolean"
+          },
+          "severity": {
+            "title": "Severity",
+            "type": "string"
+          },
+          "skill": {
+            "title": "Skill",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "summary",
+          "status",
+          "severity",
+          "concept",
+          "skill",
+          "independent_verification_required",
+          "evidence"
+        ],
+        "title": "CandidateBreakpointDetail",
+        "type": "object"
+      },
+      "CandidateBreakpointEvidenceDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "finding": {
+            "title": "Finding",
+            "type": "string"
+          },
+          "independence_level": {
+            "title": "Independence Level",
+            "type": "string"
+          },
+          "polarity": {
+            "enum": [
+              "POSITIVE",
+              "NEGATIVE",
+              "MIXED"
+            ],
+            "title": "Polarity",
+            "type": "string"
+          },
+          "relationship": {
+            "enum": [
+              "CREATED",
+              "REINFORCED",
+              "CONTRADICTED",
+              "RESOLUTION_SUPPORT"
+            ],
+            "title": "Relationship",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relationship",
+          "finding",
+          "polarity",
+          "independence_level"
+        ],
+        "title": "CandidateBreakpointEvidenceDetail",
+        "type": "object"
+      },
+      "CandidateCodeDiffDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "change_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Summary"
+          },
+          "diff_content": {
+            "title": "Diff Content",
+            "type": "string"
+          },
+          "diff_format": {
+            "title": "Diff Format",
+            "type": "string"
+          },
+          "from_version": {
+            "title": "From Version",
+            "type": "integer"
+          },
+          "to_version": {
+            "title": "To Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_version",
+          "to_version",
+          "diff_format",
+          "diff_content"
+        ],
+        "title": "CandidateCodeDiffDetail",
+        "type": "object"
+      },
+      "CandidateCodeSnapshotDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "context": {
+            "default": "This is the code CounterQ was reacting to.",
+            "title": "Context",
+            "type": "string"
+          },
+          "diff": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateCodeDiffDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "snapshot_id": {
+            "format": "uuid",
+            "title": "Snapshot Id",
+            "type": "string"
+          },
+          "source_code": {
+            "title": "Source Code",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "version",
+          "language",
+          "source_code"
+        ],
+        "title": "CandidateCodeSnapshotDetail",
+        "type": "object"
+      },
+      "CandidateCounterMapNodeDetailResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "breakpoint": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateBreakpointDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "code": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateCodeSnapshotDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "delivered_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateDeliveredPromptDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateEvidenceDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "execution": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateExecutionDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "node_type": {
+            "enum": [
+              "CLAIM",
+              "REASONING",
+              "CODE",
+              "TEST",
+              "QUESTION",
+              "RESPONSE",
+              "EVIDENCE",
+              "BREAKPOINT",
+              "ASSISTANCE",
+              "MUTATION"
+            ],
+            "title": "Node Type",
+            "type": "string"
+          },
+          "source_status": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE"
+            ],
+            "title": "Source Status",
+            "type": "string"
+          },
+          "stage": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Stage"
+          },
+          "statement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CandidateTextDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "node_type",
+          "title",
+          "summary",
+          "stage",
+          "source_status"
+        ],
+        "title": "CandidateCounterMapNodeDetailResponse",
+        "type": "object"
+      },
       "CandidateCounterMapResponse": {
         "properties": {
           "generated_at": {
@@ -361,6 +666,186 @@
           "message"
         ],
         "title": "CandidateCounterMapResponse",
+        "type": "object"
+      },
+      "CandidateDeliveredPromptDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "assistance_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assistance Label"
+          },
+          "concepts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Concepts",
+            "type": "array"
+          },
+          "delivery_state": {
+            "enum": [
+              "DELIVERED",
+              "PARTIALLY_DELIVERED",
+              "INTERRUPTED"
+            ],
+            "title": "Delivery State",
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          },
+          "why": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why"
+          }
+        },
+        "required": [
+          "text",
+          "delivery_state",
+          "concepts",
+          "skills"
+        ],
+        "title": "CandidateDeliveredPromptDetail",
+        "type": "object"
+      },
+      "CandidateEvidenceDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "concepts": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Concepts",
+            "type": "array"
+          },
+          "finding": {
+            "title": "Finding",
+            "type": "string"
+          },
+          "independence_level": {
+            "enum": [
+              "INDEPENDENT",
+              "AFTER_PROBE",
+              "AFTER_LIGHT_GUIDANCE",
+              "AFTER_STRONG_HINT",
+              "DIRECTLY_TAUGHT"
+            ],
+            "title": "Independence Level",
+            "type": "string"
+          },
+          "polarity": {
+            "enum": [
+              "POSITIVE",
+              "NEGATIVE",
+              "MIXED"
+            ],
+            "title": "Polarity",
+            "type": "string"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "strength": {
+            "enum": [
+              "WEAK",
+              "MODERATE",
+              "STRONG"
+            ],
+            "title": "Strength",
+            "type": "string"
+          },
+          "supporting_moments": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Supporting Moments",
+            "type": "array"
+          }
+        },
+        "required": [
+          "finding",
+          "polarity",
+          "strength",
+          "independence_level",
+          "concepts",
+          "skills",
+          "supporting_moments"
+        ],
+        "title": "CandidateEvidenceDetail",
+        "type": "object"
+      },
+      "CandidateExecutionDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "code_snapshot_version": {
+            "title": "Code Snapshot Version",
+            "type": "integer"
+          },
+          "language": {
+            "title": "Language",
+            "type": "string"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "visible_failed": {
+            "title": "Visible Failed",
+            "type": "integer"
+          },
+          "visible_passed": {
+            "title": "Visible Passed",
+            "type": "integer"
+          },
+          "visible_tests": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateVisibleTestDetail"
+            },
+            "title": "Visible Tests",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_id",
+          "status",
+          "language",
+          "code_snapshot_version",
+          "visible_passed",
+          "visible_failed",
+          "visible_tests"
+        ],
+        "title": "CandidateExecutionDetail",
         "type": "object"
       },
       "CandidateProblemDetail": {
@@ -590,6 +1075,83 @@
           "source_excerpt"
         ],
         "title": "CandidateSourceDetail",
+        "type": "object"
+      },
+      "CandidateTextDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "exact_quote": {
+            "title": "Exact Quote",
+            "type": "boolean"
+          },
+          "text": {
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "exact_quote"
+        ],
+        "title": "CandidateTextDetail",
+        "type": "object"
+      },
+      "CandidateVisibleTestDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "actual_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual Output"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "expected_output": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Output"
+          },
+          "input": {
+            "additionalProperties": true,
+            "title": "Input",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "test_identifier": {
+            "title": "Test Identifier",
+            "type": "string"
+          }
+        },
+        "required": [
+          "test_identifier",
+          "status",
+          "input"
+        ],
+        "title": "CandidateVisibleTestDetail",
         "type": "object"
       },
       "CanonicalRelationshipSource": {
@@ -4146,6 +4708,57 @@
         ]
       }
     },
+    "/api/countermap/development/fixtures/{fixture_id}/nodes/{node_id}": {
+      "get": {
+        "operationId": "development_countermap_node_detail_api_countermap_development_fixtures__fixture_id__nodes__node_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "fixture_id",
+            "required": true,
+            "schema": {
+              "title": "Fixture Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCounterMapNodeDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Countermap Node Detail",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
     "/api/countermap/development/sessions/{interview_session_id}/inspection": {
       "get": {
         "operationId": "development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get",
@@ -4280,6 +4893,58 @@
           }
         },
         "summary": "Countermap Status",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
+    "/api/countermap/sessions/{interview_session_id}/nodes/{node_id}": {
+      "get": {
+        "operationId": "countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCounterMapNodeDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Countermap Node Detail",
         "tags": [
           "countermap"
         ]
