@@ -312,6 +312,22 @@ async def test_normal_published_attempt_is_claimed_and_completed_once() -> None:
                         OutboxEvent.event_type == "GENERATE_SESSION_REPORT",
                     )
                 )
+                countermap_event_count = await session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.interview_session_id == session_id,
+                        OutboxEvent.event_type == "GENERATE_COUNTERMAP",
+                    )
+                )
+                mastery_event_count = await session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(
+                        OutboxEvent.interview_session_id == session_id,
+                        OutboxEvent.event_type == "RECALCULATE_MASTERY",
+                    )
+                )
             assert dispatch.published == 1
             assert completed.status == "COMPLETED"
             assert duplicate.status == "SKIPPED"
@@ -319,6 +335,8 @@ async def test_normal_published_attempt_is_claimed_and_completed_once() -> None:
             assert event is not None and event.status == "COMPLETED"
             assert coordinator.calls == 1
             assert report_event_count == 1
+            assert countermap_event_count == 1
+            assert mastery_event_count == 1
     finally:
         await engine.dispose()
 

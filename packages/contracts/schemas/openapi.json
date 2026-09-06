@@ -848,6 +848,354 @@
         "title": "CandidateExecutionDetail",
         "type": "object"
       },
+      "CandidateMasteryEvidenceItem": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Candidate Level",
+            "type": "string"
+          },
+          "contribution": {
+            "enum": [
+              "SUPPORTING",
+              "CONTRADICTING",
+              "LEARNING_LIMITED"
+            ],
+            "title": "Contribution",
+            "type": "string"
+          },
+          "evidence_id": {
+            "format": "uuid",
+            "title": "Evidence Id",
+            "type": "string"
+          },
+          "finding": {
+            "title": "Finding",
+            "type": "string"
+          },
+          "independence": {
+            "enum": [
+              "INDEPENDENT",
+              "AFTER_PROBE",
+              "AFTER_LIGHT_GUIDANCE",
+              "AFTER_STRONG_HINT",
+              "DIRECTLY_TAUGHT"
+            ],
+            "title": "Independence",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "polarity": {
+            "enum": [
+              "POSITIVE",
+              "NEGATIVE",
+              "MIXED"
+            ],
+            "title": "Polarity",
+            "type": "string"
+          },
+          "problem": {
+            "title": "Problem",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          },
+          "retest_linked": {
+            "title": "Retest Linked",
+            "type": "boolean"
+          },
+          "source_session_id": {
+            "format": "uuid",
+            "title": "Source Session Id",
+            "type": "string"
+          },
+          "strength": {
+            "enum": [
+              "WEAK",
+              "MODERATE",
+              "STRONG"
+            ],
+            "title": "Strength",
+            "type": "string"
+          }
+        },
+        "required": [
+          "evidence_id",
+          "contribution",
+          "recorded_at",
+          "problem",
+          "mode",
+          "candidate_level",
+          "polarity",
+          "strength",
+          "independence",
+          "retest_linked",
+          "finding",
+          "source_session_id"
+        ],
+        "title": "CandidateMasteryEvidenceItem",
+        "type": "object"
+      },
+      "CandidateMasteryOverviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "interview_skills": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMasteryTarget"
+            },
+            "title": "Interview Skills",
+            "type": "array"
+          },
+          "mastery_policy_version": {
+            "title": "Mastery Policy Version",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "parent_summaries": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMasteryTarget"
+            },
+            "title": "Parent Summaries",
+            "type": "array"
+          },
+          "retest_recommendations": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateRetestRecommendation"
+            },
+            "title": "Retest Recommendations",
+            "type": "array"
+          },
+          "status": {
+            "enum": [
+              "EMPTY",
+              "READY",
+              "UPDATING",
+              "FAILED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Target Level",
+            "type": "string"
+          },
+          "technical_concepts": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMasteryTarget"
+            },
+            "title": "Technical Concepts",
+            "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "user_id",
+          "mastery_policy_version",
+          "target_level",
+          "updated_at",
+          "message",
+          "technical_concepts",
+          "parent_summaries",
+          "interview_skills",
+          "retest_recommendations"
+        ],
+        "title": "CandidateMasteryOverviewResponse",
+        "type": "object"
+      },
+      "CandidateMasteryTarget": {
+        "additionalProperties": false,
+        "properties": {
+          "canonical_key": {
+            "title": "Canonical Key",
+            "type": "string"
+          },
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "child_target_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Child Target Ids",
+            "type": "array"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "distinct_context_count": {
+            "title": "Distinct Context Count",
+            "type": "integer"
+          },
+          "distinct_problem_count": {
+            "title": "Distinct Problem Count",
+            "type": "integer"
+          },
+          "distinct_session_count": {
+            "title": "Distinct Session Count",
+            "type": "integer"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateMasteryEvidenceItem"
+            },
+            "title": "Evidence",
+            "type": "array"
+          },
+          "evidence_count": {
+            "title": "Evidence Count",
+            "type": "integer"
+          },
+          "evidence_sufficiency": {
+            "enum": [
+              "LOW",
+              "MEDIUM",
+              "HIGH"
+            ],
+            "title": "Evidence Sufficiency",
+            "type": "string"
+          },
+          "evidence_sufficiency_label": {
+            "title": "Evidence Sufficiency Label",
+            "type": "string"
+          },
+          "freshness": {
+            "enum": [
+              "CURRENT",
+              "AGING",
+              "RETEST_DUE"
+            ],
+            "title": "Freshness",
+            "type": "string"
+          },
+          "freshness_label": {
+            "title": "Freshness Label",
+            "type": "string"
+          },
+          "next_action": {
+            "title": "Next Action",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recommendation_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommendation Id"
+          },
+          "retest_due": {
+            "title": "Retest Due",
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "UNTESTED",
+              "EXPOSED",
+              "WEAK",
+              "DEVELOPING",
+              "STRONG"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "state_label": {
+            "title": "State Label",
+            "type": "string"
+          },
+          "target_id": {
+            "format": "uuid",
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_type": {
+            "enum": [
+              "CONCEPT",
+              "SKILL",
+              "PARENT_SUMMARY"
+            ],
+            "title": "Target Type",
+            "type": "string"
+          },
+          "unresolved_breakpoint_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Unresolved Breakpoint Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "target_type",
+          "target_id",
+          "canonical_key",
+          "display_name",
+          "category",
+          "state",
+          "state_label",
+          "evidence_sufficiency",
+          "evidence_sufficiency_label",
+          "freshness",
+          "freshness_label",
+          "reason",
+          "evidence_count",
+          "distinct_session_count",
+          "distinct_problem_count",
+          "distinct_context_count",
+          "retest_due",
+          "recommendation_id",
+          "next_action",
+          "unresolved_breakpoint_ids",
+          "evidence",
+          "child_target_ids"
+        ],
+        "title": "CandidateMasteryTarget",
+        "type": "object"
+      },
       "CandidateProblemDetail": {
         "properties": {
           "argument_schema": {
@@ -956,6 +1304,70 @@
           "custom_test_supported"
         ],
         "title": "CandidateProblemDetail",
+        "type": "object"
+      },
+      "CandidateRetestRecommendation": {
+        "additionalProperties": false,
+        "properties": {
+          "action_enabled": {
+            "default": false,
+            "title": "Action Enabled",
+            "type": "boolean"
+          },
+          "action_label": {
+            "default": "CounterQ me again",
+            "title": "Action Label",
+            "type": "string"
+          },
+          "availability_message": {
+            "default": "Quick Drill execution begins in Stage 8B.",
+            "title": "Availability Message",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "recommendation_id": {
+            "format": "uuid",
+            "title": "Recommendation Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "PENDING",
+              "SCHEDULED"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "target_id": {
+            "format": "uuid",
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_name": {
+            "title": "Target Name",
+            "type": "string"
+          },
+          "target_type": {
+            "enum": [
+              "CONCEPT",
+              "SKILL"
+            ],
+            "title": "Target Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recommendation_id",
+          "target_type",
+          "target_id",
+          "target_name",
+          "status",
+          "reason"
+        ],
+        "title": "CandidateRetestRecommendation",
         "type": "object"
       },
       "CandidateSessionReportResponse": {
@@ -2829,6 +3241,167 @@
           "verification"
         ],
         "title": "DevelopmentExaminerDecision",
+        "type": "object"
+      },
+      "DevelopmentMasteryFixtureResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "fixture_id": {
+            "title": "Fixture Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "overview": {
+            "$ref": "#/components/schemas/CandidateMasteryOverviewResponse"
+          }
+        },
+        "required": [
+          "fixture_id",
+          "label",
+          "description",
+          "overview"
+        ],
+        "title": "DevelopmentMasteryFixtureResponse",
+        "type": "object"
+      },
+      "DevelopmentMasteryInspection": {
+        "additionalProperties": false,
+        "properties": {
+          "concept_association_count": {
+            "title": "Concept Association Count",
+            "type": "integer"
+          },
+          "concept_projection_count": {
+            "title": "Concept Projection Count",
+            "type": "integer"
+          },
+          "latest_failure_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest Failure Category"
+          },
+          "mastery_policy_version": {
+            "title": "Mastery Policy Version",
+            "type": "string"
+          },
+          "recalculation_state": {
+            "title": "Recalculation State",
+            "type": "string"
+          },
+          "recommendation_count": {
+            "title": "Recommendation Count",
+            "type": "integer"
+          },
+          "recommendation_statuses": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Recommendation Statuses",
+            "type": "object"
+          },
+          "skill_association_count": {
+            "title": "Skill Association Count",
+            "type": "integer"
+          },
+          "skill_projection_count": {
+            "title": "Skill Projection Count",
+            "type": "integer"
+          },
+          "state_distribution": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "State Distribution",
+            "type": "object"
+          },
+          "transition_count": {
+            "title": "Transition Count",
+            "type": "integer"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "mastery_policy_version",
+          "recalculation_state",
+          "concept_projection_count",
+          "skill_projection_count",
+          "concept_association_count",
+          "skill_association_count",
+          "transition_count",
+          "recommendation_count",
+          "recommendation_statuses",
+          "state_distribution",
+          "latest_failure_category"
+        ],
+        "title": "DevelopmentMasteryInspection",
+        "type": "object"
+      },
+      "DevelopmentMasteryRecalculationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "target_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Target Level",
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_level",
+          "idempotency_key"
+        ],
+        "title": "DevelopmentMasteryRecalculationRequest",
+        "type": "object"
+      },
+      "DevelopmentMasteryRecalculationResponse": {
+        "properties": {
+          "created": {
+            "title": "Created",
+            "type": "boolean"
+          },
+          "outbox_event_id": {
+            "format": "uuid",
+            "title": "Outbox Event Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outbox_event_id",
+          "created",
+          "status"
+        ],
+        "title": "DevelopmentMasteryRecalculationResponse",
         "type": "object"
       },
       "DevelopmentPolicyGateResult": {
@@ -5232,6 +5805,170 @@
         "summary": "Request Candidate Assistance",
         "tags": [
           "interviews"
+        ]
+      }
+    },
+    "/api/mastery/development/fixtures": {
+      "get": {
+        "operationId": "development_mastery_fixtures_api_mastery_development_fixtures_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DevelopmentMasteryFixtureResponse"
+                  },
+                  "title": "Response Development Mastery Fixtures Api Mastery Development Fixtures Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Development Mastery Fixtures",
+        "tags": [
+          "mastery"
+        ]
+      }
+    },
+    "/api/mastery/development/users/{user_id}": {
+      "get": {
+        "operationId": "development_user_mastery_api_mastery_development_users__user_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateMasteryOverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development User Mastery",
+        "tags": [
+          "mastery"
+        ]
+      }
+    },
+    "/api/mastery/development/users/{user_id}/inspection": {
+      "get": {
+        "operationId": "development_mastery_inspection_api_mastery_development_users__user_id__inspection_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentMasteryInspection"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Mastery Inspection",
+        "tags": [
+          "mastery"
+        ]
+      }
+    },
+    "/api/mastery/development/users/{user_id}/recalculate": {
+      "post": {
+        "operationId": "development_recalculate_mastery_api_mastery_development_users__user_id__recalculate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevelopmentMasteryRecalculationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentMasteryRecalculationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Recalculate Mastery",
+        "tags": [
+          "mastery"
         ]
       }
     },

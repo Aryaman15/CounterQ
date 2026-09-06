@@ -12,11 +12,11 @@ from sqlalchemy.engine import make_url
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage7a_countermap_head() -> None:
+def test_alembic_configuration_has_stage8a_mastery_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609050119"
+    assert script.get_current_head() == "202609060120"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -46,7 +46,7 @@ def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
         get_settings.cache_clear()
 
 
-def test_stage7a_table_boundary_is_explicit() -> None:
+def test_stage8a_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
@@ -66,6 +66,8 @@ def test_stage7a_table_boundary_is_explicit() -> None:
         "concept_relationships",
         "concepts",
         "countermap_projections",
+        "concept_mastery",
+        "concept_mastery_evidence",
         "examiner_decisions",
         "evidence",
         "evidence_concepts",
@@ -79,23 +81,29 @@ def test_stage7a_table_boundary_is_explicit() -> None:
         "interviewer_prompt_deliveries",
         "interviewer_prompts",
         "interview_sessions",
+        "mastery_transition_evidence",
+        "mastery_transitions",
         "outbox_events",
         "problem_versions",
+        "retest_attempt_evidence",
+        "retest_attempts",
+        "retest_recommendations",
         "problem_concepts",
         "problems",
         "session_budgets",
         "session_reports",
         "skill_dimensions",
+        "skill_mastery",
+        "skill_mastery_evidence",
         "transcript_segments",
         "test_results",
         "users",
     }.issubset(table_names)
     assert {
         "candidate_profiles",
-        "concept_mastery",
         "countermap_edges",
         "countermap_nodes",
-        "retest_recommendations",
+        "mastery_snapshots",
     }.isdisjoint(table_names)
 
 

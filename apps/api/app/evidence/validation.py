@@ -29,8 +29,16 @@ from app.evidence.models import Assessment, AssessmentSource, SkillDimension
 from app.evidence.repository import EvidenceRepository
 from app.evidence.source_admission import evidence_source_admission
 from app.examiner.models import CandidateClaim
-from app.interviews.models import CandidateResponse, CandidateResponseSource, InterviewSession
+from app.interviews.models import (
+    CandidateResponse,
+    CandidateResponseSource,
+    InterviewConfiguration,
+    InterviewSession,
+)
+from app.mastery.policy import MASTERY_POLICY_VERSION
+from app.mastery.service import initial_mastery_recalculation_key
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
+from app.outbox.repository import OutboxRepository
 from app.problems.models import Concept
 
 EVIDENCE_VALIDATION_POLICY_KEY = "evidence_validation"
@@ -240,6 +248,9 @@ class EvidenceValidationService:
             await BreakpointService(self._session).recalculate_support_for_evidence(
                 evidence.id, recalculated_at=evidence.invalidated_at
             )
+            await self._enqueue_mastery_recalculation(
+                evidence.interview_session_id, evidence.id
+            )
             return EvidenceInvalidationResult(
                 evidence_id=evidence.id,
                 changed=False,
@@ -259,11 +270,43 @@ class EvidenceValidationService:
         await BreakpointService(self._session).recalculate_support_for_evidence(
             evidence.id, recalculated_at=effective_time
         )
+        await self._enqueue_mastery_recalculation(evidence.interview_session_id, evidence.id)
         return EvidenceInvalidationResult(
             evidence_id=evidence.id,
             changed=True,
             invalidated_at=effective_time,
             reason=normalized_reason,
+        )
+
+    async def _enqueue_mastery_recalculation(
+        self, session_id: UUID, evidence_id: UUID
+    ) -> None:
+        interview = await self._session.get(InterviewSession, session_id)
+        if interview is None:
+            raise EvidenceInvalidationError("Evidence session disappeared during invalidation")
+        configuration = await self._session.get(
+            InterviewConfiguration, interview.interview_configuration_id
+        )
+        if configuration is None:
+            raise EvidenceInvalidationError("Evidence session configuration is unavailable")
+        key = (
+            f"{initial_mastery_recalculation_key(interview.user_id, interview.id)}:"
+            f"invalidation:{evidence_id}"
+        )
+        await OutboxRepository(self._session).enqueue(
+            aggregate_type="User",
+            aggregate_id=interview.user_id,
+            interview_session_id=interview.id,
+            event_type="RECALCULATE_MASTERY",
+            payload={
+                "user_id": str(interview.user_id),
+                "source_interview_session_id": str(interview.id),
+                "target_level": configuration.level,
+                "mastery_policy_version": MASTERY_POLICY_VERSION,
+            },
+            deduplication_key=key,
+            available_at=datetime.now(UTC),
+            source_watermark=interview.last_server_sequence,
         )
 
     @staticmethod

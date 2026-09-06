@@ -27,6 +27,17 @@ from app.interviews.models import (
     InterviewStageTransition,
     SessionBudget,
 )
+from app.mastery.models import (
+    ConceptMastery,
+    ConceptMasteryEvidence,
+    MasteryTransition,
+    MasteryTransitionEvidence,
+    RetestAttempt,
+    RetestAttemptEvidence,
+    RetestRecommendation,
+    SkillMastery,
+    SkillMasteryEvidence,
+)
 from app.observation.models import CodeDiff, CodeSnapshot, InterviewEvent, TranscriptSegment
 from app.outbox.models import OutboxEvent
 from app.problems.models import (
@@ -53,6 +64,8 @@ __all__ = [
     "CandidateResponseSource",
     "CodeDiff",
     "CodeSnapshot",
+    "ConceptMastery",
+    "ConceptMasteryEvidence",
     "CounterMapProjection",
     "Concept",
     "ConceptAlias",
@@ -70,13 +83,20 @@ __all__ = [
     "InterviewSession",
     "InterviewerPrompt",
     "InterviewerPromptDelivery",
+    "MasteryTransition",
+    "MasteryTransitionEvidence",
     "OutboxEvent",
     "Problem",
     "ProblemConcept",
     "ProblemVersion",
+    "RetestAttempt",
+    "RetestAttemptEvidence",
+    "RetestRecommendation",
     "SessionBudget",
     "SessionReport",
     "SkillDimension",
+    "SkillMastery",
+    "SkillMasteryEvidence",
     "TranscriptSegment",
     "TestResult",
     "User",

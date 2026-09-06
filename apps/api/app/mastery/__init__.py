@@ -1,1 +1,1 @@
-"""Future mastery module boundary."""
+"""Deterministic cross-session Mastery projection boundary."""

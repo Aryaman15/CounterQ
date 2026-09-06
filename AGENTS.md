@@ -1326,6 +1326,9 @@ pnpm run eval:stage3d:execution-adversarial
 Evaluate the Stage 3D.2 session/request integrity gate:
 pnpm run eval:stage3d:integrity
 
+Evaluate the Stage 8 deterministic Mastery gate:
+pnpm run eval:stage8
+
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1483,14 +1486,13 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 6B — Coach / Simulation End-to-End + Session Report
+Stage 8A — Deterministic Mastery Foundation + Mastery Map
 
 Current Goal:
-Automate completed-session canonical evaluation, introduce the first durable
-transactional-outbox workflow, generate a versioned Evidence-backed Session
-Report, validate every material report claim against canonical sources, and
-deliver a polished post-session candidate experience without beginning
-CounterMap or Mastery.
+Build the first deterministic cross-session learner model from validated
+canonical Evidence, persist current projections and auditable transitions,
+materialize retest recommendations, and deliver a polished evidence-backed
+Mastery Map without beginning Quick Drill execution or authentication.
 ```
 
 Update only this small section as implementation progresses.

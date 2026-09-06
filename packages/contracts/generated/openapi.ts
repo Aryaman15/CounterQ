@@ -242,6 +242,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/mastery/development/fixtures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Mastery Fixtures */
+        get: operations["development_mastery_fixtures_api_mastery_development_fixtures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mastery/development/users/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development User Mastery */
+        get: operations["development_user_mastery_api_mastery_development_users__user_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mastery/development/users/{user_id}/inspection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Mastery Inspection */
+        get: operations["development_mastery_inspection_api_mastery_development_users__user_id__inspection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mastery/development/users/{user_id}/recalculate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Development Recalculate Mastery */
+        post: operations["development_recalculate_mastery_api_mastery_development_users__user_id__recalculate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/problems/curated": {
         parameters: {
             query?: never;
@@ -646,6 +714,157 @@ export interface components {
             /** Visible Tests */
             visible_tests: components["schemas"]["CandidateVisibleTestDetail"][];
         };
+        /** CandidateMasteryEvidenceItem */
+        CandidateMasteryEvidenceItem: {
+            /**
+             * Candidate Level
+             * @enum {string}
+             */
+            candidate_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+            /**
+             * Contribution
+             * @enum {string}
+             */
+            contribution: "SUPPORTING" | "CONTRADICTING" | "LEARNING_LIMITED";
+            /**
+             * Evidence Id
+             * Format: uuid
+             */
+            evidence_id: string;
+            /** Finding */
+            finding: string;
+            /**
+             * Independence
+             * @enum {string}
+             */
+            independence: "INDEPENDENT" | "AFTER_PROBE" | "AFTER_LIGHT_GUIDANCE" | "AFTER_STRONG_HINT" | "DIRECTLY_TAUGHT";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /**
+             * Polarity
+             * @enum {string}
+             */
+            polarity: "POSITIVE" | "NEGATIVE" | "MIXED";
+            /** Problem */
+            problem: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Retest Linked */
+            retest_linked: boolean;
+            /**
+             * Source Session Id
+             * Format: uuid
+             */
+            source_session_id: string;
+            /**
+             * Strength
+             * @enum {string}
+             */
+            strength: "WEAK" | "MODERATE" | "STRONG";
+        };
+        /** CandidateMasteryOverviewResponse */
+        CandidateMasteryOverviewResponse: {
+            /** Interview Skills */
+            interview_skills: components["schemas"]["CandidateMasteryTarget"][];
+            /** Mastery Policy Version */
+            mastery_policy_version: string;
+            /** Message */
+            message: string;
+            /** Parent Summaries */
+            parent_summaries: components["schemas"]["CandidateMasteryTarget"][];
+            /** Retest Recommendations */
+            retest_recommendations: components["schemas"]["CandidateRetestRecommendation"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "EMPTY" | "READY" | "UPDATING" | "FAILED";
+            /**
+             * Target Level
+             * @enum {string}
+             */
+            target_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+            /** Technical Concepts */
+            technical_concepts: components["schemas"]["CandidateMasteryTarget"][];
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** CandidateMasteryTarget */
+        CandidateMasteryTarget: {
+            /** Canonical Key */
+            canonical_key: string;
+            /** Category */
+            category: string;
+            /** Child Target Ids */
+            child_target_ids: string[];
+            /** Display Name */
+            display_name: string;
+            /** Distinct Context Count */
+            distinct_context_count: number;
+            /** Distinct Problem Count */
+            distinct_problem_count: number;
+            /** Distinct Session Count */
+            distinct_session_count: number;
+            /** Evidence */
+            evidence: components["schemas"]["CandidateMasteryEvidenceItem"][];
+            /** Evidence Count */
+            evidence_count: number;
+            /**
+             * Evidence Sufficiency
+             * @enum {string}
+             */
+            evidence_sufficiency: "LOW" | "MEDIUM" | "HIGH";
+            /** Evidence Sufficiency Label */
+            evidence_sufficiency_label: string;
+            /**
+             * Freshness
+             * @enum {string}
+             */
+            freshness: "CURRENT" | "AGING" | "RETEST_DUE";
+            /** Freshness Label */
+            freshness_label: string;
+            /** Next Action */
+            next_action: string;
+            /** Reason */
+            reason: string;
+            /** Recommendation Id */
+            recommendation_id: string | null;
+            /** Retest Due */
+            retest_due: boolean;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "UNTESTED" | "EXPOSED" | "WEAK" | "DEVELOPING" | "STRONG";
+            /** State Label */
+            state_label: string;
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            /**
+             * Target Type
+             * @enum {string}
+             */
+            target_type: "CONCEPT" | "SKILL" | "PARENT_SUMMARY";
+            /** Unresolved Breakpoint Ids */
+            unresolved_breakpoint_ids: string[];
+        };
         /** CandidateProblemDetail */
         CandidateProblemDetail: {
             /** Argument Schema */
@@ -688,6 +907,48 @@ export interface components {
             supported_languages: ("cpp" | "python" | "java")[];
             /** Title */
             title: string;
+        };
+        /** CandidateRetestRecommendation */
+        CandidateRetestRecommendation: {
+            /**
+             * Action Enabled
+             * @default false
+             */
+            action_enabled: boolean;
+            /**
+             * Action Label
+             * @default CounterQ me again
+             */
+            action_label: string;
+            /**
+             * Availability Message
+             * @default Quick Drill execution begins in Stage 8B.
+             */
+            availability_message: string;
+            /** Reason */
+            reason: string;
+            /**
+             * Recommendation Id
+             * Format: uuid
+             */
+            recommendation_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "PENDING" | "SCHEDULED";
+            /**
+             * Target Id
+             * Format: uuid
+             */
+            target_id: string;
+            /** Target Name */
+            target_name: string;
+            /**
+             * Target Type
+             * @enum {string}
+             */
+            target_type: "CONCEPT" | "SKILL";
         };
         /** CandidateSessionReportResponse */
         CandidateSessionReportResponse: {
@@ -1246,6 +1507,72 @@ export interface components {
             verification: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** DevelopmentMasteryFixtureResponse */
+        DevelopmentMasteryFixtureResponse: {
+            /** Description */
+            description: string;
+            /** Fixture Id */
+            fixture_id: string;
+            /** Label */
+            label: string;
+            overview: components["schemas"]["CandidateMasteryOverviewResponse"];
+        };
+        /** DevelopmentMasteryInspection */
+        DevelopmentMasteryInspection: {
+            /** Concept Association Count */
+            concept_association_count: number;
+            /** Concept Projection Count */
+            concept_projection_count: number;
+            /** Latest Failure Category */
+            latest_failure_category: string | null;
+            /** Mastery Policy Version */
+            mastery_policy_version: string;
+            /** Recalculation State */
+            recalculation_state: string;
+            /** Recommendation Count */
+            recommendation_count: number;
+            /** Recommendation Statuses */
+            recommendation_statuses: {
+                [key: string]: number;
+            };
+            /** Skill Association Count */
+            skill_association_count: number;
+            /** Skill Projection Count */
+            skill_projection_count: number;
+            /** State Distribution */
+            state_distribution: {
+                [key: string]: number;
+            };
+            /** Transition Count */
+            transition_count: number;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
+        /** DevelopmentMasteryRecalculationRequest */
+        DevelopmentMasteryRecalculationRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Target Level
+             * @enum {string}
+             */
+            target_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+        };
+        /** DevelopmentMasteryRecalculationResponse */
+        DevelopmentMasteryRecalculationResponse: {
+            /** Created */
+            created: boolean;
+            /**
+             * Outbox Event Id
+             * Format: uuid
+             */
+            outbox_event_id: string;
+            /** Status */
+            status: string;
         };
         /** DevelopmentPolicyGateResult */
         DevelopmentPolicyGateResult: {
@@ -2313,6 +2640,123 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidateAssistanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_mastery_fixtures_api_mastery_development_fixtures_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentMasteryFixtureResponse"][];
+                };
+            };
+        };
+    };
+    development_user_mastery_api_mastery_development_users__user_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateMasteryOverviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_mastery_inspection_api_mastery_development_users__user_id__inspection_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentMasteryInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_recalculate_mastery_api_mastery_development_users__user_id__recalculate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DevelopmentMasteryRecalculationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentMasteryRecalculationResponse"];
                 };
             };
             /** @description Validation Error */

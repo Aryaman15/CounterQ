@@ -20,7 +20,13 @@ from app.countermap.service import (
     initial_countermap_generation_key,
 )
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
-from app.interviews.models import InterviewSession
+from app.interviews.models import InterviewConfiguration, InterviewSession
+from app.mastery.policy import MASTERY_POLICY_VERSION
+from app.mastery.service import (
+    MasteryRecalculationError,
+    MasteryRecalculationService,
+    initial_mastery_recalculation_key,
+)
 from app.outbox.claims import OutboxWorkClaim
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
@@ -50,6 +56,7 @@ class PostSessionOutboxConsumer:
         evidence_coordinator: SessionEvidenceEvaluationCoordinator,
         report_service: SessionReportGenerationService,
         countermap_service: CounterMapGenerationService | None = None,
+        mastery_service: MasteryRecalculationService | None = None,
         max_attempts: int = 5,
         processing_lease_seconds: int = 120,
         clock: Callable[[], datetime] | None = None,
@@ -58,6 +65,7 @@ class PostSessionOutboxConsumer:
         self._evidence_coordinator = evidence_coordinator
         self._report_service = report_service
         self._countermap_service = countermap_service
+        self._mastery_service = mastery_service
         self._max_attempts = max_attempts
         self._processing_lease_seconds = processing_lease_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -81,13 +89,19 @@ class PostSessionOutboxConsumer:
                 return await self._generate_report(event, attempt)
             if event.event_type == "GENERATE_COUNTERMAP":
                 return await self._generate_countermap(event, attempt)
+            if event.event_type == "RECALCULATE_MASTERY":
+                return await self._recalculate_mastery(event, attempt)
             return await self._record_failure(
                 event.id,
                 attempt,
                 "UNSUPPORTED_OUTBOX_EVENT",
                 permanent=True,
             )
-        except (SessionReportGenerationError, CounterMapGenerationError) as exc:
+        except (
+            SessionReportGenerationError,
+            CounterMapGenerationError,
+            MasteryRecalculationError,
+        ) as exc:
             return await self._record_failure(event.id, attempt, exc.category)
         except Exception as exc:
             return await self._record_failure(event.id, attempt, type(exc).__name__)
@@ -213,7 +227,74 @@ class PostSessionOutboxConsumer:
                     available_at=now,
                     source_watermark=interview.last_server_sequence,
                 )
+                configuration = await session.get(
+                    InterviewConfiguration, interview.interview_configuration_id
+                )
+                if configuration is None:
+                    current.status = "FAILED"
+                    current.last_error = "INTERVIEW_CONFIGURATION_NOT_FOUND"
+                    current.next_retry_at = None
+                    return ConsumerResult(event.id, "FAILED", "INTERVIEW_CONFIGURATION_NOT_FOUND")
+                mastery_key = initial_mastery_recalculation_key(
+                    interview.user_id, event.interview_session_id
+                )
+                await OutboxRepository(session).enqueue(
+                    aggregate_type="User",
+                    aggregate_id=interview.user_id,
+                    interview_session_id=event.interview_session_id,
+                    event_type="RECALCULATE_MASTERY",
+                    payload={
+                        "user_id": str(interview.user_id),
+                        "source_interview_session_id": str(event.interview_session_id),
+                        "target_level": configuration.level,
+                        "mastery_policy_version": MASTERY_POLICY_VERSION,
+                    },
+                    deduplication_key=mastery_key,
+                    available_at=now,
+                    source_watermark=interview.last_server_sequence,
+                )
                 _mark_completed(current, now)
+        return ConsumerResult(event.id, "COMPLETED")
+
+    async def _recalculate_mastery(
+        self,
+        event: OutboxEvent,
+        attempt: int,
+    ) -> ConsumerResult:
+        user_id = event.payload.get("user_id")
+        target_level = event.payload.get("target_level")
+        policy_version = event.payload.get("mastery_policy_version")
+        if (
+            not isinstance(user_id, str)
+            or target_level not in {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
+            or policy_version != MASTERY_POLICY_VERSION
+        ):
+            return await self._record_failure(
+                event.id, attempt, "INVALID_MASTERY_REQUEST", permanent=True
+            )
+        if self._mastery_service is None:
+            return await self._record_failure(
+                event.id, attempt, "MASTERY_SERVICE_UNAVAILABLE", permanent=True
+            )
+        try:
+            parsed_user_id = UUID(user_id)
+        except ValueError:
+            return await self._record_failure(
+                event.id, attempt, "INVALID_MASTERY_REQUEST", permanent=True
+            )
+        await self._mastery_service.recalculate(
+            user_id=parsed_user_id,
+            target_level=target_level,
+            work_claim=OutboxWorkClaim(event.id, attempt),
+        )
+        async with self._sessionmaker() as session:
+            async with session.begin():
+                current = await session.scalar(
+                    select(OutboxEvent).where(OutboxEvent.id == event.id).with_for_update()
+                )
+                if not _owns_work_claim(current, attempt):
+                    return ConsumerResult(event.id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
+                _mark_completed(current, self._clock())
         return ConsumerResult(event.id, "COMPLETED")
 
     async def _generate_countermap(
