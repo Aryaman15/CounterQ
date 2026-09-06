@@ -168,6 +168,140 @@ describe("Stage 7B interactive CounterMap", () => {
     );
   });
 
+  it("opens a source-backed drawer when an actual Graph node is selected", async () => {
+    const question = counterMapUiSamples[0].nodes.find((node) => node.node_type === "QUESTION");
+    if (!question) throw new Error("Sample needs a question");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(baseDetail(question))));
+    renderSurface();
+
+    const graphButton = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".countermap-graph-node-button"),
+    ).find((button) => button.getAttribute("aria-label")?.includes("CounterQ asked"));
+    if (!graphButton) throw new Error("Graph needs a rendered question node control");
+    fireEvent.click(graphButton);
+
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(fetch).toHaveBeenCalledWith(
+      `/candidate-detail/${question.node_id}`,
+      expect.objectContaining({ cache: "no-store" }),
+    );
+  });
+
+  it.each([
+    {
+      sample: 0,
+      start: /Inspect this moment: CounterQ asked/i,
+      action: /View triggering statement: You said/i,
+      targetType: "CLAIM",
+    },
+    {
+      sample: 2,
+      start: /Inspect this moment: CounterQ asked/i,
+      action: /View triggering code: Your code/i,
+      targetType: "CODE",
+    },
+    {
+      sample: 0,
+      start: /Inspect this moment: You answered/i,
+      action: /View the question: CounterQ asked/i,
+      targetType: "QUESTION",
+    },
+    {
+      sample: 0,
+      start: /Inspect this moment: Strong demonstration/i,
+      action: /View supporting answer: You answered/i,
+      targetType: "RESPONSE",
+    },
+    {
+      sample: 0,
+      start: /Inspect this moment: Breakpoint/i,
+      action: /View supporting evidence: Needs work/i,
+      targetType: "EVIDENCE",
+    },
+  ])("navigates causal context through persisted $targetType graph nodes", async ({
+    sample,
+    start,
+    action,
+    targetType,
+  }) => {
+    const graph = counterMapUiSamples[sample];
+    const byId = new Map(graph.nodes.map((node) => [node.node_id, node]));
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const node = byId.get(url.split("/").at(-1) ?? "");
+      return Promise.resolve(apiResponse(node ? baseDetail(node) : {}, Boolean(node)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const rendered = renderSurface(graph);
+    openTimelineNode(start);
+    const drawer = await screen.findByRole("dialog");
+
+    fireEvent.click(within(drawer).getByRole("button", { name: action }));
+
+    await waitFor(() => {
+      const latestUrl = fetchMock.mock.calls.at(-1)?.[0] as string;
+      const target = byId.get(latestUrl.split("/").at(-1) ?? "");
+      expect(target?.node_type).toBe(targetType);
+    });
+    rendered.unmount();
+  });
+
+  it("changes the detail endpoint without inventing nodes or causal links", async () => {
+    const graph = counterMapUiSamples[0];
+    const question = graph.nodes.find((node) => node.node_type === "QUESTION");
+    if (!question) throw new Error("Sample needs a question");
+    const byId = new Map(graph.nodes.map((node) => [node.node_id, node]));
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const node = byId.get(url.split("/").at(-1) ?? "");
+      return Promise.resolve(apiResponse(node ? baseDetail(node) : {}, Boolean(node)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSurface(graph);
+    openTimelineNode(/Inspect this moment: CounterQ asked/i);
+    const drawer = await screen.findByRole("dialog");
+    const causalSection = within(drawer).getByText("Causal context").closest("section");
+    if (!causalSection) throw new Error("Question needs causal context");
+    const incidentEdges = graph.edges.filter((edge) => (
+      edge.from_node_id === question.node_id || edge.to_node_id === question.node_id
+    ));
+
+    expect(within(causalSection).getAllByRole("button")).toHaveLength(incidentEdges.length);
+    expect(within(causalSection).queryByRole("button", { name: /Needs work/i })).not.toBeInTheDocument();
+    const trigger = within(causalSection).getByRole("button", {
+      name: /View triggering statement: You said/i,
+    });
+    fireEvent.click(trigger);
+
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      `/candidate-detail/${graph.nodes[0].node_id}`,
+      expect.objectContaining({ cache: "no-store" }),
+    ));
+  });
+
+  it("supports keyboard activation for causal navigation and keeps drawer focus", async () => {
+    const graph = counterMapUiSamples[0];
+    const byId = new Map(graph.nodes.map((node) => [node.node_id, node]));
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const node = byId.get(url.split("/").at(-1) ?? "");
+      return Promise.resolve(apiResponse(node ? baseDetail(node) : {}, Boolean(node)));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    renderSurface(graph);
+    openTimelineNode(/Inspect this moment: You answered/i);
+    const drawer = await screen.findByRole("dialog");
+    const navigation = within(drawer).getByRole("button", { name: /View the question/i });
+    navigation.focus();
+
+    fireEvent.keyDown(navigation, { key: "Enter" });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining(graph.nodes.find((node) => node.node_type === "QUESTION")?.node_id ?? "missing"),
+      expect.objectContaining({ cache: "no-store" }),
+    ));
+    await waitFor(() => expect(within(drawer).getByRole("button", {
+      name: "Close detail drawer",
+    })).toHaveFocus());
+  });
+
   it("closes the drawer with Escape and restores focus to the selected node control", async () => {
     const question = counterMapUiSamples[0].nodes.find((node) => node.node_type === "QUESTION");
     if (!question) throw new Error("Sample needs a question");

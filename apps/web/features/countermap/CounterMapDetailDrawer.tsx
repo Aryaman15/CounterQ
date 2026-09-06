@@ -25,12 +25,14 @@ import {
 export function CounterMapDetailDrawer({
   graph,
   node,
-  detailUrl,
+  detailUrlForNode,
+  onNavigateNode,
   onClose,
 }: {
   graph: CounterMapGraph;
   node: CounterMapNode;
-  detailUrl: string;
+  detailUrlForNode: (nodeId: string) => string;
+  onNavigateNode: (node: CounterMapNode) => void;
   onClose: () => void;
 }) {
   const drawerRef = useRef<HTMLElement>(null);
@@ -39,12 +41,12 @@ export function CounterMapDetailDrawer({
   const [detail, setDetail] = useState<CounterMapDetail | null>(null);
   const [failed, setFailed] = useState(false);
   const connections = useMemo(() => connectionDetails(graph, node), [graph, node]);
+  const detailUrl = detailUrlForNode(node.node_id);
 
   useEffect(() => {
     previousFocus.current = document.activeElement instanceof HTMLElement
       ? document.activeElement
       : null;
-    const frame = window.requestAnimationFrame(() => closeRef.current?.focus());
     const handleKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
@@ -70,12 +72,16 @@ export function CounterMapDetailDrawer({
     document.addEventListener("keydown", handleKey);
     document.body.classList.add("countermap-drawer-open");
     return () => {
-      window.cancelAnimationFrame(frame);
       document.removeEventListener("keydown", handleKey);
       document.body.classList.remove("countermap-drawer-open");
       previousFocus.current?.focus();
     };
   }, [onClose]);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => closeRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [node.node_id]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -146,13 +152,25 @@ export function CounterMapDetailDrawer({
               <ul>
                 {connections.map((connection) => (
                   <li key={connection.id}>
-                    {connection.direction === "incoming"
-                      ? <ArrowDownLeft size={14} aria-hidden="true" />
-                      : <ArrowUpRight size={14} aria-hidden="true" />}
-                    <span>
-                      <strong>{connection.title}</strong>
-                      {connection.label}
-                    </span>
+                    <button
+                      type="button"
+                      aria-label={`${connection.action}: ${connection.node.title}`}
+                      onClick={() => onNavigateNode(connection.node)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          onNavigateNode(connection.node);
+                        }
+                      }}
+                    >
+                      {connection.direction === "incoming"
+                        ? <ArrowDownLeft size={14} aria-hidden="true" />
+                        : <ArrowUpRight size={14} aria-hidden="true" />}
+                      <span>
+                        <strong>{connection.action}</strong>
+                        <span>{connection.node.title} · {connection.label}</span>
+                      </span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -171,7 +189,7 @@ function CandidateDetail({ detail, node }: { detail: CounterMapDetail; node: Cou
       {detail.statement ? (
         <section className="countermap-detail-section">
           <p className="countermap-detail-label">
-            {detail.statement.exact_quote ? "Your exact words" : "Candidate-safe source"}
+            {detail.statement.exact_quote ? "Your exact words" : "What you expressed"}
           </p>
           <blockquote>{detail.statement.text}</blockquote>
         </section>
@@ -351,7 +369,8 @@ function DeferredActions({ node }: { node: CounterMapNode }) {
 type ConnectionDetail = {
   id: string;
   direction: "incoming" | "outgoing";
-  title: string;
+  node: CounterMapNode;
+  action: string;
   label: string;
 };
 
@@ -364,7 +383,8 @@ function connectionDetails(graph: CounterMapGraph, node: CounterMapNode): Connec
       if (source) result.push({
         id: edge.edge_id,
         direction: "incoming",
-        title: source.title,
+        node: source,
+        action: causalNavigationLabel(node, source),
         label: relationshipLabel(edge.relationship, node.node_type),
       });
     }
@@ -373,10 +393,49 @@ function connectionDetails(graph: CounterMapGraph, node: CounterMapNode): Connec
       if (target) result.push({
         id: edge.edge_id,
         direction: "outgoing",
-        title: target.title,
+        node: target,
+        action: causalNavigationLabel(node, target),
         label: relationshipLabel(edge.relationship, target.node_type),
       });
     }
   }
   return result;
+}
+
+function causalNavigationLabel(current: CounterMapNode, related: CounterMapNode): string {
+  if (current.node_type === "QUESTION" || current.node_type === "MUTATION") {
+    if (related.node_type === "CODE") return "View triggering code";
+    if (related.node_type === "CLAIM" || related.node_type === "REASONING") {
+      return "View triggering statement";
+    }
+    if (related.node_type === "RESPONSE") return "View the answer";
+  }
+  if (current.node_type === "RESPONSE") {
+    if (related.node_type === "QUESTION" || related.node_type === "MUTATION") {
+      return "View the question";
+    }
+    if (related.node_type === "ASSISTANCE") return "View Coach guidance";
+  }
+  if (current.node_type === "EVIDENCE") {
+    if (related.node_type === "BREAKPOINT") return "View the Breakpoint";
+    if (related.node_type === "CODE") return "View supporting code";
+    if (related.node_type === "TEST") return "View supporting test";
+    if (related.node_type === "RESPONSE") return "View supporting answer";
+    if (related.node_type === "CLAIM" || related.node_type === "REASONING") {
+      return "View supporting statement";
+    }
+  }
+  if (current.node_type === "BREAKPOINT" && related.node_type === "EVIDENCE") {
+    return "View supporting evidence";
+  }
+  if (related.node_type === "ASSISTANCE") return "View Coach guidance";
+  if (related.node_type === "QUESTION" || related.node_type === "MUTATION") {
+    return "View the question";
+  }
+  if (related.node_type === "CODE") return "View code at this moment";
+  if (related.node_type === "TEST") return "View test result";
+  if (related.node_type === "EVIDENCE") return "View what this showed";
+  if (related.node_type === "BREAKPOINT") return "View the Breakpoint";
+  if (related.node_type === "RESPONSE") return "View the answer";
+  return "View this moment";
 }

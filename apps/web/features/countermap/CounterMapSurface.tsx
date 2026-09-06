@@ -80,7 +80,8 @@ export function CounterMapSurface({
         <CounterMapDetailDrawer
           graph={graph}
           node={selectedNode}
-          detailUrl={detailUrlForNode(selectedNode.node_id)}
+          detailUrlForNode={detailUrlForNode}
+          onNavigateNode={selectNode}
           onClose={closeDrawer}
         />
       ) : null}

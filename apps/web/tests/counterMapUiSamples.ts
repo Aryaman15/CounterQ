@@ -204,7 +204,13 @@ function integritySample(): CounterMapGraph {
     content_hash: "sha256:02",
     language: "python",
   }, "SELF_CORRECTION");
-  return graph([before, question, after], [edge(21, before, after, "CORRECTED_BY")]);
+  return graph(
+    [before, question, after],
+    [
+      edge(21, before, after, "CORRECTED_BY"),
+      edge(22, before, question, "TRIGGERED"),
+    ],
+  );
 }
 
 export const counterMapUiSamples = [

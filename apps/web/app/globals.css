@@ -2569,16 +2569,29 @@ a:focus-visible,
 .countermap-breakpoint-evidence small { display: block; margin-top: 5px; color: #7e8882; }
 
 .countermap-causal-context li {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  gap: 8px;
   border-left: 1px solid #344138;
-  padding: 4px 0 4px 12px;
+  padding-left: 5px;
 }
 
-.countermap-causal-context li > svg { margin-top: 2px; color: #799181; }
-.countermap-causal-context li strong { display: block; color: #c7d0ca; font-size: 11px; }
-.countermap-causal-context li span { color: #77847c; font-size: 10px; line-height: 1.45; }
+.countermap-causal-context li button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 8px;
+  border: 0;
+  border-radius: 4px;
+  padding: 7px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.countermap-causal-context li button:hover { background: #1b211d; }
+.countermap-causal-context li button:focus-visible { outline: 2px solid #88a692; outline-offset: 2px; }
+.countermap-causal-context li button > svg { margin-top: 2px; color: #799181; }
+.countermap-causal-context li button strong { display: block; color: #c7d0ca; font-size: 11px; }
+.countermap-causal-context li button span span { color: #77847c; font-size: 10px; line-height: 1.45; }
 
 .countermap-deferred-actions > div + div { margin-top: 13px; }
 .countermap-deferred-actions button {

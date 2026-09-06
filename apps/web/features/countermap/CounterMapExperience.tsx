@@ -60,7 +60,7 @@ export function CounterMapExperience({
         <div>
           <p className="countermap-kicker">CounterMap · Session causality</p>
           <h2 id="countermap-title">How your interview unfolded</h2>
-          <p>Only material moments with canonical causal support appear here.</p>
+          <p>Only moments that directly shaped the interview appear here.</p>
         </div>
         <Network size={28} aria-hidden="true" />
       </header>

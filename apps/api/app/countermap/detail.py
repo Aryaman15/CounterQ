@@ -210,20 +210,27 @@ class CounterMapNodeDetailResolver:
         session_id: UUID,
         snapshot: CodeSnapshot,
     ) -> CandidateCodeDiffDetail | None:
-        row = await self._session.scalar(
-            select(CodeDiff)
-            .where(
-                CodeDiff.interview_session_id == session_id,
-                CodeDiff.to_snapshot_id == snapshot.id,
-            )
-            .order_by(CodeDiff.created_at.desc(), CodeDiff.id)
-            .limit(1)
-        )
-        if row is None:
+        if snapshot.parent_snapshot_id is None:
             return None
+        rows = list(
+            await self._session.scalars(
+                select(CodeDiff)
+                .where(
+                    CodeDiff.interview_session_id == session_id,
+                    CodeDiff.from_snapshot_id == snapshot.parent_snapshot_id,
+                    CodeDiff.to_snapshot_id == snapshot.id,
+                    CodeDiff.created_from_event_id == snapshot.created_from_event_id,
+                )
+                .order_by(CodeDiff.id)
+                .limit(2)
+            )
+        )
+        if len(rows) != 1:
+            return None
+        row = rows[0]
         previous = await self._session.scalar(
             select(CodeSnapshot).where(
-                CodeSnapshot.id == row.from_snapshot_id,
+                CodeSnapshot.id == snapshot.parent_snapshot_id,
                 CodeSnapshot.interview_session_id == session_id,
             )
         )
