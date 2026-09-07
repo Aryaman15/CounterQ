@@ -46,7 +46,6 @@ export function MasteryExperience({ overview }: { overview: Overview }) {
           <p>{overview.message}</p>
         </div>
         <dl>
-          <div><dt>Policy</dt><dd>{overview.mastery_policy_version.replaceAll("_", " ")}</dd></div>
           <div><dt>Target</dt><dd>{titleCase(overview.target_level)}</dd></div>
         </dl>
       </div>

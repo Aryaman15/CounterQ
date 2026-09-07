@@ -405,9 +405,17 @@ async def _sync_recommendation(
             item.updated_at = now
         return
     evidence_identity = _hash(*(str(item.evidence_id) for item in decision.contributions))
+    breakpoint_id = (
+        decision.unresolved_breakpoint_ids[0]
+        if decision.retest_reason == RetestReason.UNRESOLVED_BREAKPOINT
+        and decision.unresolved_breakpoint_ids
+        else None
+    )
+    breakpoint_identity = str(breakpoint_id) if breakpoint_id is not None else "none"
     recommendation_key = (
         f"mastery-retest:{user_id}:{target.family.lower()}:{target.target_id}:"
-        f"{decision.retest_reason.value}:{policy_version}:{evidence_identity}"
+        f"{decision.retest_reason.value}:{policy_version}:breakpoint:{breakpoint_identity}:"
+        f"{evidence_identity}"
     )
     matching = next(
         (item for item in active if item.recommendation_key == recommendation_key), None
@@ -426,9 +434,6 @@ async def _sync_recommendation(
         RetestReason.CONTRADICTORY_EVIDENCE: 80,
         RetestReason.STALE_VERIFICATION: 60,
     }[decision.retest_reason]
-    breakpoint_id = (
-        decision.unresolved_breakpoint_ids[0] if decision.unresolved_breakpoint_ids else None
-    )
     session.add(
         RetestRecommendation(
             user_id=user_id,

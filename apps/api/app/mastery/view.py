@@ -179,7 +179,7 @@ def build_persisted_candidate_mastery_overview(
         skills,
         recommendation_statuses=recommendation_statuses,
     )
-    response_status = status or ("READY" if targets else "EMPTY")
+    response_status = status or ("READY" if technical or skills else "EMPTY")
     if consistency_mismatch and response_status not in {"FAILED", "UPDATING"}:
         response_status = "STALE"
     versions = {item.mastery_policy_version for item in projections}
@@ -227,7 +227,11 @@ def build_candidate_mastery_overview(
             if recommendation_ids is not None
             else None
         )
-        if recommendation_ids is None and decision.retest_due:
+        if (
+            recommendation_ids is None
+            and source.family == "CONCEPT"
+            and decision.retest_due
+        ):
             recommendation_id = uuid5(
                 _FIXTURE_RECOMMENDATION_NAMESPACE,
                 f"{source.family}:{source.target_id}:{decision.retest_reason}",

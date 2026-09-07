@@ -21,6 +21,10 @@ from app.evidence.models import (
     EvidenceSource,
     SkillDimension,
 )
+from app.evidence.source_admission import (
+    EvidenceSourceCategory,
+    evidence_source_admission,
+)
 from app.interviews.models import (
     CandidateResponse,
     CandidateResponseSource,
@@ -81,6 +85,14 @@ class _EvidenceRow:
     problem: ProblemVersion
     response: CandidateResponse | None
     prompt: InterviewerPrompt | None
+
+
+@dataclass(frozen=True, slots=True)
+class _MasterySourceEvent:
+    event: InterviewEvent
+    source_role: str
+    category: EvidenceSourceCategory
+    counts_as_candidate_demonstration: bool
 
 
 class MasterySourceBuilder:
@@ -249,7 +261,7 @@ class MasterySourceBuilder:
     async def _self_correction_evidence_ids(
         self,
         rows: tuple[_EvidenceRow, ...],
-        source_events: dict[UUID, tuple[InterviewEvent, ...]],
+        source_events: dict[UUID, tuple[_MasterySourceEvent, ...]],
     ) -> frozenset[UUID]:
         response_ids = {row.response.id for row in rows if row.response is not None}
         if not response_ids:
@@ -266,7 +278,10 @@ class MasterySourceBuilder:
             response_sources[response_id].add(event_id)
 
         evidence_event_ids = {
-            event.id for events in source_events.values() for event in events
+            source.event.id
+            for sources in source_events.values()
+            for source in sources
+            if source.counts_as_candidate_demonstration
         }
         snapshot_rows = await self._session.execute(
             select(CodeSnapshot.created_from_event_id, CodeSnapshot.id).where(
@@ -279,8 +294,12 @@ class MasterySourceBuilder:
         for row in rows:
             if row.response is None:
                 continue
-            events = source_events.get(row.evidence.id, ())
-            structured_event_ids = {event.id for event in events}.intersection(
+            sources = source_events.get(row.evidence.id, ())
+            structured_event_ids = {
+                source.event.id
+                for source in sources
+                if source.counts_as_candidate_demonstration
+            }.intersection(
                 response_sources.get(row.response.id, set())
             )
             snapshot_ids = {
@@ -299,18 +318,30 @@ class MasterySourceBuilder:
 
     async def _source_events(
         self, evidence_ids: list[UUID]
-    ) -> dict[UUID, tuple[InterviewEvent, ...]]:
+    ) -> dict[UUID, tuple[_MasterySourceEvent, ...]]:
         if not evidence_ids:
             return {}
         rows = await self._session.execute(
-            select(EvidenceSource.evidence_id, InterviewEvent)
+            select(EvidenceSource.evidence_id, EvidenceSource.source_role, InterviewEvent)
             .join(InterviewEvent, InterviewEvent.id == EvidenceSource.interview_event_id)
             .where(EvidenceSource.evidence_id.in_(evidence_ids))
             .order_by(EvidenceSource.evidence_id, InterviewEvent.server_sequence)
         )
-        grouped: dict[UUID, list[InterviewEvent]] = defaultdict(list)
-        for evidence_id, event in rows.all():
-            grouped[evidence_id].append(event)
+        grouped: dict[UUID, list[_MasterySourceEvent]] = defaultdict(list)
+        for evidence_id, source_role, event in rows.all():
+            admission = evidence_source_admission(
+                event_type=event.event_type,
+                event_source=event.source,
+                source_role=source_role,
+            )
+            grouped[evidence_id].append(
+                _MasterySourceEvent(
+                    event,
+                    source_role,
+                    admission.category,
+                    admission.counts_as_candidate_demonstration,
+                )
+            )
         return {key: tuple(value) for key, value in grouped.items()}
 
     async def _retest_evidence_ids(self, evidence_ids: list[UUID]) -> frozenset[UUID]:
@@ -437,6 +468,8 @@ def _breakpoint_facts(
             MasteryBreakpointFact(
                 breakpoint.id,
                 cast(BreakpointStatus, breakpoint.status),
+                breakpoint.severity,
+                breakpoint.first_detected_at,
                 evidence_ids,
             )
         )
@@ -445,21 +478,27 @@ def _breakpoint_facts(
 
 def _fact(
     row: _EvidenceRow,
-    events: tuple[InterviewEvent, ...],
+    sources: tuple[_MasterySourceEvent, ...],
     retest_ids: frozenset[UUID],
     self_correction_ids: frozenset[UUID],
     concept_family_key: str,
 ) -> MasteryEvidenceFact:
+    candidate_events = tuple(
+        source.event for source in sources if source.counts_as_candidate_demonstration
+    )
     prompt_kind = row.prompt.kind if row.prompt else None
     probe_strategy = row.prompt.probe_strategy if row.prompt else None
-    demonstration_form = _demonstration_form(events, probe_strategy)
+    demonstration_form = _demonstration_form(candidate_events, probe_strategy)
     context_key = _semantic_context_key(
         problem_id=row.problem.problem_id,
         demonstration_form=demonstration_form,
         probe_strategy=probe_strategy,
     )
-    observation_key = _identity("observation", *(str(item.id) for item in events))
-    application = _demonstrates_reasoning_or_application(events)
+    observation_key = _identity(
+        "candidate-observation-v1",
+        *(str(item.id) for item in candidate_events),
+    )
+    application = _demonstrates_reasoning_or_application(candidate_events)
     return MasteryEvidenceFact(
         evidence_id=row.evidence.id,
         session_id=row.interview.id,

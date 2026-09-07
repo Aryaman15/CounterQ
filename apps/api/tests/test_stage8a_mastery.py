@@ -129,7 +129,15 @@ def test_mastery_demo_is_backed_by_production_policy_fixtures(tmp_path: Path) ->
     ]
     rendered = repr(payload).lower()
     assert "percentage" not in rendered and "score" not in rendered
+    assert all(
+        recommendation["target_type"] == "CONCEPT"
+        for item in payload
+        for recommendation in item["overview"]["retest_recommendations"]
+    )
     multi = next(item for item in payload if item["fixture_id"] == "multi-context-strong")
+    skill = multi["overview"]["interview_skills"][0]
+    assert skill["retest_due"] is True
+    assert skill["recommendation_id"] is None
     assert any(item["state"] == "STRONG" for item in multi["overview"]["technical_concepts"])
 
 
@@ -593,6 +601,106 @@ async def test_obsolete_retest_recommendation_is_superseded() -> None:
         await engine.dispose()
 
 
+@pytest.mark.parametrize("reverse_insertion", [False, True])
+async def test_breakpoint_retest_selection_is_deterministic_and_identity_aware(
+    reverse_insertion: bool,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
+    try:
+        async with sessions() as session, session.begin():
+            evidence = await session.get(Evidence, fixture.evidence_ids[0])
+            assert evidence is not None
+            evidence.polarity = "NEGATIVE"
+            low = Breakpoint(
+                id=UUID("8c000000-0000-4000-8000-000000000101"),
+                user_id=fixture.user_id,
+                concept_id=fixture.concept_id,
+                skill_dimension_id=fixture.skill_id,
+                breakpoint_key="deterministic_low_priority_boundary",
+                first_detected_session_id=fixture.session_ids[0],
+                first_detected_at=FIXED_NOW - timedelta(days=30),
+                severity="LOW",
+                status="OPEN",
+                summary="A lower-severity canonical boundary remains active.",
+            )
+            high = Breakpoint(
+                id=UUID("8c000000-0000-4000-8000-000000000102"),
+                user_id=fixture.user_id,
+                concept_id=fixture.concept_id,
+                skill_dimension_id=fixture.skill_id,
+                breakpoint_key="deterministic_high_priority_boundary",
+                first_detected_session_id=fixture.session_ids[0],
+                first_detected_at=FIXED_NOW - timedelta(days=1),
+                severity="HIGH",
+                status="OPEN",
+                summary="A higher-severity canonical boundary takes priority.",
+            )
+            ordered = (high, low) if reverse_insertion else (low, high)
+            session.add_all(ordered)
+            await session.flush()
+            session.add_all(
+                BreakpointEvidence(
+                    breakpoint_id=item.id,
+                    evidence_id=fixture.evidence_ids[0],
+                    relationship="CREATED",
+                )
+                for item in ordered
+            )
+
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(fixture.user_id)
+            target = next(
+                item
+                for item in bundle.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            decision = MasteryPolicyV1().evaluate(target.facts, now=FIXED_NOW)
+            assert decision.unresolved_breakpoint_ids == (high.id, low.id)
+            recommendations = list(
+                await session.scalars(
+                    select(RetestRecommendation).where(
+                        RetestRecommendation.user_id == fixture.user_id
+                    )
+                )
+            )
+            assert len(recommendations) == 1
+            assert recommendations[0].breakpoint_id == high.id
+
+        async with sessions() as session, session.begin():
+            selected = await session.get(Breakpoint, high.id)
+            assert selected is not None
+            selected.status = "RESOLVED"
+            selected.resolved_at = FIXED_NOW
+            selected.resolution_reason = "Independent evidence resolved this boundary."
+
+        await service.recalculate(user_id=fixture.user_id)
+        duplicate = await service.recalculate(user_id=fixture.user_id)
+        assert duplicate.pending_recommendation_count == 1
+        async with sessions() as session:
+            recommendations = list(
+                await session.scalars(
+                    select(RetestRecommendation)
+                    .where(RetestRecommendation.user_id == fixture.user_id)
+                    .order_by(RetestRecommendation.created_at, RetestRecommendation.id)
+                )
+            )
+            assert len(recommendations) == 2
+            old = next(item for item in recommendations if item.breakpoint_id == high.id)
+            current = next(item for item in recommendations if item.breakpoint_id == low.id)
+            assert old.status == "SUPERSEDED"
+            assert current.status == "PENDING"
+            assert sum(
+                item.status in {"PENDING", "SCHEDULED"} for item in recommendations
+            ) == 1
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
 async def test_duplicate_mastery_outbox_delivery_is_idempotent() -> None:
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -764,6 +872,119 @@ async def test_source_builder_uses_stable_problem_and_grounded_contexts() -> Non
             assert grounded_decision.state == "STRONG"
     finally:
         await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_source_builder_observation_identity_excludes_context_only_sources() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    user_id: UUID | None = None
+    problem_id: UUID | None = None
+    first_evidence_id: UUID | None = None
+    second_evidence_id: UUID | None = None
+    try:
+        async with sessions() as session, session.begin():
+            fixture = await evidence_fixture(session)
+            first = await validate_evidence(
+                session,
+                fixture,
+                polarity="NEGATIVE",
+                strength="MODERATE",
+                finding="The first row describes the shared candidate observation.",
+            )
+            second = await validate_evidence(
+                session,
+                fixture,
+                polarity="NEGATIVE",
+                strength="MODERATE",
+                finding="The second row describes the same candidate observation.",
+            )
+            first_context = await add_event(
+                session,
+                fixture.graph,
+                server_sequence=2,
+                event_type="COUNTERQ_UTTERANCE_DELIVERED",
+                source="COUNTERQ_VOICE",
+            )
+            second_context = await add_event(
+                session,
+                fixture.graph,
+                server_sequence=3,
+                event_type="COUNTERQ_UTTERANCE_DELIVERED",
+                source="COUNTERQ_VOICE",
+            )
+            session.add_all(
+                (
+                    EvidenceSource(
+                        evidence_id=first.id,
+                        interview_event_id=first_context.id,
+                        interview_session_id=fixture.graph.interview_session.id,
+                        source_role="CONTEXT",
+                    ),
+                    EvidenceSource(
+                        evidence_id=second.id,
+                        interview_event_id=second_context.id,
+                        interview_session_id=fixture.graph.interview_session.id,
+                        source_role="CONTEXT",
+                    ),
+                )
+            )
+            user_id = fixture.graph.user.id
+            problem_id = fixture.graph.problem.id
+            first_evidence_id = first.id
+            second_evidence_id = second.id
+
+        assert user_id is not None
+        assert first_evidence_id is not None and second_evidence_id is not None
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(user_id)
+            target = next(item for item in bundle.targets if item.family == "CONCEPT")
+            facts = {item.evidence_id: item for item in target.facts.evidence}
+            assert (
+                facts[first_evidence_id].observation_key
+                == facts[second_evidence_id].observation_key
+            )
+            decision = MasteryPolicyV1().evaluate(target.facts, now=FIXED_NOW)
+            assert decision.state == "EXPOSED"
+            assert decision.evidence_sufficiency != "HIGH"
+
+        async with sessions() as session, session.begin():
+            different_candidate_observation = await add_event(
+                session,
+                fixture.graph,
+                server_sequence=4,
+                event_type="TRANSCRIPT_FINALIZED",
+                source="CANDIDATE_VOICE",
+            )
+            await session.execute(
+                delete(EvidenceSource).where(
+                    EvidenceSource.evidence_id == second_evidence_id,
+                    EvidenceSource.interview_event_id == fixture.event.id,
+                )
+            )
+            session.add(
+                EvidenceSource(
+                    evidence_id=second_evidence_id,
+                    interview_event_id=different_candidate_observation.id,
+                    interview_session_id=fixture.graph.interview_session.id,
+                    source_role="PRIMARY",
+                )
+            )
+
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(user_id)
+            target = next(item for item in bundle.targets if item.family == "CONCEPT")
+            facts = {item.evidence_id: item for item in target.facts.evidence}
+            assert (
+                facts[first_evidence_id].observation_key
+                != facts[second_evidence_id].observation_key
+            )
+    finally:
+        if user_id is not None:
+            async with sessions() as session, session.begin():
+                await session.execute(delete(User).where(User.id == user_id))
+                if problem_id is not None:
+                    await session.execute(delete(Problem).where(Problem.id == problem_id))
         await engine.dispose()
 
 
@@ -1265,6 +1486,48 @@ async def test_persisted_candidate_read_never_shadow_grades_state(tmp_path: Path
             assert response.status == "STALE"
             assert concept_response.state == "DEVELOPING"
             assert concept_response.mastery_policy_version == "mastery_policy_v2"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_all_untested_persisted_rows_render_as_cold_start(tmp_path: Path) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    settings = create_settings(env_file=tmp_path / "missing.env")
+    settings.app_env = "development"
+    service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
+    try:
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session, session.begin():
+            await EvidenceValidationService(session).invalidate(
+                interview_session_id=fixture.session_ids[0],
+                evidence_id=fixture.evidence_ids[0],
+                reason="Cold-start persisted-read regression.",
+                invalidated_at=FIXED_NOW,
+            )
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session, session.begin():
+            concept = await session.scalar(
+                select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
+            )
+            skill = await session.scalar(
+                select(SkillMastery).where(SkillMastery.user_id == fixture.user_id)
+            )
+            assert concept is not None and concept.state == "UNTESTED"
+            assert skill is not None and skill.state == "UNTESTED"
+            await session.execute(
+                delete(OutboxEvent).where(OutboxEvent.aggregate_id == fixture.user_id)
+            )
+
+        async with sessions() as session:
+            response = await development_user_mastery(fixture.user_id, settings, session)
+            assert response.status == "EMPTY"
+            assert response.technical_concepts == []
+            assert response.interview_skills == []
+            assert response.parent_summaries == []
+            assert "still learning" in response.message
     finally:
         await _cleanup(sessions, fixture)
         await engine.dispose()

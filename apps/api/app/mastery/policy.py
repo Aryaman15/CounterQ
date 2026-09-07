@@ -81,6 +81,8 @@ class MasteryEvidenceFact:
 class MasteryBreakpointFact:
     breakpoint_id: UUID
     status: BreakpointStatus
+    severity: str
+    first_detected_at: datetime
     supporting_evidence_ids: frozenset[UUID]
 
     @property
@@ -181,7 +183,7 @@ class MasteryPolicyV1:
             for item in meaningful_negative
             if not _negative_overcome(item, meaningful_positive)
         )
-        unresolved_breakpoints = tuple(item for item in facts.breakpoints if item.unresolved)
+        unresolved_breakpoints = _ordered_unresolved_breakpoints(facts.breakpoints)
         distinct_sessions = len({item.session_id for item in evidence})
         distinct_problems = len(
             {item.problem_id or item.problem_version_id for item in evidence}
@@ -190,7 +192,7 @@ class MasteryPolicyV1:
         independent_count = len(
             {
                 (item.session_id, item.context_key)
-                for item in meaningful_positive
+                for item in (*meaningful_positive, *meaningful_self_corrections)
                 if item.independence == "INDEPENDENT"
             }
         )
@@ -406,6 +408,7 @@ def _sufficiency(
         item
         for item in evidence
         if item.strength in _MEANINGFUL_STRENGTH
+        and item.demonstrates_reasoning_or_application
         and (item.independence in _QUALIFYING_INDEPENDENCE or item.polarity == "MIXED")
     )
     diagnostic_units = {
@@ -449,15 +452,20 @@ def _freshness(
     independently_verified_after = bool(
         last_learning_at
         and any(
-            _qualifying_positive(item)
-            and item.independence == "INDEPENDENT"
+            (
+                (_qualifying_positive(item) and item.independence == "INDEPENDENT")
+                or _meaningful_self_correction(item)
+            )
             and item.occurred_at > last_learning_at
             for item in evidence
         )
     )
     if has_learning and not independently_verified_after:
         return "RETEST_DUE", RetestReason.INDEPENDENCE_NOT_VERIFIED
-    if unresolved_negatives and any(_qualifying_positive(item) for item in evidence):
+    if unresolved_negatives and any(
+        _qualifying_positive(item) or _meaningful_self_correction(item)
+        for item in evidence
+    ):
         return "RETEST_DUE", RetestReason.CONTRADICTORY_EVIDENCE
     last_verification = max(
         (item.occurred_at for item in evidence if _qualifying_positive(item)),
@@ -538,7 +546,46 @@ def _explanation(
             "You demonstrated this strongly across multiple contexts, but it has not been "
             "verified recently.",
         )
+    if state == "STRONG" and after_probe_count > 0:
+        return (
+            "REPEATED_DIAGNOSTIC_EVIDENCE",
+            "You demonstrated this across multiple distinct contexts, including fully "
+            "independent evidence.",
+        )
     return (
         "REPEATED_INDEPENDENT_EVIDENCE",
         "You demonstrated this independently across multiple distinct contexts.",
+    )
+
+
+_BREAKPOINT_SEVERITY_PRIORITY = {
+    "HIGH": 3,
+    "MATERIAL": 2,
+    "MEDIUM": 2,
+    "LOW": 1,
+}
+_BREAKPOINT_STATUS_PRIORITY: dict[BreakpointStatus, int] = {
+    "OPEN": 3,
+    "RETEST_PENDING": 2,
+    "IMPROVING": 1,
+    "RESOLVED": 0,
+    "DISMISSED": 0,
+}
+
+
+def _ordered_unresolved_breakpoints(
+    breakpoints: tuple[MasteryBreakpointFact, ...],
+) -> tuple[MasteryBreakpointFact, ...]:
+    """Policy-v1 retest order: severity, active status, age, then stable UUID."""
+
+    return tuple(
+        sorted(
+            (item for item in breakpoints if item.unresolved),
+            key=lambda item: (
+                -_BREAKPOINT_SEVERITY_PRIORITY.get(item.severity.upper(), 0),
+                -_BREAKPOINT_STATUS_PRIORITY[item.status],
+                item.first_detected_at,
+                str(item.breakpoint_id),
+            ),
+        )
     )

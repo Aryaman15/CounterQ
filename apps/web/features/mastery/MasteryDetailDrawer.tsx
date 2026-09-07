@@ -70,7 +70,7 @@ export function MasteryDetailDrawer({ target, onClose }: { target: Target; onClo
             <div className="mastery-breakpoint-note"><AlertTriangle size={15} /><span>A validated Breakpoint is still unresolved. Assisted success does not close it.</span></div>
           ) : null}
           {target.target_type === "PARENT_SUMMARY" ? (
-            <section className="mastery-detail-section"><p className="mastery-section-label">How to read this</p><p>This parent state summarizes child projections for navigation. It creates no synthetic Evidence.</p></section>
+            <section className="mastery-detail-section"><p className="mastery-section-label">How to read this</p><p>This summary combines the child concepts below. Their individual evidence remains the basis for the result.</p></section>
           ) : (
             <section className="mastery-detail-section" aria-labelledby="mastery-timeline-title">
               <p className="mastery-section-label" id="mastery-timeline-title">Evidence timeline</p>

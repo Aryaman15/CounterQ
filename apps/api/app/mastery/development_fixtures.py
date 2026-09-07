@@ -132,6 +132,8 @@ def _mixed_coach() -> MasterySourceBundle:
     breakpoint = MasteryBreakpointFact(
         UUID("8a000000-0000-4000-8000-000000000301"),
         "RETEST_PENDING",
+        "HIGH",
+        DEMO_NOW - timedelta(days=14),
         frozenset((negative.evidence_id,)),
     )
     target = _concept(

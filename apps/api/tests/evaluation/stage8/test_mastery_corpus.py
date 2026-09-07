@@ -267,6 +267,56 @@ def _persisted_overview(
     )
 
 
+def _persisted_untested_overview() -> CandidateMasteryOverviewResponse:
+    fixture = _fixture("one-independent-session")
+    source = fixture.bundle.targets[0]
+    empty_source = replace(source, facts=replace(source.facts, evidence=()))
+    projection = PersistedMasteryProjection(
+        family="CONCEPT",
+        target_id=source.target_id,
+        state="UNTESTED",
+        mastery_policy_version=MASTERY_POLICY_VERSION,
+        projection_version=2,
+        last_evaluated_at=DEMO_NOW,
+        last_evidence_at=None,
+        supporting_evidence_count=0,
+        context_diversity=0,
+        updated_at=DEMO_NOW,
+        contributions=(),
+    )
+    return build_persisted_candidate_mastery_overview(
+        replace(fixture.bundle, targets=(empty_source,)),
+        (projection,),
+        now=DEMO_NOW,
+    )
+
+
+def _skill_only_retest_overview() -> CandidateMasteryOverviewResponse:
+    fixture = _fixture("strong-but-stale")
+    source = fixture.bundle.targets[0]
+    skill_source = replace(
+        source,
+        family="SKILL",
+        target_id=_uuid(8900, 1),
+        canonical_key="complexity_reasoning",
+        display_name="Complexity reasoning",
+        category="INTERVIEW_SKILL",
+        parent_concept_id=None,
+        parent_canonical_key=None,
+        parent_display_name=None,
+        facts=replace(source.facts, target_family="SKILL"),
+    )
+    return build_candidate_mastery_overview(
+        replace(fixture.bundle, targets=(skill_source,)),
+        now=DEMO_NOW,
+    )
+
+
+def _concept_retest_overview() -> CandidateMasteryOverviewResponse:
+    fixture = _fixture("strong-but-stale")
+    return build_candidate_mastery_overview(fixture.bundle, now=DEMO_NOW)
+
+
 def _assert_candidate_contract_has_no_percentage() -> None:
     payload = _overview("multi-context-strong").model_dump(mode="json")
     rendered = repr(payload).lower()
@@ -343,7 +393,11 @@ def _cases() -> list[MasteryIntegrityCase]:
     aging_one = replace(strong_one, occurred_at=NOW - timedelta(days=120))
     aging_two = replace(strong_two, occurred_at=NOW - timedelta(days=100))
     breakpoint = MasteryBreakpointFact(
-        _uuid(8300, 1), "OPEN", frozenset((strong_negative.evidence_id,))
+        _uuid(8300, 1),
+        "OPEN",
+        "HIGH",
+        NOW - timedelta(days=1),
+        frozenset((strong_negative.evidence_id,)),
     )
     skill_two = replace(strong_two, concept_family_key="hashing")
     memorized = replace(
@@ -352,6 +406,20 @@ def _cases() -> list[MasteryIntegrityCase]:
         demonstrates_reasoning_or_application=False,
     )
     three_meaningful = (*rich_same_session,)
+    lower_priority_breakpoint = MasteryBreakpointFact(
+        _uuid(8300, 2),
+        "OPEN",
+        "LOW",
+        NOW - timedelta(days=30),
+        frozenset((strong_negative.evidence_id,)),
+    )
+    higher_priority_breakpoint = MasteryBreakpointFact(
+        _uuid(8300, 3),
+        "OPEN",
+        "HIGH",
+        NOW - timedelta(days=1),
+        frozenset((strong_negative.evidence_id,)),
+    )
 
     cases = [
         MasteryIntegrityCase(
@@ -914,8 +982,225 @@ def _cases() -> list[MasteryIntegrityCase]:
                 ("WEAK", "mastery_policy_v2", "STALE"),
             ),
         ),
+        MasteryIntegrityCase(
+            81,
+            "execution-only mixed rows do not create high sufficiency",
+            lambda: _expect(
+                _decision(
+                    *(
+                        _fact(
+                            80 + index,
+                            polarity="MIXED",
+                            application=False,
+                            demonstration_form="EXECUTION_ONLY",
+                        )
+                        for index in range(1, 4)
+                    )
+                ),
+                state="EXPOSED",
+                sufficiency="LOW",
+            ),
+        ),
+        MasteryIntegrityCase(
+            82,
+            "context variants of one mixed observation do not create high sufficiency",
+            lambda: _expect(
+                _decision(
+                    *(
+                        _fact(
+                            83 + index,
+                            polarity="MIXED",
+                            observation="shared-candidate-observation",
+                            context=f"context-only-variant-{index}",
+                        )
+                        for index in range(1, 4)
+                    )
+                ),
+                state="EXPOSED",
+                sufficiency="MEDIUM",
+            ),
+        ),
+        MasteryIntegrityCase(
+            83,
+            "later independent mixed self-correction verifies teaching",
+            lambda: _expect(
+                _decision(
+                    taught,
+                    _fact(
+                        87,
+                        days_ago=0,
+                        polarity="MIXED",
+                        is_self_correction=True,
+                    ),
+                ),
+                state="DEVELOPING",
+                freshness="CURRENT",
+                retest=False,
+            ),
+        ),
+        MasteryIntegrityCase(
+            84,
+            "after-probe mixed correction does not verify teaching independently",
+            lambda: _assert_equal(
+                _decision(
+                    taught,
+                    _fact(
+                        88,
+                        days_ago=0,
+                        polarity="MIXED",
+                        independence="AFTER_PROBE",
+                        is_self_correction=True,
+                    ),
+                ).retest_reason,
+                "INDEPENDENCE_NOT_VERIFIED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            85,
+            "assisted mixed correction does not verify teaching independently",
+            lambda: _assert_equal(
+                _decision(
+                    taught,
+                    _fact(
+                        89,
+                        days_ago=0,
+                        polarity="MIXED",
+                        independence="AFTER_LIGHT_GUIDANCE",
+                        is_self_correction=True,
+                    ),
+                ).retest_reason,
+                "INDEPENDENCE_NOT_VERIFIED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            86,
+            "verified mixed self-correction remains mixed",
+            lambda: _assert_equal(
+                _fact(90, polarity="MIXED", is_self_correction=True).polarity,
+                "MIXED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            87,
+            "all-independent strong copy states repeated independence",
+            lambda: _assert_equal(
+                _decision(strong_one, strong_two).explanation,
+                "You demonstrated this independently across multiple distinct contexts.",
+            ),
+        ),
+        MasteryIntegrityCase(
+            88,
+            "after-probe strong copy preserves mixed independence",
+            lambda: _assert_equal(
+                _decision(
+                    strong_one,
+                    replace(strong_two, independence="AFTER_PROBE"),
+                ).explanation,
+                "You demonstrated this across multiple distinct contexts, including fully "
+                "independent evidence.",
+            ),
+        ),
+        MasteryIntegrityCase(
+            89,
+            "breakpoint priority ignores input order",
+            lambda: _assert_equal(
+                (
+                    _decision(
+                        strong_one,
+                        breakpoints=(
+                            lower_priority_breakpoint,
+                            higher_priority_breakpoint,
+                        ),
+                    ).unresolved_breakpoint_ids,
+                    _decision(
+                        strong_one,
+                        breakpoints=(
+                            higher_priority_breakpoint,
+                            lower_priority_breakpoint,
+                        ),
+                    ).unresolved_breakpoint_ids,
+                ),
+                (
+                    (
+                        higher_priority_breakpoint.breakpoint_id,
+                        lower_priority_breakpoint.breakpoint_id,
+                    ),
+                    (
+                        higher_priority_breakpoint.breakpoint_id,
+                        lower_priority_breakpoint.breakpoint_id,
+                    ),
+                ),
+            ),
+        ),
+        MasteryIntegrityCase(
+            90,
+            "skill-only fixture retest is not an actionable recommendation",
+            lambda: _assert_equal(
+                (
+                    _skill_only_retest_overview().interview_skills[0].retest_due,
+                    _skill_only_retest_overview().interview_skills[0].recommendation_id,
+                    _skill_only_retest_overview().retest_recommendations,
+                ),
+                (True, None, []),
+            ),
+        ),
+        MasteryIntegrityCase(
+            91,
+            "concept fixture retest keeps an actionable recommendation",
+            lambda: _assert_true(_concept_retest_overview().retest_recommendations),
+        ),
+        MasteryIntegrityCase(
+            92,
+            "all-untested persisted projection is cold start",
+            lambda: _assert_equal(
+                (
+                    _persisted_untested_overview().status,
+                    _persisted_untested_overview().technical_concepts,
+                    _persisted_untested_overview().message,
+                ),
+                (
+                    "EMPTY",
+                    [],
+                    "CounterQ is still learning where your interview strengths are. "
+                    "Complete a few interviews to build an evidence-backed view.",
+                ),
+            ),
+        ),
+        MasteryIntegrityCase(
+            93,
+            "mixed verification can leave a separate contradiction retest",
+            lambda: _assert_equal(
+                _decision(
+                    strong_negative,
+                    taught,
+                    _fact(
+                        91,
+                        days_ago=0,
+                        polarity="MIXED",
+                        is_self_correction=True,
+                    ),
+                ).retest_reason,
+                "CONTRADICTORY_EVIDENCE",
+            ),
+        ),
+        MasteryIntegrityCase(
+            94,
+            "mixed verification removes the false independence explanation",
+            lambda: _assert_false(
+                "not yet seen you verify this independently"
+                in _decision(
+                    taught,
+                    _fact(
+                        92,
+                        days_ago=0,
+                        polarity="MIXED",
+                        is_self_correction=True,
+                    ),
+                ).explanation
+            ),
+        ),
     ]
-    assert [item.number for item in cases] == list(range(1, 81))
+    assert [item.number for item in cases] == list(range(1, 95))
     return cases
 
 
@@ -929,7 +1214,7 @@ def test_stage8_deterministic_mastery_corpus(case: MasteryIntegrityCase) -> None
 
 
 def test_stage8_evaluation_case_count() -> None:
-    assert len(_cases()) == 80
+    assert len(_cases()) == 94
 
 
 def test_persisted_projection_metadata_is_read_truth() -> None:

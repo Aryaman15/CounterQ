@@ -248,9 +248,17 @@ describe("Stage 8A Mastery Map", () => {
     render(<MasteryExperience overview={overview()} />);
     fireEvent.click(screen.getByRole("button", { name: /open sliding window mastery detail/i }));
 
-    expect(screen.getByText(/summarizes child projections/i)).toBeInTheDocument();
-    expect(screen.getByText(/creates no synthetic Evidence/i)).toBeInTheDocument();
+    expect(screen.getByText(/combines the child concepts below/i)).toBeInTheDocument();
+    expect(screen.getByText(/individual evidence remains the basis/i)).toBeInTheDocument();
     expect(screen.queryByText("Evidence timeline")).not.toBeInTheDocument();
+  });
+
+  it("keeps internal policy-version language out of the candidate overview", () => {
+    render(<MasteryExperience overview={overview()} />);
+
+    expect(screen.queryByText("Policy")).not.toBeInTheDocument();
+    expect(screen.queryByText(/mastery policy v1/i)).not.toBeInTheDocument();
+    expect(screen.getByText("New Grad")).toBeInTheDocument();
   });
 
   it("closes the drawer with Escape and restores keyboard focus", async () => {
