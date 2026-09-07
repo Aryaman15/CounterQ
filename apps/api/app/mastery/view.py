@@ -275,7 +275,7 @@ def _overview_response(
 ) -> CandidateMasteryOverviewResponse:
     has_evidence = bool(technical or skills)
     message = (
-        "What CounterQ has evidence you can defend independently."
+        "What CounterQ has learned from your evidence across interviews."
         if has_evidence
         else (
             "CounterQ is still learning where your interview strengths are. "
@@ -566,6 +566,8 @@ def _next_action(decision: MasteryProjectionDecision) -> str:
             ),
             "STALE_VERIFICATION": "Refresh this strong area with a different independent context.",
         }[decision.retest_reason.value]
+    if decision.state == "WEAK":
+        return "Revisit this gap in a clean independent context and show the reasoning holds."
     if decision.state == "DEVELOPING":
         return "Demonstrate this independently in another distinct context."
     if decision.state == "EXPOSED":

@@ -27,6 +27,7 @@ from app.mastery.schema import CandidateMasteryOverviewResponse, CandidateMaster
 from app.mastery.source import MasterySourceBuilder, _identity
 from app.mastery.view import (
     PersistedMasteryProjection,
+    _next_action,
     build_candidate_mastery_overview,
     build_persisted_candidate_mastery_overview,
 )
@@ -315,6 +316,18 @@ def _skill_only_retest_overview() -> CandidateMasteryOverviewResponse:
 def _concept_retest_overview() -> CandidateMasteryOverviewResponse:
     fixture = _fixture("strong-but-stale")
     return build_candidate_mastery_overview(fixture.bundle, now=DEMO_NOW)
+
+
+def _weak_without_retest_overview() -> CandidateMasteryOverviewResponse:
+    return _overview("multi-context-strong")
+
+
+def _weak_without_retest_target() -> CandidateMasteryTarget:
+    return next(
+        item
+        for item in _weak_without_retest_overview().technical_concepts
+        if item.state == "WEAK"
+    )
 
 
 def _assert_candidate_contract_has_no_percentage() -> None:
@@ -1399,8 +1412,61 @@ def _cases() -> list[MasteryIntegrityCase]:
                 "MEDIUM",
             ),
         ),
+        MasteryIntegrityCase(
+            103,
+            "weak next action does not deny meaningful evidence",
+            lambda: _assert_false(
+                "needs meaningful evidence" in _weak_without_retest_target().next_action.lower()
+            ),
+        ),
+        MasteryIntegrityCase(
+            104,
+            "weak next action requests clean independent context",
+            lambda: _assert_equal(
+                _weak_without_retest_target().next_action,
+                "Revisit this gap in a clean independent context and show the reasoning holds.",
+            ),
+        ),
+        MasteryIntegrityCase(
+            105,
+            "weak unresolved breakpoint keeps its specific next action",
+            lambda: _assert_equal(
+                _next_action(
+                    _decision(strong_negative, breakpoints=(breakpoint,))
+                ),
+                "Verify the unresolved gap independently in a different context.",
+            ),
+        ),
+        MasteryIntegrityCase(
+            106,
+            "weak explicit independence retest keeps its specific next action",
+            lambda: _assert_equal(
+                _next_action(_decision(strong_negative, taught)),
+                "Verify this independently without repeating the taught prompt.",
+            ),
+        ),
+        MasteryIntegrityCase(
+            107,
+            "weak alone does not fabricate retest workflow",
+            lambda: _assert_equal(
+                (
+                    _weak_without_retest_target().retest_due,
+                    _weak_without_retest_target().recommendation_id,
+                    _weak_without_retest_overview().retest_recommendations,
+                ),
+                (False, None, []),
+            ),
+        ),
+        MasteryIntegrityCase(
+            108,
+            "mastery overview copy covers all evidence outcomes",
+            lambda: _assert_equal(
+                _weak_without_retest_overview().message,
+                "What CounterQ has learned from your evidence across interviews.",
+            ),
+        ),
     ]
-    assert [item.number for item in cases] == list(range(1, 103))
+    assert [item.number for item in cases] == list(range(1, 109))
     return cases
 
 
@@ -1414,7 +1480,7 @@ def test_stage8_deterministic_mastery_corpus(case: MasteryIntegrityCase) -> None
 
 
 def test_stage8_evaluation_case_count() -> None:
-    assert len(_cases()) == 102
+    assert len(_cases()) == 108
 
 
 def test_persisted_projection_metadata_is_read_truth() -> None:

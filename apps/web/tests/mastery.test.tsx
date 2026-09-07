@@ -126,7 +126,7 @@ function overview(overrides: Partial<Overview> = {}): Overview {
     mastery_policy_version: "mastery_policy_v1",
     target_level: "NEW_GRAD",
     updated_at: "2026-09-06T12:00:00Z",
-    message: "What CounterQ has evidence you can defend independently.",
+    message: "What CounterQ has learned from your evidence across interviews.",
     technical_concepts: [strong, developing, weak],
     parent_summaries: [parent],
     interview_skills: [exposedSkill],
@@ -174,6 +174,30 @@ describe("Stage 8A Mastery Map", () => {
     expect(screen.getByRole("region", { name: "Technical concepts" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Interview skills" })).toBeInTheDocument();
     expect(screen.getByText("Complexity reasoning")).toBeInTheDocument();
+  });
+
+  it("gives weak evidence a truthful next step without fabricating a retest action", () => {
+    const weak = target({
+      state: "WEAK",
+      state_label: "Needs work",
+      evidence_sufficiency: "MEDIUM",
+      evidence_sufficiency_label: "Some evidence",
+      reason: "Diagnostic evidence shows a meaningful gap that still needs verification.",
+      retest_due: false,
+      recommendation_id: null,
+      next_action: "Revisit this gap in a clean independent context and show the reasoning holds.",
+    });
+    render(<MasteryExperience overview={overview({
+      technical_concepts: [weak],
+      parent_summaries: [],
+      interview_skills: [],
+      retest_recommendations: [],
+    })} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /open boundary monotonicity/i }));
+    expect(screen.getByText(weak.next_action)).toBeInTheDocument();
+    expect(screen.queryByText(/needs meaningful evidence/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /CounterQ me again/i })).not.toBeInTheDocument();
   });
 
   it("shows freshness and an honest disabled Stage 8B retest action", () => {
