@@ -27,7 +27,6 @@ from app.interviews.models import (
     InterviewConfiguration,
     InterviewerPrompt,
     InterviewSession,
-    InterviewStageTransition,
 )
 from app.mastery.models import (
     ConceptMastery,
@@ -47,6 +46,7 @@ from app.mastery.policy import (
     MasteryEvidenceFact,
     MasteryTargetFacts,
 )
+from app.mastery.target_level import MasteryTargetLevelResolver
 from app.observation.models import CodeSnapshot, InterviewEvent
 from app.problems.models import Concept, ProblemVersion
 
@@ -95,11 +95,12 @@ class MasterySourceBuilder:
         admitted_only: bool = False,
     ) -> MasterySourceBundle:
         rows = await self._evidence_rows(user_id)
-        resolved_level: InterviewLevel = target_level or _latest_level(rows) or "NEW_GRAD"
+        resolved_level: InterviewLevel = target_level or await MasteryTargetLevelResolver(
+            self._session
+        ).resolve(user_id)
         evidence_ids = [row.evidence.id for row in rows]
         source_events = await self._source_events(evidence_ids)
         self_correction_ids = await self._self_correction_evidence_ids(rows, source_events)
-        stage_transitions = await self._stage_transitions({row.interview.id for row in rows})
         retest_ids = await self._retest_evidence_ids(evidence_ids)
         concept_links, skill_links = await self._target_links(evidence_ids)
         concept_admissions, skill_admissions = (
@@ -111,11 +112,12 @@ class MasterySourceBuilder:
         breakpoints = await self._breakpoints(user_id)
 
         rows_by_id = {row.evidence.id: row for row in rows}
-        concept_keys = {item.id: item.canonical_key for item in concepts.values()}
         concept_families: dict[UUID, str] = {}
         for concept in concepts.values():
             parent_key = (
-                concept_keys.get(concept.parent_concept_id) if concept.parent_concept_id else None
+                parent_metadata[concept.parent_concept_id].canonical_key
+                if concept.parent_concept_id in parent_metadata
+                else None
             )
             concept_families[concept.id] = parent_key or concept.canonical_key
         evidence_concept_families: dict[UUID, str] = {}
@@ -142,7 +144,6 @@ class MasterySourceBuilder:
                         retest_ids,
                         self_correction_ids,
                         concept_families.get(concept_id, family_key),
-                        _stage_context(row, events, stage_transitions),
                     )
                 )
             for skill_id in skill_links.get(evidence_id, ()):
@@ -155,7 +156,6 @@ class MasterySourceBuilder:
                         retest_ids,
                         self_correction_ids,
                         family_key,
-                        _stage_context(row, events, stage_transitions),
                     )
                 )
 
@@ -273,7 +273,7 @@ class MasterySourceBuilder:
                 CodeSnapshot.created_from_event_id.in_(evidence_event_ids)
             )
         )
-        snapshots_by_creation_event = dict(snapshot_rows.tuples())
+        snapshots_by_creation_event = dict(snapshot_rows.tuples().all())
 
         result: set[UUID] = set()
         for row in rows:
@@ -311,25 +311,6 @@ class MasterySourceBuilder:
         grouped: dict[UUID, list[InterviewEvent]] = defaultdict(list)
         for evidence_id, event in rows.all():
             grouped[evidence_id].append(event)
-        return {key: tuple(value) for key, value in grouped.items()}
-
-    async def _stage_transitions(
-        self,
-        session_ids: set[UUID],
-    ) -> dict[UUID, tuple[InterviewStageTransition, ...]]:
-        if not session_ids:
-            return {}
-        values = await self._session.scalars(
-            select(InterviewStageTransition)
-            .where(InterviewStageTransition.interview_session_id.in_(session_ids))
-            .order_by(
-                InterviewStageTransition.interview_session_id,
-                InterviewStageTransition.state_version,
-            )
-        )
-        grouped: dict[UUID, list[InterviewStageTransition]] = defaultdict(list)
-        for transition in values:
-            grouped[transition.interview_session_id].append(transition)
         return {key: tuple(value) for key, value in grouped.items()}
 
     async def _retest_evidence_ids(self, evidence_ids: list[UUID]) -> frozenset[UUID]:
@@ -440,10 +421,6 @@ class MasterySourceBuilder:
         return tuple((item, frozenset(ids)) for item, ids in grouped.values())
 
 
-def _latest_level(rows: tuple[_EvidenceRow, ...]) -> InterviewLevel | None:
-    return cast(InterviewLevel, rows[-1].configuration.level) if rows else None
-
-
 def _breakpoint_facts(
     rows: tuple[tuple[Breakpoint, frozenset[UUID]], ...],
     *,
@@ -472,28 +449,22 @@ def _fact(
     retest_ids: frozenset[UUID],
     self_correction_ids: frozenset[UUID],
     concept_family_key: str,
-    stage_context: str,
 ) -> MasteryEvidenceFact:
-    event_types = tuple(sorted({item.event_type for item in events}))
     prompt_kind = row.prompt.kind if row.prompt else None
     probe_strategy = row.prompt.probe_strategy if row.prompt else None
-    context_key = _identity(
-        "context",
-        str(row.problem.id),
-        row.configuration.mode,
-        stage_context,
-        row.evidence.evidence_type,
-        prompt_kind or "NO_PROMPT",
-        probe_strategy or "NO_STRATEGY",
-        ",".join(event_types),
+    demonstration_form = _demonstration_form(events, probe_strategy)
+    context_key = _semantic_context_key(
+        problem_id=row.problem.problem_id,
+        demonstration_form=demonstration_form,
+        probe_strategy=probe_strategy,
     )
     observation_key = _identity("observation", *(str(item.id) for item in events))
-    event_type_set = set(event_types)
-    application = not event_type_set or event_type_set != {"TEST_COMPLETED"}
+    application = _demonstrates_reasoning_or_application(events)
     return MasteryEvidenceFact(
         evidence_id=row.evidence.id,
         session_id=row.interview.id,
         problem_version_id=row.problem.id,
+        problem_id=row.problem.problem_id,
         occurred_at=row.evidence.created_at,
         polarity=cast(EvidencePolarity, row.evidence.polarity),
         strength=cast(EvidenceStrength, row.evidence.strength),
@@ -504,6 +475,7 @@ def _fact(
         context_key=context_key,
         observation_key=observation_key,
         concept_family_key=concept_family_key,
+        demonstration_form=demonstration_form,
         prompt_kind=prompt_kind,
         probe_strategy=probe_strategy,
         is_retest=row.evidence.id in retest_ids,
@@ -531,28 +503,63 @@ def _is_independent_self_correction(
     )
 
 
-def _stage_context(
-    row: _EvidenceRow,
+def _demonstrates_reasoning_or_application(
     events: tuple[InterviewEvent, ...],
-    transitions: dict[UUID, tuple[InterviewStageTransition, ...]],
-) -> str:
-    session_transitions = transitions.get(row.interview.id, ())
-    stages: set[str] = set()
-    for event in events:
-        eligible = tuple(
-            item
-            for item in session_transitions
-            if item.state_version <= event.interview_state_version
+) -> bool:
+    return any(
+        event.event_type == "TRANSCRIPT_FINALIZED"
+        or event.event_type == "MEANINGFUL_CODE_CHANGE"
+        or (
+            event.event_type == "CODE_SNAPSHOT_CREATED"
+            and event.payload.get("trigger") != "INITIAL_EDITOR_STATE"
         )
-        if eligible:
-            stages.add(eligible[-1].to_stage)
-        elif session_transitions:
-            stages.add(session_transitions[0].from_stage)
-        else:
-            stages.add(row.interview.current_stage)
-    if not stages:
-        stages.add(row.interview.current_stage)
-    return ",".join(sorted(stages))
+        for event in events
+    )
+
+
+def _demonstration_form(
+    events: tuple[InterviewEvent, ...], probe_strategy: str | None
+) -> str:
+    event_types = {event.event_type for event in events}
+    meaningful_code = _demonstrates_reasoning_or_application(
+        tuple(
+            event
+            for event in events
+            if event.event_type in {"CODE_SNAPSHOT_CREATED", "MEANINGFUL_CODE_CHANGE"}
+        )
+    )
+    has_reasoning = "TRANSCRIPT_FINALIZED" in event_types
+    has_execution = bool(
+        event_types.intersection({"RUN_CLICKED", "COMPILE_COMPLETED", "TEST_COMPLETED"})
+    )
+    if probe_strategy in {"TRANSFER", "CONSTRAINT_MUTATION"}:
+        return probe_strategy
+    if meaningful_code and has_execution:
+        return "DEBUGGING_APPLICATION"
+    if meaningful_code and has_reasoning:
+        return "EXPLANATION_AND_IMPLEMENTATION"
+    if meaningful_code:
+        return "IMPLEMENTATION"
+    if has_reasoning:
+        return "EXPLANATION"
+    if has_execution:
+        return "EXECUTION_ONLY"
+    return "OTHER_OBSERVATION"
+
+
+def _semantic_context_key(
+    *,
+    problem_id: UUID,
+    demonstration_form: str,
+    probe_strategy: str | None,
+) -> str:
+    diagnostic_strategy = probe_strategy or "NO_DIAGNOSTIC_STRATEGY"
+    return _identity(
+        "semantic-context-v2",
+        str(problem_id),
+        demonstration_form,
+        diagnostic_strategy,
+    )
 
 
 def _identity(namespace: str, *parts: str) -> str:

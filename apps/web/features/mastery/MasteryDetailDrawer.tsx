@@ -98,7 +98,7 @@ function EvidenceItem({ item }: { item: Evidence }) {
       <div>
         <header><strong>{item.problem}</strong><time dateTime={item.recorded_at}>{new Date(item.recorded_at).toLocaleDateString("en", { month: "short", day: "numeric", year: "numeric" })}</time></header>
         <p>{item.finding}</p>
-        <small>{titleCase(item.mode)} · {titleCase(item.independence)}{item.retest_linked ? " · Independent retest" : ""}</small>
+        <small>{titleCase(item.mode)} · {titleCase(item.independence)}{item.retest_linked ? ` · ${retestLabel(item.independence)}` : ""}</small>
         {assisted ? <em>Learning / assisted Evidence</em> : null}
       </div>
     </li>
@@ -107,4 +107,10 @@ function EvidenceItem({ item }: { item: Evidence }) {
 
 function titleCase(value: string) {
   return value.toLowerCase().split("_").map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`).join(" ");
+}
+
+function retestLabel(independence: Evidence["independence"]) {
+  if (independence === "INDEPENDENT") return "Independent retest";
+  if (independence === "AFTER_PROBE") return "Diagnostic retest after probe";
+  return "Retest evidence";
 }

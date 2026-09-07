@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.models import User
+from app.evidence.models import Evidence
 from app.mastery.models import (
     ConceptMastery,
     ConceptMasteryEvidence,
@@ -24,7 +25,6 @@ from app.mastery.models import (
 )
 from app.mastery.policy import (
     MASTERY_POLICY_VERSION,
-    MasteryEvidenceContribution,
     MasteryPolicyV1,
     MasteryProjectionDecision,
     RetestReason,
@@ -72,19 +72,49 @@ class MasteryRecalculationService:
         self,
         *,
         user_id: UUID,
+        work_claim: OutboxWorkClaim | None = None,
+    ) -> MasteryRecalculationResult:
+        return await self._recalculate(user_id=user_id, work_claim=work_claim)
+
+    async def recalculate_for_development(
+        self,
+        *,
+        user_id: UUID,
         target_level: Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"],
         work_claim: OutboxWorkClaim | None = None,
     ) -> MasteryRecalculationResult:
-        now = self._clock()
-        if now.tzinfo is None:
-            raise MasteryRecalculationError("INVALID_CLOCK", "Mastery clock must be timezone-aware")
+        """Explicit test/development seam; production work never accepts this override."""
+
+        return await self._recalculate(
+            user_id=user_id,
+            work_claim=work_claim,
+            development_target_level=target_level,
+        )
+
+    async def _recalculate(
+        self,
+        *,
+        user_id: UUID,
+        work_claim: OutboxWorkClaim | None,
+        development_target_level: Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]
+        | None = None,
+    ) -> MasteryRecalculationResult:
         async with self._sessionmaker() as session, session.begin():
             if work_claim is not None:
                 await _assert_work_claim(session, work_claim)
             user = await session.scalar(select(User).where(User.id == user_id).with_for_update())
             if user is None:
                 raise MasteryRecalculationError("USER_NOT_FOUND", "Mastery user was not found")
-            bundle = await MasterySourceBuilder(session).build(user_id, target_level=target_level)
+            requested_now = self._clock()
+            if requested_now.tzinfo is None:
+                raise MasteryRecalculationError(
+                    "INVALID_CLOCK", "Mastery clock must be timezone-aware"
+                )
+            now = await _monotonic_projection_time(session, user_id, requested_now)
+            bundle = await MasterySourceBuilder(session).build(
+                user_id,
+                target_level=development_target_level,
+            )
             transition_count = 0
             association_count = 0
             for target in bundle.targets:
@@ -177,6 +207,7 @@ async def _persist_projection(
             )
         )
     previous_state = row.state if row is not None else "UNTESTED"
+    previous_projection_version = row.projection_version if row is not None else 0
     existing_links = {
         item.evidence_id: (
             item.contribution_classification,
@@ -253,9 +284,11 @@ async def _persist_projection(
         transition_key = _transition_key(
             user_id,
             target,
+            previous_projection_version,
             previous_state,
             decision.state,
-            decision.contributions,
+            frozenset(existing_links),
+            frozenset(desired_links),
             policy_version,
         )
         existing_transition = await session.scalar(
@@ -275,11 +308,17 @@ async def _persist_projection(
             )
             session.add(transition)
             await session.flush()
+            audit_evidence_ids = frozenset(existing_links) | frozenset(desired_links)
+            existing_evidence_ids = frozenset(
+                await session.scalars(
+                    select(Evidence.id).where(Evidence.id.in_(audit_evidence_ids))
+                )
+            )
             session.add_all(
                 MasteryTransitionEvidence(
-                    mastery_transition_id=transition.id, evidence_id=item.evidence_id
+                    mastery_transition_id=transition.id, evidence_id=evidence_id
                 )
-                for item in decision.contributions
+                for evidence_id in sorted(existing_evidence_ids, key=str)
             )
             transition_created = True
     return semantic_changed, transition_created
@@ -355,6 +394,11 @@ async def _sync_recommendation(
             .with_for_update()
         )
     )
+    if target.family == "SKILL":
+        for item in active:
+            item.status = "SUPERSEDED"
+            item.updated_at = now
+        return
     if not decision.retest_due or decision.retest_reason is None:
         for item in active:
             item.status = "SUPERSEDED"
@@ -369,7 +413,7 @@ async def _sync_recommendation(
         (item for item in active if item.recommendation_key == recommendation_key), None
     )
     for item in active:
-        if item is not matching and item.status == "PENDING":
+        if item is not matching:
             item.status = "SUPERSEDED"
             item.updated_at = now
     if matching is not None:
@@ -389,8 +433,8 @@ async def _sync_recommendation(
         RetestRecommendation(
             user_id=user_id,
             breakpoint_id=breakpoint_id,
-            concept_id=target.target_id if target.family == "CONCEPT" else None,
-            skill_dimension_id=target.target_id if target.family == "SKILL" else None,
+            concept_id=target.target_id,
+            skill_dimension_id=None,
             recommended_after=now,
             priority=priority,
             status="PENDING",
@@ -407,22 +451,58 @@ async def _sync_recommendation(
 def _transition_key(
     user_id: UUID,
     target: MasteryTargetSource,
+    previous_projection_version: int,
     from_state: str,
     to_state: str,
-    contributions: tuple[MasteryEvidenceContribution, ...],
+    before_evidence_ids: frozenset[UUID],
+    after_evidence_ids: frozenset[UUID],
     policy_version: str,
 ) -> str:
-    evidence_ids = sorted(str(item.evidence_id) for item in contributions)
     return _hash(
         "transition",
         str(user_id),
         target.family,
         str(target.target_id),
+        str(previous_projection_version),
         from_state,
         to_state,
         policy_version,
-        *evidence_ids,
+        "before",
+        *(sorted(str(item) for item in before_evidence_ids)),
+        "after",
+        *(sorted(str(item) for item in after_evidence_ids)),
     )
+
+
+async def _monotonic_projection_time(
+    session: AsyncSession,
+    user_id: UUID,
+    requested_now: datetime,
+) -> datetime:
+    timestamps: list[datetime] = [requested_now]
+    timestamps.extend(
+        await session.scalars(
+            select(ConceptMastery.last_evaluated_at).where(
+                ConceptMastery.user_id == user_id
+            )
+        )
+    )
+    timestamps.extend(
+        await session.scalars(
+            select(ConceptMastery.updated_at).where(ConceptMastery.user_id == user_id)
+        )
+    )
+    timestamps.extend(
+        await session.scalars(
+            select(SkillMastery.last_evaluated_at).where(SkillMastery.user_id == user_id)
+        )
+    )
+    timestamps.extend(
+        await session.scalars(
+            select(SkillMastery.updated_at).where(SkillMastery.user_id == user_id)
+        )
+    )
+    return max(timestamps)
 
 
 def _hash(*parts: str) -> str:

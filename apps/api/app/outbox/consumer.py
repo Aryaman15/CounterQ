@@ -246,7 +246,7 @@ class PostSessionOutboxConsumer:
                     payload={
                         "user_id": str(interview.user_id),
                         "source_interview_session_id": str(event.interview_session_id),
-                        "target_level": configuration.level,
+                        "source_session_level": configuration.level,
                         "mastery_policy_version": MASTERY_POLICY_VERSION,
                     },
                     deduplication_key=mastery_key,
@@ -262,11 +262,9 @@ class PostSessionOutboxConsumer:
         attempt: int,
     ) -> ConsumerResult:
         user_id = event.payload.get("user_id")
-        target_level = event.payload.get("target_level")
         policy_version = event.payload.get("mastery_policy_version")
         if (
             not isinstance(user_id, str)
-            or target_level not in {"INTERN", "NEW_GRAD", "EARLY_CAREER"}
             or policy_version != MASTERY_POLICY_VERSION
         ):
             return await self._record_failure(
@@ -284,7 +282,6 @@ class PostSessionOutboxConsumer:
             )
         await self._mastery_service.recalculate(
             user_id=parsed_user_id,
-            target_level=target_level,
             work_claim=OutboxWorkClaim(event.id, attempt),
         )
         async with self._sessionmaker() as session:

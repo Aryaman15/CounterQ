@@ -23,9 +23,13 @@ from app.mastery.policy import (
     MasteryProjectionDecision,
     MasteryTargetFacts,
 )
-from app.mastery.schema import CandidateMasteryOverviewResponse
+from app.mastery.schema import CandidateMasteryOverviewResponse, CandidateMasteryTarget
 from app.mastery.source import MasterySourceBuilder, _identity
-from app.mastery.view import build_candidate_mastery_overview
+from app.mastery.view import (
+    PersistedMasteryProjection,
+    build_candidate_mastery_overview,
+    build_persisted_candidate_mastery_overview,
+)
 
 NOW = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
 
@@ -46,6 +50,7 @@ def _fact(
     *,
     session: int = 1,
     problem: int = 1,
+    stable_problem: int | None = None,
     days_ago: int = 1,
     polarity: str = "POSITIVE",
     strength: str = "STRONG",
@@ -58,11 +63,13 @@ def _fact(
     is_retest: bool = False,
     is_self_correction: bool = False,
     application: bool = True,
+    demonstration_form: str = "EXPLANATION",
 ) -> MasteryEvidenceFact:
     return MasteryEvidenceFact(
         evidence_id=_uuid(8000, number),
         session_id=_uuid(8100, session),
         problem_version_id=_uuid(8200, problem),
+        problem_id=_uuid(8250, stable_problem if stable_problem is not None else problem),
         occurred_at=NOW - timedelta(days=days_ago),
         polarity=polarity,  # type: ignore[arg-type]
         strength=strength,  # type: ignore[arg-type]
@@ -73,6 +80,7 @@ def _fact(
         context_key=context or f"context-{number}",
         observation_key=observation or f"observation-{number}",
         concept_family_key=family,
+        demonstration_form=demonstration_form,
         valid=valid,
         is_retest=is_retest,
         is_self_correction=is_self_correction,
@@ -159,6 +167,104 @@ def _assert_parent_has_no_synthetic_evidence() -> None:
     parent = _overview("multi-context-strong").parent_summaries[0]
     assert parent.evidence == []
     assert parent.child_target_ids
+
+
+def _single_child_parent(child_state: str) -> CandidateMasteryTarget:
+    fixture = _fixture("multi-context-strong")
+    source = next(
+        item
+        for item in fixture.bundle.targets
+        if item.family == "CONCEPT"
+        and MasteryPolicyV1().evaluate(item.facts, now=DEMO_NOW).state == child_state
+    )
+    bundle = replace(fixture.bundle, targets=(source,))
+    return build_candidate_mastery_overview(bundle, now=DEMO_NOW).parent_summaries[0]
+
+
+def _parent_with_freshness(days_ago: int) -> CandidateMasteryTarget:
+    fixture = _fixture("multi-context-strong")
+    source = next(
+        item
+        for item in fixture.bundle.targets
+        if item.family == "CONCEPT"
+        and MasteryPolicyV1().evaluate(item.facts, now=DEMO_NOW).state == "STRONG"
+    )
+    facts = replace(
+        source.facts,
+        evidence=tuple(
+            replace(item, occurred_at=DEMO_NOW - timedelta(days=days_ago))
+            for item in source.facts.evidence
+        ),
+    )
+    bundle = replace(fixture.bundle, targets=(replace(source, facts=facts),))
+    return build_candidate_mastery_overview(bundle, now=DEMO_NOW).parent_summaries[0]
+
+
+def _all_low_parent() -> CandidateMasteryTarget:
+    fixture = _fixture("multi-context-strong")
+    source = next(
+        item
+        for item in fixture.bundle.targets
+        if item.canonical_key == "sliding_window_state_maintenance"
+    )
+    sibling = replace(
+        source,
+        target_id=_uuid(8700, 1),
+        canonical_key="another_low_child",
+        display_name="Another low child",
+        facts=replace(
+            source.facts,
+            evidence=tuple(
+                replace(
+                    item,
+                    evidence_id=_uuid(8701, index + 1),
+                    observation_key=f"low-observation-{index}",
+                )
+                for index, item in enumerate(source.facts.evidence)
+            ),
+        ),
+    )
+    bundle = replace(fixture.bundle, targets=(source, sibling))
+    return build_candidate_mastery_overview(bundle, now=DEMO_NOW).parent_summaries[0]
+
+
+def _persisted_overview(
+    *,
+    state: str,
+    policy_version: str = MASTERY_POLICY_VERSION,
+    status: str | None = None,
+) -> CandidateMasteryOverviewResponse:
+    fixture = _fixture("multi-context-strong")
+    source = next(
+        item
+        for item in fixture.bundle.targets
+        if item.family == "CONCEPT"
+        and MasteryPolicyV1().evaluate(item.facts, now=DEMO_NOW).state == "STRONG"
+    )
+    expected = MasteryPolicyV1().evaluate(source.facts, now=DEMO_NOW)
+    projection = PersistedMasteryProjection(
+        family="CONCEPT",
+        target_id=source.target_id,
+        state=state,  # type: ignore[arg-type]
+        mastery_policy_version=policy_version,
+        projection_version=7,
+        last_evaluated_at=DEMO_NOW - timedelta(minutes=5),
+        last_evidence_at=expected.last_evidence_at,
+        supporting_evidence_count=len(expected.supporting_evidence_ids),
+        context_diversity=expected.distinct_context_count,
+        updated_at=DEMO_NOW - timedelta(minutes=5),
+        contributions=tuple(
+            (item.evidence_id, item.classification, item.context_key)
+            for item in expected.contributions
+        ),
+    )
+    bundle = replace(fixture.bundle, targets=(source,))
+    return build_persisted_candidate_mastery_overview(
+        bundle,
+        (projection,),
+        now=DEMO_NOW,
+        status=status,
+    )
 
 
 def _assert_candidate_contract_has_no_percentage() -> None:
@@ -582,8 +688,234 @@ def _cases() -> list[MasteryIntegrityCase]:
             ),
         ),
         MasteryIntegrityCase(58, "mastery generation requires no AI", _assert_no_ai_dependency),
+        MasteryIntegrityCase(
+            59,
+            "execution-only strong negative is not weak",
+            lambda: _expect(
+                _decision(replace(strong_negative, demonstrates_reasoning_or_application=False)),
+                state="EXPOSED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            60,
+            "defended strong negative remains diagnostic",
+            lambda: _expect(_decision(strong_negative), state="WEAK"),
+        ),
+        MasteryIntegrityCase(
+            61,
+            "mixed independent correction develops",
+            lambda: _expect(
+                _decision(_fact(61, polarity="MIXED", is_self_correction=True)),
+                state="DEVELOPING",
+            ),
+        ),
+        MasteryIntegrityCase(
+            62,
+            "mixed correction remains supporting without polarity rewrite",
+            lambda: _assert_equal(
+                (
+                    _decision(
+                        _fact(62, polarity="MIXED", is_self_correction=True)
+                    ).contributions[0].classification,
+                    _fact(62, polarity="MIXED", is_self_correction=True).polarity,
+                ),
+                ("SUPPORTING", "MIXED"),
+            ),
+        ),
+        MasteryIntegrityCase(
+            63,
+            "after-probe mixed correction is not independent",
+            lambda: _expect(
+                _decision(
+                    _fact(
+                        63,
+                        polarity="MIXED",
+                        independence="AFTER_PROBE",
+                        is_self_correction=True,
+                    )
+                ),
+                state="EXPOSED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            64,
+            "assisted mixed correction is not independent",
+            lambda: _expect(
+                _decision(
+                    _fact(
+                        64,
+                        polarity="MIXED",
+                        independence="AFTER_LIGHT_GUIDANCE",
+                        is_self_correction=True,
+                    )
+                ),
+                state="EXPOSED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            65,
+            "self-correction alone cannot become strong",
+            lambda: _assert_not_equal(
+                _decision(_fact(65, polarity="MIXED", is_self_correction=True)).state,
+                "STRONG",
+            ),
+        ),
+        MasteryIntegrityCase(
+            66,
+            "isolated negative plus mixed correction develops",
+            lambda: _expect(
+                _decision(
+                    moderate_negative,
+                    _fact(66, days_ago=0, polarity="MIXED", is_self_correction=True),
+                ),
+                state="DEVELOPING",
+            ),
+        ),
+        MasteryIntegrityCase(
+            67,
+            "repeated misconception can remain weak after correction",
+            lambda: _expect(
+                _decision(
+                    moderate_negative,
+                    second_moderate_negative,
+                    _fact(67, days_ago=0, polarity="MIXED", is_self_correction=True),
+                ),
+                state="WEAK",
+            ),
+        ),
+        MasteryIntegrityCase(
+            68,
+            "stable problem count ignores immutable version count",
+            lambda: _assert_equal(
+                _decision(
+                    _fact(68, problem=1, stable_problem=1),
+                    _fact(
+                        69,
+                        session=2,
+                        problem=2,
+                        stable_problem=1,
+                        context="grounded-second-form",
+                    ),
+                ).distinct_problem_count,
+                1,
+            ),
+        ),
+        MasteryIntegrityCase(
+            69,
+            "skill strong needs distinct stable problems",
+            lambda: _expect(
+                _decision(
+                    _fact(70, problem=1, stable_problem=1),
+                    _fact(
+                        71,
+                        session=2,
+                        problem=2,
+                        stable_problem=1,
+                        context="different-context",
+                        family="hashing",
+                    ),
+                    family="SKILL",
+                ),
+                state="DEVELOPING",
+            ),
+        ),
+        MasteryIntegrityCase(
+            70,
+            "duplicate observation rows do not create high sufficiency",
+            lambda: _expect(
+                _decision(
+                    _fact(72, observation="same-observation", context="same-context"),
+                    _fact(73, observation="same-observation", context="same-context"),
+                    _fact(74, observation="same-observation", context="same-context"),
+                ),
+                state="DEVELOPING",
+                sufficiency="MEDIUM",
+            ),
+        ),
+        MasteryIntegrityCase(
+            71,
+            "rich distinct forms in one session may be high",
+            lambda: _expect(
+                _decision(
+                    _fact(75, context="explanation", demonstration_form="EXPLANATION"),
+                    _fact(76, context="implementation", demonstration_form="IMPLEMENTATION"),
+                    _fact(77, context="transfer", demonstration_form="TRANSFER"),
+                ),
+                state="DEVELOPING",
+                sufficiency="HIGH",
+            ),
+        ),
+        MasteryIntegrityCase(
+            72,
+            "after-probe explanation preserves diagnostic attribution",
+            lambda: _assert_true("diagnostic challenge" in _decision(after_probe).explanation),
+        ),
+        MasteryIntegrityCase(
+            73,
+            "after-probe weak explanation does not claim independence",
+            lambda: _assert_true(
+                "Diagnostic evidence"
+                in _decision(
+                    replace(strong_negative, independence="AFTER_PROBE")
+                ).explanation
+            ),
+        ),
+        MasteryIntegrityCase(
+            74,
+            "one strong child does not generalize parent strong",
+            lambda: _assert_equal(_single_child_parent("STRONG").state, "DEVELOPING"),
+        ),
+        MasteryIntegrityCase(
+            75,
+            "one weak child does not generalize parent weak",
+            lambda: _assert_equal(_single_child_parent("WEAK").state, "EXPOSED"),
+        ),
+        MasteryIntegrityCase(
+            76,
+            "low child coverage does not make parent high",
+            lambda: _assert_equal(_all_low_parent().evidence_sufficiency, "LOW"),
+        ),
+        MasteryIntegrityCase(
+            77,
+            "aging child keeps parent aging",
+            lambda: _assert_equal(_parent_with_freshness(100).freshness, "AGING"),
+        ),
+        MasteryIntegrityCase(
+            78,
+            "retest-due child keeps parent retest due",
+            lambda: _assert_equal(_parent_with_freshness(200).freshness, "RETEST_DUE"),
+        ),
+        MasteryIntegrityCase(
+            79,
+            "persisted state wins over shadow policy result",
+            lambda: _assert_equal(
+                (
+                    _persisted_overview(state="DEVELOPING").technical_concepts[0].state,
+                    _persisted_overview(state="DEVELOPING").status,
+                ),
+                ("DEVELOPING", "STALE"),
+            ),
+        ),
+        MasteryIntegrityCase(
+            80,
+            "unknown persisted policy is never relabeled as v1",
+            lambda: _assert_equal(
+                (
+                    _persisted_overview(
+                        state="WEAK", policy_version="mastery_policy_v2"
+                    ).technical_concepts[0].state,
+                    _persisted_overview(
+                        state="WEAK", policy_version="mastery_policy_v2"
+                    ).mastery_policy_version,
+                    _persisted_overview(
+                        state="WEAK", policy_version="mastery_policy_v2"
+                    ).status,
+                ),
+                ("WEAK", "mastery_policy_v2", "STALE"),
+            ),
+        ),
     ]
-    assert [item.number for item in cases] == list(range(1, 59))
+    assert [item.number for item in cases] == list(range(1, 81))
     return cases
 
 
@@ -597,7 +929,36 @@ def test_stage8_deterministic_mastery_corpus(case: MasteryIntegrityCase) -> None
 
 
 def test_stage8_evaluation_case_count() -> None:
-    assert len(_cases()) == 58
+    assert len(_cases()) == 80
+
+
+def test_persisted_projection_metadata_is_read_truth() -> None:
+    overview = _persisted_overview(state="STRONG")
+    target = overview.technical_concepts[0]
+
+    assert overview.status == "READY"
+    assert target.state == "STRONG"
+    assert target.mastery_policy_version == MASTERY_POLICY_VERSION
+    assert target.projection_version == 7
+    assert target.last_evidence_at is not None
+    assert target.supporting_evidence_count == 2
+    assert target.context_diversity == 2
+    assert target.last_evaluated_at == DEMO_NOW - timedelta(minutes=5)
+    assert target.projection_updated_at == DEMO_NOW - timedelta(minutes=5)
+
+
+def test_persisted_inconsistency_preserves_failed_status_and_state() -> None:
+    overview = _persisted_overview(state="DEVELOPING", status="FAILED")
+
+    assert overview.status == "FAILED"
+    assert overview.technical_concepts[0].state == "DEVELOPING"
+
+
+def test_unpersisted_demo_fixture_still_evaluates_production_policy() -> None:
+    overview = _overview("multi-context-strong")
+
+    assert any(item.state == "STRONG" for item in overview.technical_concepts)
+    assert all(item.mastery_policy_version is None for item in overview.technical_concepts)
 
 
 def test_non_fixture_view_does_not_fabricate_retest_workflow_state() -> None:

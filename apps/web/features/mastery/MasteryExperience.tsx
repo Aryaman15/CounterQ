@@ -33,6 +33,8 @@ export function MasteryExperience({ overview }: { overview: Overview }) {
     <section className="mastery-experience" aria-label="Mastery overview">
       {overview.status === "UPDATING" ? (
         <div className="mastery-update-note" role="status"><RotateCcw size={14} /> {overview.message}</div>
+      ) : overview.status === "STALE" ? (
+        <div className="mastery-update-note" role="status">{overview.message}</div>
       ) : overview.status === "FAILED" ? (
         <div className="mastery-update-note mastery-update-failed" role="status">{overview.message}</div>
       ) : null}

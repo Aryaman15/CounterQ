@@ -26,7 +26,7 @@ from app.mastery.models import (
     SkillMastery,
     SkillMasteryEvidence,
 )
-from app.mastery.policy import MASTERY_POLICY_VERSION
+from app.mastery.policy import MASTERY_POLICY_VERSION, ContributionClassification, MasteryState
 from app.mastery.schema import (
     CandidateMasteryOverviewResponse,
     DevelopmentMasteryFixtureResponse,
@@ -34,7 +34,11 @@ from app.mastery.schema import (
 )
 from app.mastery.service import initial_mastery_recalculation_key
 from app.mastery.source import MasterySourceBuilder
-from app.mastery.view import build_candidate_mastery_overview
+from app.mastery.view import (
+    PersistedMasteryProjection,
+    build_candidate_mastery_overview,
+    build_persisted_candidate_mastery_overview,
+)
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
 
@@ -44,7 +48,6 @@ router = APIRouter(prefix="/api/mastery", tags=["mastery"])
 class DevelopmentMasteryRecalculationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    target_level: Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]
     idempotency_key: str = Field(min_length=1, max_length=128)
 
 
@@ -92,18 +95,35 @@ async def development_user_mastery(
     skill_projections = list(
         await session.scalars(select(SkillMastery).where(SkillMastery.user_id == user_id))
     )
+    concept_associations = list(
+        await session.scalars(
+            select(ConceptMasteryEvidence).where(ConceptMasteryEvidence.user_id == user_id)
+        )
+    )
+    skill_associations = list(
+        await session.scalars(
+            select(SkillMasteryEvidence).where(SkillMasteryEvidence.user_id == user_id)
+        )
+    )
     recommendation_ids: dict[tuple[str, UUID], UUID] = {}
     recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] = {}
     for row in await session.scalars(
-        select(RetestRecommendation).where(
+        select(RetestRecommendation)
+        .where(
             RetestRecommendation.user_id == user_id,
             RetestRecommendation.status.in_(("PENDING", "SCHEDULED")),
+        )
+        .order_by(
+            RetestRecommendation.priority.desc(),
+            RetestRecommendation.recommended_after,
+            RetestRecommendation.created_at,
+            RetestRecommendation.id,
         )
     ):
         target_id = row.concept_id or row.skill_dimension_id
         if target_id is not None:
             target_type = "CONCEPT" if row.concept_id is not None else "SKILL"
-            recommendation_ids[(target_type, target_id)] = row.id
+            recommendation_ids.setdefault((target_type, target_id), row.id)
             recommendation_statuses[row.id] = cast(
                 Literal["PENDING", "SCHEDULED"], row.status
             )
@@ -122,18 +142,15 @@ async def development_user_mastery(
         response_status = "UPDATING"
     elif latest_job and latest_job.status == "FAILED":
         response_status = "FAILED"
-    projection_updated_at = max(
-        (
-            *(item.updated_at for item in concept_projections),
-            *(item.updated_at for item in skill_projections),
-        ),
-        default=None,
+    projections = _persisted_projections(
+        concept_projections,
+        skill_projections,
+        concept_associations,
+        skill_associations,
     )
-    policy_version = _projection_policy_version(concept_projections, skill_projections)
-    return build_candidate_mastery_overview(
+    return build_persisted_candidate_mastery_overview(
         bundle,
-        projection_updated_at=projection_updated_at,
-        mastery_policy_version=policy_version,
+        projections,
         recommendation_ids=recommendation_ids,
         recommendation_statuses=recommendation_statuses,
         status=response_status,
@@ -176,7 +193,6 @@ async def development_recalculate_mastery(
             payload={
                 "user_id": str(user_id),
                 "source_interview_session_id": str(interview.id),
-                "target_level": request.target_level,
                 "mastery_policy_version": MASTERY_POLICY_VERSION,
             },
             deduplication_key=key,
@@ -272,7 +288,85 @@ def _projection_policy_version(
         *(item.mastery_policy_version for item in concept_rows),
         *(item.mastery_policy_version for item in skill_rows),
     }
-    return next(iter(versions)) if len(versions) == 1 else MASTERY_POLICY_VERSION
+    if not versions:
+        return MASTERY_POLICY_VERSION
+    return next(iter(versions)) if len(versions) == 1 else "mixed_projection_versions"
+
+
+def _persisted_projections(
+    concept_rows: list[ConceptMastery],
+    skill_rows: list[SkillMastery],
+    concept_links: list[ConceptMasteryEvidence],
+    skill_links: list[SkillMasteryEvidence],
+) -> tuple[PersistedMasteryProjection, ...]:
+    concept_contributions: dict[
+        UUID, list[tuple[UUID, ContributionClassification, str]]
+    ] = {}
+    for concept_link in concept_links:
+        concept_contributions.setdefault(concept_link.concept_id, []).append(
+            (
+                concept_link.evidence_id,
+                cast(
+                    ContributionClassification,
+                    concept_link.contribution_classification,
+                ),
+                concept_link.context_key,
+            )
+        )
+    skill_contributions: dict[
+        UUID, list[tuple[UUID, ContributionClassification, str]]
+    ] = {}
+    for skill_link in skill_links:
+        skill_contributions.setdefault(skill_link.skill_dimension_id, []).append(
+            (
+                skill_link.evidence_id,
+                cast(
+                    ContributionClassification,
+                    skill_link.contribution_classification,
+                ),
+                skill_link.context_key,
+            )
+        )
+    projections = [
+        PersistedMasteryProjection(
+            family="CONCEPT",
+            target_id=row.concept_id,
+            state=cast(MasteryState, row.state),
+            mastery_policy_version=row.mastery_policy_version,
+            projection_version=row.projection_version,
+            last_evaluated_at=row.last_evaluated_at,
+            last_evidence_at=row.last_evidence_at,
+            supporting_evidence_count=row.supporting_evidence_count,
+            context_diversity=row.context_diversity,
+            updated_at=row.updated_at,
+            contributions=tuple(
+                sorted(concept_contributions.get(row.concept_id, []), key=lambda item: str(item[0]))
+            ),
+        )
+        for row in concept_rows
+    ]
+    projections.extend(
+        PersistedMasteryProjection(
+            family="SKILL",
+            target_id=row.skill_dimension_id,
+            state=cast(MasteryState, row.state),
+            mastery_policy_version=row.mastery_policy_version,
+            projection_version=row.projection_version,
+            last_evaluated_at=row.last_evaluated_at,
+            last_evidence_at=row.last_evidence_at,
+            supporting_evidence_count=row.supporting_evidence_count,
+            context_diversity=row.context_diversity,
+            updated_at=row.updated_at,
+            contributions=tuple(
+                sorted(
+                    skill_contributions.get(row.skill_dimension_id, []),
+                    key=lambda item: str(item[0]),
+                )
+            ),
+        )
+        for row in skill_rows
+    )
+    return tuple(sorted(projections, key=lambda item: (item.family, str(item.target_id))))
 
 
 def _require_development(settings: Settings) -> None:

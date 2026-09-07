@@ -27,8 +27,17 @@ from app.config.settings import create_settings, get_settings
 from app.db.ids import uuid7
 from app.db.session import build_engine
 from app.evidence.contracts import AssessmentSourceInput, CreateAssessmentCommand
-from app.evidence.models import Evidence
+from app.evidence.models import (
+    Assessment,
+    Breakpoint,
+    BreakpointEvidence,
+    Evidence,
+    EvidenceConcept,
+    EvidenceSource,
+)
 from app.evidence.validation import EvidenceValidationService
+from app.interviews.interaction_repository import InterviewInteractionRepository
+from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.interviews.repository import InterviewRepository
 from app.main import create_app
 from app.mastery.models import (
@@ -43,18 +52,23 @@ from app.mastery.models import (
     SkillMasteryEvidence,
 )
 from app.mastery.policy import MASTERY_POLICY_VERSION, MasteryPolicyV1
+from app.mastery.routes import development_user_mastery
 from app.mastery.service import (
     MasteryRecalculationService,
     initial_mastery_recalculation_key,
 )
 from app.mastery.source import MasterySourceBuilder, _is_independent_self_correction
+from app.mastery.target_level import MasteryTargetLevelResolver
+from app.observation.models import InterviewEvent
+from app.observation.repository import ObservationRepository
 from app.outbox.consumer import PostSessionOutboxConsumer
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
-from app.problems.models import Problem
+from app.problems.models import Concept, Problem
+from app.problems.repository import ProblemRepository
 
 FIXED_NOW = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
-OUTBOX_NOW = datetime(2026, 9, 6, 23, 0, tzinfo=UTC)
+OUTBOX_NOW = datetime(2030, 9, 6, 23, 0, tzinfo=UTC)
 
 
 class _PolicyV2(MasteryPolicyV1):
@@ -73,6 +87,7 @@ class _UnexpectedReportService:
 
 @dataclass(frozen=True, slots=True)
 class CommittedMasteryFixture:
+    primary_graph: Stage1PersistenceGraph
     user_id: UUID
     extra_user_ids: tuple[UUID, ...]
     problem_ids: tuple[UUID, ...]
@@ -123,6 +138,12 @@ def test_self_correction_source_boundary_requires_canonical_before_and_after() -
     exact_pair = {before, after}
     assert _is_independent_self_correction(
         polarity="POSITIVE",
+        independence="INDEPENDENT",
+        prompt_id=None,
+        structured_snapshot_ids=exact_pair,
+    )
+    assert _is_independent_self_correction(
+        polarity="MIXED",
         independence="INDEPENDENT",
         prompt_id=None,
         structured_snapshot_ids=exact_pair,
@@ -262,6 +283,7 @@ async def _committed_fixture(
             evidence.independence_level = independence
             evidence_rows.append(evidence)
         return CommittedMasteryFixture(
+            primary_graph=primary_fixture.graph,
             user_id=primary_fixture.graph.user.id,
             extra_user_ids=tuple(extra_user_ids),
             problem_ids=tuple(problem_ids),
@@ -292,8 +314,8 @@ async def test_mastery_recalculation_converges_and_invalidation_rebuilds() -> No
     )
     try:
         first, repeated = await asyncio.gather(
-            service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD"),
-            service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD"),
+            service.recalculate(user_id=fixture.user_id),
+            service.recalculate(user_id=fixture.user_id),
         )
         assert first.concept_projection_count == repeated.concept_projection_count == 1
         assert first.skill_projection_count == repeated.skill_projection_count == 1
@@ -343,7 +365,6 @@ async def test_mastery_recalculation_converges_and_invalidation_rebuilds() -> No
 
         duplicate = await service.recalculate(
             user_id=fixture.user_id,
-            target_level="NEW_GRAD",
         )
         assert duplicate.transition_count == 0
 
@@ -382,7 +403,7 @@ async def test_mastery_recalculation_converges_and_invalidation_rebuilds() -> No
             )
             assert {len(item.facts.evidence) for item in admitted.targets} == {1}
 
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session:
             concept = await session.scalar(
                 select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
@@ -390,6 +411,26 @@ async def test_mastery_recalculation_converges_and_invalidation_rebuilds() -> No
             assert concept is not None and concept.state == "DEVELOPING"
             assert concept.projection_version == 2
             assert await _count(session, ConceptMasteryEvidence, fixture.user_id) == 1
+            latest_transition = await session.scalar(
+                select(MasteryTransition)
+                .where(
+                    MasteryTransition.user_id == fixture.user_id,
+                    MasteryTransition.target_type == "CONCEPT",
+                    MasteryTransition.from_state == "STRONG",
+                    MasteryTransition.to_state == "DEVELOPING",
+                )
+                .order_by(MasteryTransition.created_at.desc(), MasteryTransition.id.desc())
+                .limit(1)
+            )
+            assert latest_transition is not None
+            assert set(
+                await session.scalars(
+                    select(MasteryTransitionEvidence.evidence_id).where(
+                        MasteryTransitionEvidence.mastery_transition_id
+                        == latest_transition.id
+                    )
+                )
+            ) == set(fixture.evidence_ids)
 
         async with sessions() as session, session.begin():
             await EvidenceValidationService(session).invalidate(
@@ -398,7 +439,7 @@ async def test_mastery_recalculation_converges_and_invalidation_rebuilds() -> No
                 reason="All evidence invalidated",
                 invalidated_at=FIXED_NOW,
             )
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session:
             concept = await session.scalar(
                 select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
@@ -439,7 +480,7 @@ async def test_policy_version_rebuilds_associations_without_rewriting_evidence()
     fixture = await _committed_fixture(sessions, evidence_count=1)
     try:
         original = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
-        await original.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await original.recalculate(user_id=fixture.user_id)
         async with sessions() as session:
             evidence_before = await session.get(Evidence, fixture.evidence_ids[0])
             assert evidence_before is not None
@@ -455,7 +496,7 @@ async def test_policy_version_rebuilds_associations_without_rewriting_evidence()
             policy=_PolicyV2(),
             clock=lambda: FIXED_NOW,
         )
-        result = await updated.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        result = await updated.recalculate(user_id=fixture.user_id)
         assert result.transition_count == 0
         async with sessions() as session:
             concept = await session.scalar(
@@ -494,7 +535,7 @@ async def test_obsolete_retest_recommendation_is_superseded() -> None:
     )
     service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
     try:
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session, session.begin():
             pending = list(
                 await session.scalars(
@@ -504,12 +545,32 @@ async def test_obsolete_retest_recommendation_is_superseded() -> None:
                     )
                 )
             )
-            assert len(pending) == 2
-            evidence = await session.get(Evidence, fixture.evidence_ids[0])
-            assert evidence is not None
-            evidence.independence_level = "INDEPENDENT"
+            assert len(pending) == 1
+            assert pending[0].concept_id == fixture.concept_id
+            assert pending[0].skill_dimension_id is None
+            pending[0].status = "SCHEDULED"
+            db_session_breakpoint = Breakpoint(
+                user_id=fixture.user_id,
+                concept_id=fixture.concept_id,
+                skill_dimension_id=fixture.skill_id,
+                breakpoint_key="scheduled_recommendation_replacement",
+                first_detected_session_id=fixture.session_ids[0],
+                first_detected_at=FIXED_NOW,
+                severity="HIGH",
+                status="OPEN",
+                summary="A canonical gap changes the current retest rationale.",
+            )
+            session.add(db_session_breakpoint)
+            await session.flush()
+            session.add(
+                BreakpointEvidence(
+                    breakpoint_id=db_session_breakpoint.id,
+                    evidence_id=fixture.evidence_ids[0],
+                    relationship="CREATED",
+                )
+            )
 
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session:
             recommendations = list(
                 await session.scalars(
@@ -519,7 +580,14 @@ async def test_obsolete_retest_recommendation_is_superseded() -> None:
                 )
             )
             assert len(recommendations) == 2
-            assert {item.status for item in recommendations} == {"SUPERSEDED"}
+            assert {item.status for item in recommendations} == {"SUPERSEDED", "PENDING"}
+            active = [
+                item
+                for item in recommendations
+                if item.status in {"PENDING", "SCHEDULED"}
+            ]
+            assert len(active) == 1
+            assert active[0].breakpoint_id == db_session_breakpoint.id
     finally:
         await _cleanup(sessions, fixture)
         await engine.dispose()
@@ -541,7 +609,7 @@ async def test_duplicate_mastery_outbox_delivery_is_idempotent() -> None:
                 payload={
                     "user_id": str(fixture.user_id),
                     "source_interview_session_id": str(fixture.session_ids[0]),
-                    "target_level": "NEW_GRAD",
+                    "source_session_level": "NEW_GRAD",
                     "mastery_policy_version": MASTERY_POLICY_VERSION,
                 },
                 deduplication_key=key,
@@ -581,14 +649,12 @@ async def test_session_deletion_rebuild_has_no_ghost_evidence() -> None:
     fixture = await _committed_fixture(sessions, evidence_count=1)
     service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
     try:
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session, session.begin():
-            from app.interviews.models import InterviewSession
-
             await session.execute(
                 delete(InterviewSession).where(InterviewSession.id == fixture.session_ids[0])
             )
-        await service.recalculate(user_id=fixture.user_id, target_level="NEW_GRAD")
+        await service.recalculate(user_id=fixture.user_id)
         async with sessions() as session:
             concept = await session.scalar(
                 select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
@@ -597,6 +663,693 @@ async def test_session_deletion_rebuild_has_no_ghost_evidence() -> None:
             assert await _count(session, ConceptMasteryEvidence, fixture.user_id) == 0
     finally:
         await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_source_builder_uses_stable_problem_and_grounded_contexts() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=2)
+    try:
+        async with sessions() as session:
+            baseline = await MasterySourceBuilder(session).build(fixture.user_id)
+            baseline_target = next(
+                item
+                for item in baseline.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            baseline_decision = MasteryPolicyV1().evaluate(
+                baseline_target.facts, now=FIXED_NOW
+            )
+            assert baseline_decision.state == "STRONG"
+            assert baseline_decision.distinct_problem_count == 2
+            assert baseline_decision.distinct_context_count == 2
+
+        async with sessions() as session, session.begin():
+            problem = await session.get(Problem, fixture.problem_ids[0])
+            second_session = await session.get(InterviewSession, fixture.session_ids[1])
+            assert problem is not None and second_session is not None
+            problems = ProblemRepository(session)
+            second_version = await problems.add_problem_version(
+                problem=problem,
+                version=f"v2-{uuid7()}",
+                title="Same stable problem, revised statement",
+                statement="The same technical problem with editorial clarification.",
+                content_hash=f"sha256:{uuid7()}",
+                schema_version="problem.v1",
+            )
+            second_pack = await problems.add_interview_pack_version(
+                problem_version=second_version,
+                schema_version="interview-pack.v1",
+                pack_json={"expected_approaches": ["sliding_window"], "invariants": []},
+                review_status="REVIEWED",
+                preparation_policy_key="manual_review",
+            )
+            second_session.problem_version_id = second_version.id
+            second_session.interview_pack_version_id = second_pack.id
+            second_session.current_stage = "TESTING_DEBUGGING"
+            second_configuration = await session.get(
+                InterviewConfiguration, second_session.interview_configuration_id
+            )
+            assert second_configuration is not None
+            second_configuration.mode = "COACH"
+
+        async with sessions() as session:
+            replay = await MasterySourceBuilder(session).build(fixture.user_id)
+            replay_target = next(
+                item
+                for item in replay.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            replay_decision = MasteryPolicyV1().evaluate(replay_target.facts, now=FIXED_NOW)
+            assert len({item.problem_version_id for item in replay_target.facts.evidence}) == 2
+            assert replay_decision.distinct_problem_count == 1
+            assert replay_decision.distinct_context_count == 1
+            assert replay_decision.state == "DEVELOPING"
+
+        async with sessions() as session, session.begin():
+            event = await session.scalar(
+                select(InterviewEvent)
+                .join(
+                    EvidenceSource,
+                    EvidenceSource.interview_event_id == InterviewEvent.id,
+                )
+                .where(EvidenceSource.evidence_id == fixture.evidence_ids[1])
+            )
+            assert event is not None
+            event.event_type = "CODE_SNAPSHOT_CREATED"
+            event.source = "NATIVE_EDITOR"
+            event.payload = {"trigger": "EDITOR_CHANGE"}
+            await ObservationRepository(session).add_code_snapshot(
+                session_id=fixture.session_ids[1],
+                version_number=1,
+                language="cpp",
+                source_code="int solve() { return 1; }",
+                content_hash=f"sha256:{uuid7()}",
+                created_from_event_id=event.id,
+            )
+
+        async with sessions() as session:
+            grounded = await MasterySourceBuilder(session).build(fixture.user_id)
+            grounded_target = next(
+                item
+                for item in grounded.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            grounded_decision = MasteryPolicyV1().evaluate(
+                grounded_target.facts, now=FIXED_NOW
+            )
+            assert grounded_decision.distinct_problem_count == 1
+            assert grounded_decision.distinct_context_count == 2
+            assert grounded_decision.state == "STRONG"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("event_type", ["TEST_COMPLETED", "COMPILE_COMPLETED", "RUN_CLICKED"])
+async def test_execution_only_negative_cannot_create_weak(event_type: str) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    try:
+        async with sessions() as session, session.begin():
+            evidence = await session.get(Evidence, fixture.evidence_ids[0])
+            event = await session.scalar(
+                select(InterviewEvent)
+                .join(
+                    EvidenceSource,
+                    EvidenceSource.interview_event_id == InterviewEvent.id,
+                )
+                .where(EvidenceSource.evidence_id == fixture.evidence_ids[0])
+            )
+            assert evidence is not None and event is not None
+            evidence.polarity = "NEGATIVE"
+            event.event_type = event_type
+            event.source = "NATIVE_RUNNER"
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(fixture.user_id)
+            target = next(
+                item
+                for item in bundle.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            fact = target.facts.evidence[0]
+            assert fact.demonstrates_reasoning_or_application is False
+            assert MasteryPolicyV1().evaluate(target.facts, now=FIXED_NOW).state == "EXPOSED"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("event_type", ["TRANSCRIPT_FINALIZED", "CODE_SNAPSHOT_CREATED"])
+async def test_reasoning_or_meaningful_implementation_negative_can_be_weak(
+    event_type: str,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    try:
+        async with sessions() as session, session.begin():
+            evidence = await session.get(Evidence, fixture.evidence_ids[0])
+            event = await session.scalar(
+                select(InterviewEvent)
+                .join(
+                    EvidenceSource,
+                    EvidenceSource.interview_event_id == InterviewEvent.id,
+                )
+                .where(EvidenceSource.evidence_id == fixture.evidence_ids[0])
+            )
+            assert evidence is not None and event is not None
+            evidence.polarity = "NEGATIVE"
+            event.event_type = event_type
+            if event_type == "CODE_SNAPSHOT_CREATED":
+                event.source = "NATIVE_EDITOR"
+                event.payload = {"trigger": "EDITOR_CHANGE"}
+                await ObservationRepository(session).add_code_snapshot(
+                    session_id=fixture.session_ids[0],
+                    version_number=1,
+                    language="cpp",
+                    source_code="int solve() { return 0; }",
+                    content_hash=f"sha256:{uuid7()}",
+                    created_from_event_id=event.id,
+                )
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(fixture.user_id)
+            target = next(
+                item
+                for item in bundle.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            assert target.facts.evidence[0].demonstrates_reasoning_or_application is True
+            assert MasteryPolicyV1().evaluate(target.facts, now=FIXED_NOW).state == "WEAK"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_source_builder_recognizes_structured_mixed_independent_correction() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    try:
+        async with sessions() as session, session.begin():
+            evidence = await session.get(Evidence, fixture.evidence_ids[0])
+            assert evidence is not None
+            assessment = await session.get(Assessment, evidence.originating_assessment_id)
+            assert assessment is not None
+            evidence.polarity = "MIXED"
+            interactions = InterviewInteractionRepository(session)
+            response = await interactions.add_response(
+                interview_session_id=fixture.session_ids[0],
+                started_at=FIXED_NOW,
+                ended_at=FIXED_NOW + timedelta(seconds=10),
+                completion_reason="SPONTANEOUS",
+                summary="Structured before/after correction fixture.",
+            )
+            assessment.candidate_response_id = response.id
+            for sequence in (2, 3):
+                event = await add_event(
+                    session,
+                    fixture.primary_graph,
+                    server_sequence=sequence,
+                    event_type="CODE_SNAPSHOT_CREATED",
+                    source="NATIVE_EDITOR",
+                    now=FIXED_NOW + timedelta(seconds=sequence),
+                )
+                event.payload = {"trigger": "EDITOR_CHANGE"}
+                await ObservationRepository(session).add_code_snapshot(
+                    session_id=fixture.session_ids[0],
+                    version_number=sequence,
+                    language="cpp",
+                    source_code=f"int solve() {{ return {sequence}; }}",
+                    content_hash=f"sha256:{uuid7()}",
+                    created_from_event_id=event.id,
+                )
+                await interactions.add_response_source(
+                    interview_session_id=fixture.session_ids[0],
+                    candidate_response_id=response.id,
+                    interview_event_id=event.id,
+                    source_role="CODE_CONTEXT",
+                    sequence=sequence - 1,
+                )
+                session.add(
+                    EvidenceSource(
+                        evidence_id=evidence.id,
+                        interview_event_id=event.id,
+                        interview_session_id=fixture.session_ids[0],
+                        source_role="CONTEXT",
+                    )
+                )
+
+        async with sessions() as session:
+            bundle = await MasterySourceBuilder(session).build(fixture.user_id)
+            target = next(
+                item
+                for item in bundle.targets
+                if item.family == "CONCEPT" and item.target_id == fixture.concept_id
+            )
+            fact = target.facts.evidence[0]
+            assert fact.polarity == "MIXED"
+            assert fact.is_self_correction is True
+            assert MasteryPolicyV1().evaluate(target.facts, now=FIXED_NOW).state == "DEVELOPING"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_skill_family_uses_loaded_canonical_parent_metadata() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=2)
+    concept_ids: tuple[UUID, ...] = ()
+    try:
+        async with sessions() as session, session.begin():
+            suffix = str(uuid7()).replace("-", "")
+            parent_a = Concept(
+                canonical_key=f"family_a_{suffix}",
+                display_name="Family A",
+                category="ALGORITHMS",
+                status="ACTIVE",
+                description="Test family A.",
+            )
+            parent_b = Concept(
+                canonical_key=f"family_b_{suffix}",
+                display_name="Family B",
+                category="ALGORITHMS",
+                status="ACTIVE",
+                description="Test family B.",
+            )
+            session.add_all([parent_a, parent_b])
+            await session.flush()
+            child_a = Concept(
+                canonical_key=f"child_a_{suffix}",
+                display_name="Child A",
+                category="ALGORITHMS",
+                parent_concept_id=parent_a.id,
+                status="ACTIVE",
+                description="Test child A.",
+            )
+            child_b = Concept(
+                canonical_key=f"child_b_{suffix}",
+                display_name="Child B",
+                category="ALGORITHMS",
+                parent_concept_id=parent_a.id,
+                status="ACTIVE",
+                description="Test child B.",
+            )
+            session.add_all([child_a, child_b])
+            await session.flush()
+            concept_ids = (child_a.id, child_b.id, parent_a.id, parent_b.id)
+            links = list(
+                await session.scalars(
+                    select(EvidenceConcept)
+                    .where(EvidenceConcept.evidence_id.in_(fixture.evidence_ids))
+                    .order_by(EvidenceConcept.evidence_id)
+                )
+            )
+            assert len(links) == 2
+            links[0].concept_id = child_a.id
+            links[1].concept_id = child_b.id
+
+        async with sessions() as session, session.begin():
+            same_family = await MasterySourceBuilder(session).build(fixture.user_id)
+            skill = next(
+                item
+                for item in same_family.targets
+                if item.family == "SKILL" and item.target_id == fixture.skill_id
+            )
+            assert {item.concept_family_key for item in skill.facts.evidence} == {
+                f"family_a_{suffix}"
+            }
+            assert MasteryPolicyV1().evaluate(skill.facts, now=FIXED_NOW).state == "DEVELOPING"
+            loaded_child_b = await session.get(Concept, concept_ids[1])
+            assert loaded_child_b is not None
+            loaded_child_b.parent_concept_id = concept_ids[3]
+
+        async with sessions() as session:
+            different_families = await MasterySourceBuilder(session).build(fixture.user_id)
+            skill = next(
+                item
+                for item in different_families.targets
+                if item.family == "SKILL" and item.target_id == fixture.skill_id
+            )
+            assert {item.concept_family_key for item in skill.facts.evidence} == {
+                f"family_a_{suffix}",
+                f"family_b_{suffix}",
+            }
+            assert MasteryPolicyV1().evaluate(skill.facts, now=FIXED_NOW).state == "STRONG"
+    finally:
+        await _cleanup(sessions, fixture)
+        if concept_ids:
+            async with sessions() as session, session.begin():
+                await session.execute(delete(Concept).where(Concept.id.in_(concept_ids[:2])))
+                await session.execute(delete(Concept).where(Concept.id.in_(concept_ids[2:])))
+        await engine.dispose()
+
+
+async def test_authoritative_level_converges_across_stale_jobs_and_old_invalidation() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=2)
+    latest_session_id: UUID | None = None
+    try:
+        async with sessions() as session, session.begin():
+            completed_base = datetime(2027, 1, 1, tzinfo=UTC)
+            for index, session_id in enumerate(fixture.session_ids):
+                interview = await session.get(InterviewSession, session_id)
+                assert interview is not None
+                configuration = await session.get(
+                    InterviewConfiguration, interview.interview_configuration_id
+                )
+                assert configuration is not None
+                configuration.level = "INTERN"
+                interview.status = "COMPLETED"
+                interview.completed_at = completed_base + timedelta(days=index)
+
+            interviews = InterviewRepository(session)
+            latest_configuration = await interviews.add_configuration(
+                mode="SIMULATION",
+                level="NEW_GRAD",
+                language="cpp",
+                configured_duration_seconds=1_800,
+                problem_source="CURATED",
+            )
+            latest = await interviews.add_session(
+                user_id=fixture.user_id,
+                configuration_id=latest_configuration.id,
+                problem_version_id=fixture.primary_graph.problem_version.id,
+                interview_pack_version_id=fixture.primary_graph.pack_version.id,
+                current_stage="COMPLETED",
+                state_version=1,
+                status="COMPLETED",
+                started_at=completed_base + timedelta(days=2),
+                deadline_at=completed_base + timedelta(days=2, minutes=30),
+            )
+            latest.completed_at = completed_base + timedelta(days=2, minutes=25)
+            latest_session_id = latest.id
+
+        async with sessions() as session:
+            assert (
+                await MasteryTargetLevelResolver(session).resolve(fixture.user_id)
+                == "NEW_GRAD"
+            )
+
+        service = MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: datetime(2032, 1, 1, tzinfo=UTC),
+        )
+
+        async def enqueue_published(
+            source_session_id: UUID,
+            source_level: str,
+            suffix: str,
+        ) -> UUID:
+            async with sessions() as session, session.begin():
+                event, created = await OutboxRepository(session).enqueue(
+                    aggregate_type="User",
+                    aggregate_id=fixture.user_id,
+                    interview_session_id=source_session_id,
+                    event_type="RECALCULATE_MASTERY",
+                    payload={
+                        "user_id": str(fixture.user_id),
+                        "source_interview_session_id": str(source_session_id),
+                        "source_session_level": source_level,
+                        "mastery_policy_version": MASTERY_POLICY_VERSION,
+                    },
+                    deduplication_key=f"stale-level:{fixture.user_id}:{suffix}",
+                    available_at=OUTBOX_NOW,
+                    source_watermark=1,
+                )
+                assert created is True
+                event.status = "PUBLISHED"
+                event.attempt_count = 1
+                event.published_at = OUTBOX_NOW
+                return event.id
+
+        assert latest_session_id is not None
+        new_job = await enqueue_published(latest_session_id, "NEW_GRAD", "new-first")
+        old_job = await enqueue_published(fixture.session_ids[0], "INTERN", "old-delayed")
+        consumer = PostSessionOutboxConsumer(
+            sessionmaker=sessions,
+            evidence_coordinator=_UnexpectedEvidenceCoordinator(),  # type: ignore[arg-type]
+            report_service=_UnexpectedReportService(),  # type: ignore[arg-type]
+            mastery_service=service,
+            clock=lambda: OUTBOX_NOW,
+        )
+        assert (await consumer.consume(new_job, 1)).status == "COMPLETED"
+        assert (await consumer.consume(old_job, 1)).status == "COMPLETED"
+
+        async with sessions() as session:
+            concept = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == fixture.user_id,
+                    ConceptMastery.concept_id == fixture.concept_id,
+                )
+            )
+            assert concept is not None and concept.state == "DEVELOPING"
+            assert (
+                await MasterySourceBuilder(session).build(fixture.user_id)
+            ).target_level == "NEW_GRAD"
+
+        async with sessions() as session, session.begin():
+            await EvidenceValidationService(session).invalidate(
+                interview_session_id=fixture.session_ids[0],
+                evidence_id=fixture.evidence_ids[0],
+                reason="Old INTERN evidence invalidation must retain NEW_GRAD authority",
+                invalidated_at=datetime(2032, 1, 2, tzinfo=UTC),
+            )
+        after_invalidation = await service.recalculate(user_id=fixture.user_id)
+        assert after_invalidation.target_level == "NEW_GRAD"
+
+        reverse_old = await enqueue_published(
+            fixture.session_ids[1], "INTERN", "reverse-old"
+        )
+        reverse_new = await enqueue_published(
+            latest_session_id, "NEW_GRAD", "reverse-new"
+        )
+        first, second = await asyncio.gather(
+            consumer.consume(reverse_old, 1),
+            consumer.consume(reverse_new, 1),
+        )
+        assert {first.status, second.status} == {"COMPLETED"}
+        async with sessions() as session:
+            assert (
+                await MasteryTargetLevelResolver(session).resolve(fixture.user_id)
+                == "NEW_GRAD"
+            )
+
+        forward_clock = MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: datetime(2035, 1, 1, tzinfo=UTC),
+        )
+        backward_clock = MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: datetime(2034, 1, 1, tzinfo=UTC),
+        )
+        await forward_clock.recalculate(user_id=fixture.user_id)
+        await backward_clock.recalculate(user_id=fixture.user_id)
+        async with sessions() as session:
+            concept = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == fixture.user_id,
+                    ConceptMastery.concept_id == fixture.concept_id,
+                )
+            )
+            assert concept is not None
+            assert concept.last_evaluated_at == datetime(2035, 1, 1, tzinfo=UTC)
+            assert concept.updated_at == datetime(2035, 1, 1, tzinfo=UTC)
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_target_level_resolver_has_deterministic_completion_tie_break() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=2)
+    expected_level = "NEW_GRAD"
+    try:
+        async with sessions() as session, session.begin():
+            completion = datetime(2028, 1, 1, tzinfo=UTC)
+            levels = {
+                min(fixture.session_ids, key=str): "INTERN",
+                max(fixture.session_ids, key=str): "NEW_GRAD",
+            }
+            for session_id, level in levels.items():
+                interview = await session.get(InterviewSession, session_id)
+                assert interview is not None
+                configuration = await session.get(
+                    InterviewConfiguration, interview.interview_configuration_id
+                )
+                assert configuration is not None
+                configuration.level = level
+                interview.status = "COMPLETED"
+                interview.completed_at = completion
+            expected_level = levels[max(fixture.session_ids, key=str)]
+        async with sessions() as session:
+            assert (
+                await MasteryTargetLevelResolver(session).resolve(fixture.user_id)
+                == expected_level
+            )
+        development_result = await MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: FIXED_NOW,
+        ).recalculate_for_development(
+            user_id=fixture.user_id,
+            target_level="INTERN",
+        )
+        assert development_result.target_level == "INTERN"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_persisted_candidate_read_never_shadow_grades_state(tmp_path: Path) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=2)
+    settings = create_settings(env_file=tmp_path / "missing.env")
+    settings.app_env = "development"
+    service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
+    try:
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session, session.begin():
+            concept = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == fixture.user_id,
+                    ConceptMastery.concept_id == fixture.concept_id,
+                )
+            )
+            assert concept is not None and concept.state == "STRONG"
+            concept.state = "DEVELOPING"
+
+        async with sessions() as session:
+            response = await development_user_mastery(fixture.user_id, settings, session)
+            concept_response = next(
+                item for item in response.technical_concepts if item.target_id == fixture.concept_id
+            )
+            assert response.status == "STALE"
+            assert concept_response.state == "DEVELOPING"
+            assert concept_response.projection_version == 1
+            persisted_states = {
+                row.concept_id: row.state
+                for row in await session.scalars(
+                    select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
+                )
+            }
+            assert concept_response.state == persisted_states[concept_response.target_id]
+
+        async with sessions() as session, session.begin():
+            concept_rows = list(
+                await session.scalars(
+                    select(ConceptMastery).where(ConceptMastery.user_id == fixture.user_id)
+                )
+            )
+            skill_rows = list(
+                await session.scalars(
+                    select(SkillMastery).where(SkillMastery.user_id == fixture.user_id)
+                )
+            )
+            for concept_row in concept_rows:
+                concept_row.mastery_policy_version = "mastery_policy_v2"
+            for skill_row in skill_rows:
+                skill_row.mastery_policy_version = "mastery_policy_v2"
+
+        async with sessions() as session:
+            response = await development_user_mastery(fixture.user_id, settings, session)
+            concept_response = next(
+                item for item in response.technical_concepts if item.target_id == fixture.concept_id
+            )
+            assert response.mastery_policy_version == "mastery_policy_v2"
+            assert response.status == "STALE"
+            assert concept_response.state == "DEVELOPING"
+            assert concept_response.mastery_policy_version == "mastery_policy_v2"
+    finally:
+        await _cleanup(sessions, fixture)
+        await engine.dispose()
+
+
+async def test_repeated_mastery_transition_cycles_are_distinct_and_explainable() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    fixture = await _committed_fixture(sessions, evidence_count=1)
+    extra_user_id: UUID | None = None
+    extra_problem_id: UUID | None = None
+    service = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: FIXED_NOW)
+    try:
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session, session.begin():
+            await EvidenceValidationService(session).invalidate(
+                interview_session_id=fixture.session_ids[0],
+                evidence_id=fixture.evidence_ids[0],
+                reason="First correction-cycle invalidation",
+                invalidated_at=FIXED_NOW,
+            )
+        await service.recalculate(user_id=fixture.user_id)
+
+        async with sessions() as session, session.begin():
+            second_fixture, extra_user_id, extra_problem_id = await _additional_evidence_fixture(
+                session,
+                primary_graph=fixture.primary_graph,
+            )
+            second_evidence = await validate_evidence(
+                session,
+                second_fixture,
+                polarity="POSITIVE",
+                strength="STRONG",
+                finding="A later independent cycle demonstrates the target again.",
+            )
+            second_evidence_id = second_evidence.id
+            second_session_id = second_fixture.graph.interview_session.id
+
+        await service.recalculate(user_id=fixture.user_id)
+        async with sessions() as session, session.begin():
+            await EvidenceValidationService(session).invalidate(
+                interview_session_id=second_session_id,
+                evidence_id=second_evidence_id,
+                reason="Second correction-cycle invalidation",
+                invalidated_at=FIXED_NOW,
+            )
+        await service.recalculate(user_id=fixture.user_id)
+        duplicate = await service.recalculate(user_id=fixture.user_id)
+        assert duplicate.transition_count == 0
+
+        async with sessions() as session:
+            downward = list(
+                await session.scalars(
+                    select(MasteryTransition)
+                    .where(
+                        MasteryTransition.user_id == fixture.user_id,
+                        MasteryTransition.target_type == "CONCEPT",
+                        MasteryTransition.from_state == "DEVELOPING",
+                        MasteryTransition.to_state == "UNTESTED",
+                    )
+                    .order_by(MasteryTransition.created_at, MasteryTransition.id)
+                )
+            )
+            assert len(downward) == 2
+            assert len({item.transition_key for item in downward}) == 2
+            linked = {
+                transition.id: set(
+                    await session.scalars(
+                        select(MasteryTransitionEvidence.evidence_id).where(
+                            MasteryTransitionEvidence.mastery_transition_id == transition.id
+                        )
+                    )
+                )
+                for transition in downward
+            }
+            assert {frozenset(ids) for ids in linked.values()} == {
+                frozenset({fixture.evidence_ids[0]}),
+                frozenset({second_evidence_id}),
+            }
+    finally:
+        await _cleanup(sessions, fixture)
+        if extra_user_id is not None and extra_problem_id is not None:
+            async with sessions() as session, session.begin():
+                await session.execute(delete(User).where(User.id == extra_user_id))
+                await session.execute(delete(Problem).where(Problem.id == extra_problem_id))
         await engine.dispose()
 
 

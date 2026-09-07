@@ -44,6 +44,13 @@ class CandidateMasteryTarget(MasteryContractModel):
     category: str
     state: MasteryState
     state_label: str
+    mastery_policy_version: str | None = None
+    projection_version: int | None = None
+    last_evidence_at: datetime | None = None
+    supporting_evidence_count: int | None = None
+    context_diversity: int | None = None
+    last_evaluated_at: datetime | None = None
+    projection_updated_at: datetime | None = None
     evidence_sufficiency: Literal["LOW", "MEDIUM", "HIGH"]
     evidence_sufficiency_label: str
     freshness: Literal["CURRENT", "AGING", "RETEST_DUE"]
@@ -74,7 +81,7 @@ class CandidateRetestRecommendation(MasteryContractModel):
 
 
 class CandidateMasteryOverviewResponse(MasteryContractModel):
-    status: Literal["EMPTY", "READY", "UPDATING", "FAILED"]
+    status: Literal["EMPTY", "READY", "STALE", "UPDATING", "FAILED"]
     user_id: UUID
     mastery_policy_version: str
     target_level: Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]

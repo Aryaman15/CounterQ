@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Literal
 from uuid import UUID, uuid5
 
 from app.mastery.policy import (
     MASTERY_POLICY_VERSION,
+    ContributionClassification,
+    MasteryEvidenceContribution,
     MasteryPolicyV1,
     MasteryProjectionDecision,
     MasteryState,
@@ -41,6 +44,167 @@ _FRESHNESS_LABEL = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class PersistedMasteryProjection:
+    family: Literal["CONCEPT", "SKILL"]
+    target_id: UUID
+    state: MasteryState
+    mastery_policy_version: str
+    projection_version: int
+    last_evaluated_at: datetime
+    last_evidence_at: datetime | None
+    supporting_evidence_count: int
+    context_diversity: int
+    updated_at: datetime
+    contributions: tuple[tuple[UUID, ContributionClassification, str], ...]
+
+
+def build_persisted_candidate_mastery_overview(
+    bundle: MasterySourceBundle,
+    projections: tuple[PersistedMasteryProjection, ...],
+    *,
+    now: datetime | None = None,
+    recommendation_ids: dict[tuple[str, UUID], UUID] | None = None,
+    recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] | None = None,
+    status: str | None = None,
+) -> CandidateMasteryOverviewResponse:
+    """Render current persisted projections; policy evaluation is consistency-only."""
+
+    evaluated_at = now or datetime.now(UTC)
+    policy = MasteryPolicyV1()
+    projection_by_target = {(item.family, item.target_id): item for item in projections}
+    targets: list[CandidateMasteryTarget] = []
+    decisions: dict[UUID, MasteryProjectionDecision] = {}
+    consistency_mismatch = False
+
+    for source in bundle.targets:
+        projection = projection_by_target.get((source.family, source.target_id))
+        if projection is None:
+            if source.facts.evidence:
+                consistency_mismatch = True
+            continue
+        recommendation_id = (
+            recommendation_ids.get((source.family, source.target_id))
+            if recommendation_ids is not None
+            else None
+        )
+        persisted_contributions = tuple(
+            MasteryEvidenceContribution(evidence_id, classification, context_key)
+            for evidence_id, classification, context_key in projection.contributions
+        )
+        target_mismatch = False
+        if projection.mastery_policy_version != policy.version:
+            target_mismatch = True
+            decision = _unknown_policy_detail(
+                source,
+                projection,
+                persisted_contributions,
+                recommendation_id=recommendation_id,
+            )
+        else:
+            described = policy.describe_persisted(
+                source.facts,
+                persisted_state=projection.state,
+                now=evaluated_at,
+            )
+            decision = replace(
+                described,
+                state=projection.state,
+                contributions=persisted_contributions,
+                supporting_evidence_ids=tuple(
+                    evidence_id
+                    for evidence_id, classification, _context_key in projection.contributions
+                    if classification == "SUPPORTING"
+                ),
+                distinct_context_count=projection.context_diversity,
+                last_evidence_at=projection.last_evidence_at,
+            )
+            expected = policy.evaluate(source.facts, now=evaluated_at)
+            expected_contributions = {
+                item.evidence_id: (item.classification, item.context_key)
+                for item in expected.contributions
+            }
+            actual_contributions = {
+                evidence_id: (classification, context_key)
+                for evidence_id, classification, context_key in projection.contributions
+            }
+            target_mismatch = bool(
+                expected.state != projection.state
+                or expected.last_evidence_at != projection.last_evidence_at
+                or len(expected.supporting_evidence_ids)
+                != projection.supporting_evidence_count
+                or expected.distinct_context_count != projection.context_diversity
+                or expected_contributions != actual_contributions
+            )
+            if target_mismatch:
+                decision = replace(
+                    decision,
+                    explanation_code="PROJECTION_STALE",
+                    explanation=(
+                        "This is the last persisted Mastery state. CounterQ is updating "
+                        "its supporting detail from canonical Evidence."
+                    ),
+                )
+        consistency_mismatch = consistency_mismatch or target_mismatch
+        decisions[source.target_id] = decision
+        targets.append(
+            _target(
+                source,
+                decision,
+                recommendation_id,
+                projection=projection,
+            )
+        )
+
+    technical = [
+        item
+        for item in targets
+        if item.target_type == "CONCEPT" and item.state != "UNTESTED"
+    ]
+    skills = [
+        item
+        for item in targets
+        if item.target_type == "SKILL" and item.state != "UNTESTED"
+    ]
+    parent_summaries = _parents(
+        tuple(
+            item
+            for item in bundle.targets
+            if (item.family, item.target_id) in projection_by_target
+        ),
+        decisions,
+    )
+    recommendations = _recommendations(
+        technical,
+        skills,
+        recommendation_statuses=recommendation_statuses,
+    )
+    response_status = status or ("READY" if targets else "EMPTY")
+    if consistency_mismatch and response_status not in {"FAILED", "UPDATING"}:
+        response_status = "STALE"
+    versions = {item.mastery_policy_version for item in projections}
+    if not versions:
+        policy_version = MASTERY_POLICY_VERSION
+    else:
+        policy_version = (
+            next(iter(versions)) if len(versions) == 1 else "mixed_projection_versions"
+        )
+    projection_updated_at = max(
+        (item.updated_at for item in projections),
+        default=evaluated_at,
+    )
+    return _overview_response(
+        bundle=bundle,
+        technical=technical,
+        skills=skills,
+        parent_summaries=parent_summaries,
+        recommendations=recommendations,
+        status=response_status,
+        policy_version=policy_version,
+        updated_at=projection_updated_at,
+    )
+
+
 def build_candidate_mastery_overview(
     bundle: MasterySourceBundle,
     *,
@@ -54,11 +218,9 @@ def build_candidate_mastery_overview(
     evaluated_at = now or datetime.now(UTC)
     policy = MasteryPolicyV1()
     targets: list[CandidateMasteryTarget] = []
-    source_by_id: dict[UUID, MasteryTargetSource] = {}
     decisions: dict[UUID, MasteryProjectionDecision] = {}
     for source in bundle.targets:
         decision = policy.evaluate(source.facts, now=evaluated_at)
-        source_by_id[source.target_id] = source
         decisions[source.target_id] = decision
         recommendation_id = (
             recommendation_ids.get((source.family, source.target_id))
@@ -77,20 +239,37 @@ def build_candidate_mastery_overview(
     ]
     skills = [item for item in targets if item.target_type == "SKILL" and item.state != "UNTESTED"]
     parent_summaries = _parents(bundle.targets, decisions)
-    recommendations = [
-        CandidateRetestRecommendation(
-            recommendation_id=item.recommendation_id,
-            target_type=item.target_type,
-            target_id=item.target_id,
-            target_name=item.display_name,
-            status=(recommendation_statuses or {}).get(item.recommendation_id, "PENDING"),
-            reason=item.next_action,
-        )
-        for item in [*technical, *skills]
-        if item.retest_due and item.recommendation_id is not None
-    ]
+    recommendations = _recommendations(
+        technical,
+        skills,
+        recommendation_statuses=recommendation_statuses,
+    )
     has_evidence = bool(technical or skills)
     response_status = status or ("READY" if has_evidence else "EMPTY")
+    return _overview_response(
+        bundle=bundle,
+        technical=technical,
+        skills=skills,
+        parent_summaries=parent_summaries,
+        recommendations=recommendations,
+        status=response_status,
+        policy_version=mastery_policy_version,
+        updated_at=projection_updated_at or evaluated_at,
+    )
+
+
+def _overview_response(
+    *,
+    bundle: MasterySourceBundle,
+    technical: list[CandidateMasteryTarget],
+    skills: list[CandidateMasteryTarget],
+    parent_summaries: list[CandidateMasteryTarget],
+    recommendations: list[CandidateRetestRecommendation],
+    status: str,
+    policy_version: str,
+    updated_at: datetime,
+) -> CandidateMasteryOverviewResponse:
+    has_evidence = bool(technical or skills)
     message = (
         "What CounterQ has evidence you can defend independently."
         if has_evidence
@@ -99,19 +278,24 @@ def build_candidate_mastery_overview(
             "Complete a few interviews to build an evidence-backed view."
         )
     )
-    if response_status == "UPDATING":
+    if status == "UPDATING":
         message = "CounterQ is recalculating this view from your canonical evidence."
-    elif response_status == "FAILED":
+    elif status == "STALE":
+        message = (
+            "This view shows the last persisted Mastery state. CounterQ needs to "
+            "refresh its supporting detail before treating it as current."
+        )
+    elif status == "FAILED":
         message = (
             "Mastery is temporarily unavailable. Your interview evidence, reports, and "
             "CounterMaps are unchanged."
         )
     return CandidateMasteryOverviewResponse(
-        status=response_status,
+        status=status,  # type: ignore[arg-type]
         user_id=bundle.user_id,
-        mastery_policy_version=mastery_policy_version,
+        mastery_policy_version=policy_version,
         target_level=bundle.target_level,
-        updated_at=projection_updated_at or evaluated_at,
+        updated_at=updated_at,
         message=message,
         technical_concepts=sorted(technical, key=_target_order),
         parent_summaries=sorted(parent_summaries, key=lambda item: item.display_name),
@@ -122,10 +306,69 @@ def build_candidate_mastery_overview(
     )
 
 
+def _unknown_policy_detail(
+    source: MasteryTargetSource,
+    projection: PersistedMasteryProjection,
+    contributions: tuple[MasteryEvidenceContribution, ...],
+    *,
+    recommendation_id: UUID | None,
+) -> MasteryProjectionDecision:
+    """Describe an unknown-policy row without running a different policy over it."""
+
+    evidence = tuple(item for item in source.facts.evidence if item.valid)
+    supporting = tuple(
+        item.evidence_id for item in contributions if item.classification == "SUPPORTING"
+    )
+    contradicting = tuple(
+        item.evidence_id for item in contributions if item.classification == "CONTRADICTING"
+    )
+    learning = tuple(
+        item.evidence_id for item in contributions if item.classification == "LEARNING_LIMITED"
+    )
+    unresolved_breakpoints = tuple(
+        item.breakpoint_id for item in source.facts.breakpoints if item.unresolved
+    )
+    retest_due = recommendation_id is not None or bool(unresolved_breakpoints)
+    return MasteryProjectionDecision(
+        state=projection.state,
+        evidence_sufficiency="MEDIUM" if evidence else "LOW",
+        freshness="RETEST_DUE" if retest_due else "CURRENT",
+        explanation_code="POLICY_DETAIL_UPDATING",
+        explanation=(
+            "This is the last persisted Mastery state. CounterQ is updating its "
+            "supporting detail for the current policy."
+        ),
+        contributions=contributions,
+        supporting_evidence_ids=supporting,
+        contradicting_evidence_ids=contradicting,
+        learning_evidence_ids=learning,
+        independent_demonstration_count=len(
+            {
+                item.observation_key
+                for item in evidence
+                if item.independence == "INDEPENDENT" and item.evidence_id in supporting
+            }
+        ),
+        qualifying_positive_count=0,
+        qualifying_negative_count=0,
+        distinct_session_count=len({item.session_id for item in evidence}),
+        distinct_problem_count=len(
+            {item.problem_id or item.problem_version_id for item in evidence}
+        ),
+        distinct_context_count=projection.context_diversity,
+        unresolved_breakpoint_ids=unresolved_breakpoints,
+        retest_due=retest_due,
+        retest_reason=None,
+        last_evidence_at=projection.last_evidence_at,
+    )
+
+
 def _target(
     source: MasteryTargetSource,
     decision: MasteryProjectionDecision,
     recommendation_id: UUID | None,
+    *,
+    projection: PersistedMasteryProjection | None = None,
 ) -> CandidateMasteryTarget:
     contribution_by_id = {item.evidence_id: item.classification for item in decision.contributions}
     timeline = [
@@ -154,6 +397,15 @@ def _target(
         category=source.category,
         state=decision.state,
         state_label=_STATE_LABEL[decision.state],
+        mastery_policy_version=(projection.mastery_policy_version if projection else None),
+        projection_version=(projection.projection_version if projection else None),
+        last_evidence_at=(projection.last_evidence_at if projection else None),
+        supporting_evidence_count=(
+            projection.supporting_evidence_count if projection else None
+        ),
+        context_diversity=(projection.context_diversity if projection else None),
+        last_evaluated_at=(projection.last_evaluated_at if projection else None),
+        projection_updated_at=(projection.updated_at if projection else None),
         evidence_sufficiency=decision.evidence_sufficiency,
         evidence_sufficiency_label=_SUFFICIENCY_LABEL[decision.evidence_sufficiency],
         freshness=decision.freshness,
@@ -194,7 +446,10 @@ def _parents(
             fact.session_id for item in tested for fact in item.facts.evidence if fact.valid
         }
         problems = {
-            fact.problem_version_id for item in tested for fact in item.facts.evidence if fact.valid
+            fact.problem_id or fact.problem_version_id
+            for item in tested
+            for fact in item.facts.evidence
+            if fact.valid
         }
         evidence_ids = {
             fact.evidence_id for item in tested for fact in item.facts.evidence if fact.valid
@@ -210,21 +465,13 @@ def _parents(
                 category=tested[0].category,
                 state=state,
                 state_label=_STATE_LABEL[state],
-                evidence_sufficiency="HIGH" if len(tested) >= 3 else "MEDIUM",
-                evidence_sufficiency_label=(
-                    _SUFFICIENCY_LABEL["HIGH"] if len(tested) >= 3 else _SUFFICIENCY_LABEL["MEDIUM"]
-                ),
-                freshness=(
-                    "RETEST_DUE"
-                    if any(decisions[item.target_id].freshness == "RETEST_DUE" for item in tested)
-                    else "CURRENT"
-                ),
-                freshness_label=(
-                    "Retest due"
-                    if any(decisions[item.target_id].freshness == "RETEST_DUE" for item in tested)
-                    else "Current"
-                ),
-                reason=_parent_reason(states),
+                evidence_sufficiency=_parent_sufficiency(tested, decisions),
+                evidence_sufficiency_label=_SUFFICIENCY_LABEL[
+                    _parent_sufficiency(tested, decisions)
+                ],
+                freshness=_parent_freshness(tested, decisions),
+                freshness_label=_FRESHNESS_LABEL[_parent_freshness(tested, decisions)],
+                reason=_parent_reason(states, len(tested)),
                 evidence_count=len(evidence_ids),
                 distinct_session_count=len(sessions),
                 distinct_problem_count=len(problems),
@@ -245,6 +492,8 @@ def _parents(
 
 
 def _parent_state(states: set[MasteryState], tested_count: int) -> MasteryState:
+    if tested_count == 1:
+        return "DEVELOPING" if states.intersection({"STRONG", "DEVELOPING"}) else "EXPOSED"
     if "WEAK" in states and len(states) > 1:
         return "DEVELOPING"
     if states == {"WEAK"}:
@@ -258,7 +507,37 @@ def _parent_state(states: set[MasteryState], tested_count: int) -> MasteryState:
     return "EXPOSED"
 
 
-def _parent_reason(states: set[MasteryState]) -> str:
+def _parent_sufficiency(
+    tested: list[MasteryTargetSource],
+    decisions: dict[UUID, MasteryProjectionDecision],
+) -> Literal["LOW", "MEDIUM", "HIGH"]:
+    values = [decisions[item.target_id].evidence_sufficiency for item in tested]
+    if len(tested) >= 2 and all(item == "HIGH" for item in values):
+        return "HIGH"
+    if any(item in {"MEDIUM", "HIGH"} for item in values):
+        return "MEDIUM"
+    return "LOW"
+
+
+def _parent_freshness(
+    tested: list[MasteryTargetSource],
+    decisions: dict[UUID, MasteryProjectionDecision],
+) -> Literal["CURRENT", "AGING", "RETEST_DUE"]:
+    rank = {"CURRENT": 0, "AGING": 1, "RETEST_DUE": 2}
+    return max(
+        (decisions[item.target_id].freshness for item in tested),
+        key=rank.__getitem__,
+    )
+
+
+def _parent_reason(states: set[MasteryState], tested_count: int) -> str:
+    if tested_count == 1:
+        return (
+            "Only one child concept has evidence, so CounterQ is not generalizing "
+            "that result to the whole area."
+        )
+    if states == {"WEAK"}:
+        return "Multiple child concepts show meaningful gaps that still need verification."
     if "WEAK" in states:
         return (
             "This area shows meaningful competence, but an important child concept still "
@@ -290,6 +569,26 @@ def _next_action(decision: MasteryProjectionDecision) -> str:
     if decision.state == "STRONG":
         return "Keep the evidence current through future interviews."
     return "CounterQ needs meaningful evidence before recommending a next step."
+
+
+def _recommendations(
+    technical: list[CandidateMasteryTarget],
+    skills: list[CandidateMasteryTarget],
+    *,
+    recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] | None,
+) -> list[CandidateRetestRecommendation]:
+    return [
+        CandidateRetestRecommendation(
+            recommendation_id=item.recommendation_id,
+            target_type=item.target_type,  # type: ignore[arg-type]
+            target_id=item.target_id,
+            target_name=item.display_name,
+            status=(recommendation_statuses or {}).get(item.recommendation_id, "PENDING"),
+            reason=item.next_action,
+        )
+        for item in [*technical, *skills]
+        if item.retest_due and item.recommendation_id is not None
+    ]
 
 
 def _target_order(item: CandidateMasteryTarget) -> tuple[int, str]:

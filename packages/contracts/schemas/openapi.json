@@ -987,6 +987,7 @@
             "enum": [
               "EMPTY",
               "READY",
+              "STALE",
               "UPDATING",
               "FAILED"
             ],
@@ -1054,6 +1055,17 @@
             "title": "Child Target Ids",
             "type": "array"
           },
+          "context_diversity": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Context Diversity"
+          },
           "display_name": {
             "title": "Display Name",
             "type": "string"
@@ -1107,9 +1119,67 @@
             "title": "Freshness Label",
             "type": "string"
           },
+          "last_evaluated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Evaluated At"
+          },
+          "last_evidence_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Evidence At"
+          },
+          "mastery_policy_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mastery Policy Version"
+          },
           "next_action": {
             "title": "Next Action",
             "type": "string"
+          },
+          "projection_updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Updated At"
+          },
+          "projection_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projection Version"
           },
           "reason": {
             "title": "Reason",
@@ -1145,6 +1215,17 @@
           "state_label": {
             "title": "State Label",
             "type": "string"
+          },
+          "supporting_evidence_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Supporting Evidence Count"
           },
           "target_id": {
             "format": "uuid",
@@ -3362,19 +3443,9 @@
             "minLength": 1,
             "title": "Idempotency Key",
             "type": "string"
-          },
-          "target_level": {
-            "enum": [
-              "INTERN",
-              "NEW_GRAD",
-              "EARLY_CAREER"
-            ],
-            "title": "Target Level",
-            "type": "string"
           }
         },
         "required": [
-          "target_level",
           "idempotency_key"
         ],
         "title": "DevelopmentMasteryRecalculationRequest",

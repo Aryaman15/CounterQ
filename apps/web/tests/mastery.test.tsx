@@ -208,6 +208,42 @@ describe("Stage 8A Mastery Map", () => {
     expect(screen.getByText("Learning / assisted Evidence")).toBeInTheDocument();
   });
 
+  it("labels retest evidence according to its actual independence", () => {
+    const diagnostic = target({
+      evidence: [{
+        ...target().evidence[0],
+        independence: "AFTER_PROBE",
+        retest_linked: true,
+      }],
+    });
+    const { rerender } = render(<MasteryExperience overview={overview({
+      technical_concepts: [diagnostic],
+      parent_summaries: [],
+      interview_skills: [],
+      retest_recommendations: [],
+    })} />);
+    fireEvent.click(screen.getByRole("button", { name: /open boundary monotonicity/i }));
+    expect(screen.getByText(/Diagnostic retest after probe/)).toBeInTheDocument();
+    expect(screen.queryByText(/Independent retest/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Close detail drawer" }));
+
+    const assisted = target({
+      evidence: [{
+        ...target().evidence[0],
+        independence: "AFTER_LIGHT_GUIDANCE",
+        retest_linked: true,
+      }],
+    });
+    rerender(<MasteryExperience overview={overview({
+      technical_concepts: [assisted],
+      parent_summaries: [],
+      interview_skills: [],
+      retest_recommendations: [],
+    })} />);
+    fireEvent.click(screen.getByRole("button", { name: /open boundary monotonicity/i }));
+    expect(screen.getByText(/Retest evidence/)).toBeInTheDocument();
+  });
+
   it("explains parent aggregation without fabricating parent Evidence", () => {
     render(<MasteryExperience overview={overview()} />);
     fireEvent.click(screen.getByRole("button", { name: /open sliding window mastery detail/i }));
@@ -242,6 +278,12 @@ describe("Stage 8A Mastery Map", () => {
     })} />);
     expect(screen.getByRole("status")).toHaveTextContent("temporarily unavailable");
     expect(screen.queryByText(/everything is saved/i)).not.toBeInTheDocument();
+
+    rerender(<MasteryExperience overview={overview({
+      status: "STALE",
+      message: "This view shows the last persisted Mastery state and needs a refresh.",
+    })} />);
+    expect(screen.getByRole("status")).toHaveTextContent("last persisted Mastery state");
   });
 
   it("loads production-shaped backend fixtures and has safe loading/error recovery", async () => {

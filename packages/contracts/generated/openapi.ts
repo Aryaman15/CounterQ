@@ -784,7 +784,7 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "EMPTY" | "READY" | "UPDATING" | "FAILED";
+            status: "EMPTY" | "READY" | "STALE" | "UPDATING" | "FAILED";
             /**
              * Target Level
              * @enum {string}
@@ -811,6 +811,8 @@ export interface components {
             category: string;
             /** Child Target Ids */
             child_target_ids: string[];
+            /** Context Diversity */
+            context_diversity?: number | null;
             /** Display Name */
             display_name: string;
             /** Distinct Context Count */
@@ -837,8 +839,18 @@ export interface components {
             freshness: "CURRENT" | "AGING" | "RETEST_DUE";
             /** Freshness Label */
             freshness_label: string;
+            /** Last Evaluated At */
+            last_evaluated_at?: string | null;
+            /** Last Evidence At */
+            last_evidence_at?: string | null;
+            /** Mastery Policy Version */
+            mastery_policy_version?: string | null;
             /** Next Action */
             next_action: string;
+            /** Projection Updated At */
+            projection_updated_at?: string | null;
+            /** Projection Version */
+            projection_version?: number | null;
             /** Reason */
             reason: string;
             /** Recommendation Id */
@@ -852,6 +864,8 @@ export interface components {
             state: "UNTESTED" | "EXPOSED" | "WEAK" | "DEVELOPING" | "STRONG";
             /** State Label */
             state_label: string;
+            /** Supporting Evidence Count */
+            supporting_evidence_count?: number | null;
             /**
              * Target Id
              * Format: uuid
@@ -1556,11 +1570,6 @@ export interface components {
         DevelopmentMasteryRecalculationRequest: {
             /** Idempotency Key */
             idempotency_key: string;
-            /**
-             * Target Level
-             * @enum {string}
-             */
-            target_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
         };
         /** DevelopmentMasteryRecalculationResponse */
         DevelopmentMasteryRecalculationResponse: {

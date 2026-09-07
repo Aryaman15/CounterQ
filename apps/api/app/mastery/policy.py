@@ -59,6 +59,8 @@ class MasteryEvidenceFact:
     context_key: str
     observation_key: str
     concept_family_key: str
+    problem_id: UUID | None = None
+    demonstration_form: str = "UNSPECIFIED"
     prompt_kind: str | None = None
     probe_strategy: str | None = None
     is_retest: bool = False
@@ -135,6 +137,26 @@ class MasteryPolicyV1:
         *,
         now: datetime | None = None,
     ) -> MasteryProjectionDecision:
+        return self._evaluate(facts, now=now, persisted_state=None)
+
+    def describe_persisted(
+        self,
+        facts: MasteryTargetFacts,
+        *,
+        persisted_state: MasteryState,
+        now: datetime | None = None,
+    ) -> MasteryProjectionDecision:
+        """Derive detail without selecting a replacement categorical state."""
+
+        return self._evaluate(facts, now=now, persisted_state=persisted_state)
+
+    def _evaluate(
+        self,
+        facts: MasteryTargetFacts,
+        *,
+        now: datetime | None,
+        persisted_state: MasteryState | None,
+    ) -> MasteryProjectionDecision:
         evaluated_at = now or datetime.now(UTC)
         if evaluated_at.tzinfo is None:
             raise ValueError("Mastery policy clock must be timezone-aware")
@@ -151,6 +173,9 @@ class MasteryPolicyV1:
         )
         meaningful_positive = tuple(item for item in evidence if _qualifying_positive(item))
         meaningful_negative = tuple(item for item in evidence if _qualifying_negative(item))
+        meaningful_self_corrections = tuple(
+            item for item in evidence if _meaningful_self_correction(item)
+        )
         unresolved_negative = tuple(
             item
             for item in meaningful_negative
@@ -158,7 +183,9 @@ class MasteryPolicyV1:
         )
         unresolved_breakpoints = tuple(item for item in facts.breakpoints if item.unresolved)
         distinct_sessions = len({item.session_id for item in evidence})
-        distinct_problems = len({item.problem_version_id for item in evidence})
+        distinct_problems = len(
+            {item.problem_id or item.problem_version_id for item in evidence}
+        )
         distinct_contexts = len({item.context_key for item in evidence})
         independent_count = len(
             {
@@ -168,11 +195,12 @@ class MasteryPolicyV1:
             }
         )
 
-        state = self._state(
+        state = persisted_state or self._state(
             facts=facts,
             evidence=evidence,
             positives=meaningful_positive,
             negatives=meaningful_negative,
+            self_corrections=meaningful_self_corrections,
             unresolved_negatives=unresolved_negative,
             unresolved_breakpoints=unresolved_breakpoints,
         )
@@ -196,6 +224,13 @@ class MasteryPolicyV1:
             has_negative=bool(meaningful_negative),
             has_learning=bool(learning),
             independent_count=independent_count,
+            after_probe_count=sum(
+                item.independence == "AFTER_PROBE" for item in meaningful_positive
+            ),
+            has_independent_negative=any(
+                item.independence == "INDEPENDENT" for item in unresolved_negative
+            ),
+            has_self_correction=bool(meaningful_self_corrections),
         )
         return MasteryProjectionDecision(
             state=state,
@@ -226,6 +261,7 @@ class MasteryPolicyV1:
         evidence: tuple[MasteryEvidenceFact, ...],
         positives: tuple[MasteryEvidenceFact, ...],
         negatives: tuple[MasteryEvidenceFact, ...],
+        self_corrections: tuple[MasteryEvidenceFact, ...],
         unresolved_negatives: tuple[MasteryEvidenceFact, ...],
         unresolved_breakpoints: tuple[MasteryBreakpointFact, ...],
     ) -> MasteryState:
@@ -236,7 +272,15 @@ class MasteryPolicyV1:
         if any(item.is_retest and item.strength == "STRONG" for item in unresolved_negatives):
             return "WEAK"
 
-        isolated_corrected_negative = _isolated_self_correction(negatives, positives)
+        repeated_misconception = len(
+            {item.observation_key for item in unresolved_negatives}
+        ) >= 2
+        if repeated_misconception and self_corrections and not positives:
+            return "WEAK"
+
+        isolated_corrected_negative = _isolated_self_correction(
+            negatives, self_corrections
+        )
         material_contradiction = bool(positives and unresolved_negatives)
         if material_contradiction or isolated_corrected_negative:
             return "DEVELOPING"
@@ -244,7 +288,7 @@ class MasteryPolicyV1:
         if _eligible_strong(facts, positives, unresolved_negatives, unresolved_breakpoints):
             return "STRONG"
 
-        if positives:
+        if positives or self_corrections:
             return "DEVELOPING"
 
         negative_contexts = {item.observation_key for item in unresolved_negatives}
@@ -278,11 +322,22 @@ def _qualifying_negative(item: MasteryEvidenceFact) -> bool:
         item.polarity == "NEGATIVE"
         and item.strength in _MEANINGFUL_STRENGTH
         and item.independence in _QUALIFYING_INDEPENDENCE
+        and item.demonstrates_reasoning_or_application
+    )
+
+
+def _meaningful_self_correction(item: MasteryEvidenceFact) -> bool:
+    return bool(
+        item.is_self_correction
+        and item.polarity in {"POSITIVE", "MIXED"}
+        and item.strength in _MEANINGFUL_STRENGTH
+        and item.independence == "INDEPENDENT"
+        and item.demonstrates_reasoning_or_application
     )
 
 
 def _contribution(item: MasteryEvidenceFact) -> MasteryEvidenceContribution:
-    if _qualifying_positive(item):
+    if _qualifying_positive(item) or _meaningful_self_correction(item):
         classification: ContributionClassification = "SUPPORTING"
     elif _qualifying_negative(item):
         classification = "CONTRADICTING"
@@ -305,14 +360,11 @@ def _negative_overcome(
 
 def _isolated_self_correction(
     negatives: tuple[MasteryEvidenceFact, ...],
-    positives: tuple[MasteryEvidenceFact, ...],
+    self_corrections: tuple[MasteryEvidenceFact, ...],
 ) -> bool:
     if len(negatives) != 1:
         return False
-    return any(
-        item.is_self_correction and item.occurred_at >= negatives[0].occurred_at
-        for item in positives
-    )
+    return any(item.occurred_at >= negatives[0].occurred_at for item in self_corrections)
 
 
 def _eligible_strong(
@@ -337,7 +389,7 @@ def _eligible_strong(
     if not any(_LEVEL_ORDER[item.interview_level] >= target_level for item in positives):
         return False
     if facts.target_family == "SKILL":
-        if len({item.problem_version_id for item in positives}) < 2:
+        if len({item.problem_id or item.problem_version_id for item in positives}) < 2:
             return False
         if len({item.concept_family_key for item in positives}) < 2:
             return False
@@ -356,9 +408,14 @@ def _sufficiency(
         if item.strength in _MEANINGFUL_STRENGTH
         and (item.independence in _QUALIFYING_INDEPENDENCE or item.polarity == "MIXED")
     )
-    if len(meaningful) >= 3 and (distinct_contexts >= 2 or distinct_sessions == 1):
+    diagnostic_units = {
+        (item.observation_key, item.demonstration_form) for item in meaningful
+    }
+    if len(diagnostic_units) >= 3 and (
+        distinct_contexts >= 2 or distinct_sessions == 1
+    ):
         return "HIGH"
-    if len(meaningful) >= 2 or any(
+    if len(diagnostic_units) >= 2 or any(
         item.strength == "STRONG" and item.independence in _QUALIFYING_INDEPENDENCE
         for item in meaningful
     ):
@@ -424,6 +481,9 @@ def _explanation(
     has_negative: bool,
     has_learning: bool,
     independent_count: int,
+    after_probe_count: int,
+    has_independent_negative: bool,
+    has_self_correction: bool,
 ) -> tuple[str, str]:
     if state == "UNTESTED":
         return "NO_EVIDENCE", "CounterQ does not yet have meaningful evidence for this area."
@@ -433,6 +493,11 @@ def _explanation(
             "CounterQ has seen this area, but not enough trustworthy evidence to judge it yet.",
         )
     if state == "WEAK":
+        if not has_independent_negative:
+            return (
+                "DIAGNOSTIC_GAP",
+                "Diagnostic evidence shows a meaningful gap that still needs verification.",
+            )
         return (
             "DIAGNOSTIC_GAP",
             "Independent evidence shows a meaningful gap that still needs verification.",
@@ -449,7 +514,19 @@ def _explanation(
             "You improved after guidance, but CounterQ has not yet seen you verify this "
             "independently.",
         )
+    if state == "DEVELOPING" and has_self_correction:
+        return (
+            "INDEPENDENT_SELF_CORRECTION",
+            "You corrected this independently. CounterQ still needs another distinct "
+            "context before calling it Strong.",
+        )
     if state == "DEVELOPING":
+        if independent_count == 0 and after_probe_count > 0:
+            return (
+                "AFTER_PROBE_DEMONSTRATION",
+                "You demonstrated this after a diagnostic challenge. CounterQ still needs "
+                "a fully independent context before calling it Strong.",
+            )
         return (
             "ANOTHER_CONTEXT_NEEDED",
             "You demonstrated this independently once. CounterQ needs another independent "

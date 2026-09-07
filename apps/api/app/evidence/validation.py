@@ -301,7 +301,7 @@ class EvidenceValidationService:
             payload={
                 "user_id": str(interview.user_id),
                 "source_interview_session_id": str(interview.id),
-                "target_level": configuration.level,
+                "source_session_level": configuration.level,
                 "mastery_policy_version": MASTERY_POLICY_VERSION,
             },
             deduplication_key=key,
