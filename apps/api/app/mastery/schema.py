@@ -77,7 +77,7 @@ class CandidateRetestRecommendation(MasteryContractModel):
     reason: str
     action_label: str = "CounterQ me again"
     action_enabled: bool = False
-    availability_message: str = "Quick Drill execution begins in Stage 8B."
+    availability_message: str = "No suitable retest is available yet."
 
 
 class CandidateMasteryOverviewResponse(MasteryContractModel):

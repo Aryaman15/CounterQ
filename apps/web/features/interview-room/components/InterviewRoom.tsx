@@ -396,6 +396,7 @@ export function InterviewRoom({
     >
       <InterviewHeader
         mode={interviewMode}
+        template={realtimeVoice.restoredBootstrap?.template}
         remainingLabel={terminal ? "00:00" : remainingLabel}
         voiceState={realtimeVoice.voiceState}
         onEndInterview={() => setEndDialogOpen(true)}

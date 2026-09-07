@@ -583,18 +583,38 @@ def _recommendations(
     *,
     recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] | None,
 ) -> list[CandidateRetestRecommendation]:
-    return [
-        CandidateRetestRecommendation(
-            recommendation_id=item.recommendation_id,
-            target_type=item.target_type,  # type: ignore[arg-type]
-            target_id=item.target_id,
-            target_name=item.display_name,
-            status=(recommendation_statuses or {}).get(item.recommendation_id, "PENDING"),
-            reason=item.next_action,
+    rows: list[CandidateRetestRecommendation] = []
+    for item in [*technical, *skills]:
+        if not item.retest_due or item.recommendation_id is None:
+            continue
+        persisted_status = (
+            recommendation_statuses.get(item.recommendation_id)
+            if recommendation_statuses is not None
+            else None
         )
-        for item in [*technical, *skills]
-        if item.retest_due and item.recommendation_id is not None
-    ]
+        actionable = item.target_type == "CONCEPT" and persisted_status is not None
+        status = persisted_status or "PENDING"
+        rows.append(
+            CandidateRetestRecommendation(
+                recommendation_id=item.recommendation_id,
+                target_type=item.target_type,  # type: ignore[arg-type]
+                target_id=item.target_id,
+                target_name=item.display_name,
+                status=status,
+                reason=item.next_action,
+                action_enabled=actionable,
+                availability_message=(
+                    "Your 10-minute Quick Drill is ready to resume."
+                    if actionable and status == "SCHEDULED"
+                    else (
+                        "Ready for a 10-minute Quick Drill."
+                        if actionable
+                        else "No suitable retest is available yet."
+                    )
+                ),
+            )
+        )
+    return rows
 
 
 def _target_order(item: CandidateMasteryTarget) -> tuple[int, str]:

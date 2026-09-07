@@ -1486,13 +1486,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 8A — Deterministic Mastery Foundation + Mastery Map
+Stage 8B — CounterQ Me Again + Quick Drill + Retest Learning Loop
 
 Current Goal:
-Build the first deterministic cross-session learner model from validated
-canonical Evidence, persist current projections and auditable transitions,
-materialize retest recommendations, and deliver a polished evidence-backed
-Mastery Map without beginning Quick Drill execution or authentication.
+Close the deterministic learning loop from an actionable RetestRecommendation
+through a Simulation Quick Drill, canonical target Evidence, Breakpoint-aware
+outcome finalization, and Mastery recomputation without beginning authentication.
 ```
 
 Update only this small section as implementation progresses.

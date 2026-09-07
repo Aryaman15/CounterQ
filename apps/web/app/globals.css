@@ -215,6 +215,18 @@ a:focus-visible,
   color: #f5d88f;
 }
 
+.quick-drill-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  border-left: 2px solid var(--green);
+  padding-left: 9px;
+  color: var(--text);
+}
+
+.quick-drill-badge strong { font-size: 12px; }
+.quick-drill-badge small { color: var(--muted); font-size: 10px; }
+
 .timer-pill {
   color: var(--text);
   font-variant-numeric: tabular-nums;
@@ -3027,7 +3039,9 @@ a:focus-visible,
 .mastery-retest li { display: grid; grid-template-columns: 1fr auto; gap: 6px 18px; align-items: center; }
 .mastery-retest li strong { display: block; color: #ddd6b9; font-size: 13px; }
 .mastery-retest li span { display: block; margin-top: 5px; color: #8c866d; font-size: 10px; line-height: 1.5; }
-.mastery-retest li button { border: 1px solid #494532; border-radius: 4px; background: #1b1a12; color: #716e5f; padding: 9px 12px; cursor: not-allowed; font-size: 10px; }
+.mastery-retest li button { border: 1px solid #756e43; border-radius: 4px; background: #222116; color: #e3dba9; padding: 9px 12px; cursor: pointer; font-size: 10px; }
+.mastery-retest li button:hover:not(:disabled), .mastery-retest li button:focus-visible { border-color: #a79b59; background: #2b2919; }
+.mastery-retest li button:disabled { border-color: #494532; color: #716e5f; cursor: not-allowed; }
 .mastery-retest li small { grid-column: 1 / -1; color: #5e5c50; font-size: 9px; }
 
 .mastery-empty { display: grid; grid-template-columns: 110px 1fr; gap: 48px; align-items: center; border-top: 1px solid #303a34; padding-top: 52px; }

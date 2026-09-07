@@ -11,6 +11,7 @@ type InterviewHeaderProps = {
   voiceState: VoicePresenceState;
   onEndInterview: () => void;
   terminal?: boolean;
+  template?: string;
 };
 
 export function InterviewHeader({
@@ -19,6 +20,7 @@ export function InterviewHeader({
   voiceState,
   onEndInterview,
   terminal = false,
+  template,
 }: InterviewHeaderProps) {
   return (
     <header className="interview-header">
@@ -27,6 +29,9 @@ export function InterviewHeader({
         <span className="brand-name">CounterQ</span>
       </div>
       <div className="header-status">
+        {template === "QUICK_DRILL" ? (
+          <span className="quick-drill-badge"><strong>Quick Drill</strong><small>10 min</small></span>
+        ) : null}
         <span className="mode-badge">{mode}</span>
         <span className="timer-pill" aria-label={`Time remaining ${remainingLabel}`}>
           <Clock size={15} aria-hidden="true" />

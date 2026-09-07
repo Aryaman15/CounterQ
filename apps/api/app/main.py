@@ -15,6 +15,7 @@ from app.mastery.routes import router as mastery_router
 from app.problems.routes import router as curated_problem_router
 from app.realtime.routes import router as realtime_router
 from app.reports.routes import router as reports_router
+from app.retests.routes import router as retests_router
 
 
 def create_app() -> FastAPI:
@@ -46,6 +47,7 @@ def create_app() -> FastAPI:
     app.include_router(reports_router)
     app.include_router(countermap_router)
     app.include_router(mastery_router)
+    app.include_router(retests_router)
     return app
 
 

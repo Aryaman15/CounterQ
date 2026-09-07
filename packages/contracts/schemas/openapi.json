@@ -1401,7 +1401,7 @@
             "type": "string"
           },
           "availability_message": {
-            "default": "Quick Drill execution begins in Stage 8B.",
+            "default": "No suitable retest is available yet.",
             "title": "Availability Message",
             "type": "string"
           },
@@ -3982,6 +3982,32 @@
         "title": "DevelopmentReportInspection",
         "type": "object"
       },
+      "DevelopmentRetestFixtureResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "mastery_path": {
+            "default": "/retests/demo",
+            "title": "Mastery Path",
+            "type": "string"
+          },
+          "recommendation_id": {
+            "format": "uuid",
+            "title": "Recommendation Id",
+            "type": "string"
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "recommendation_id"
+        ],
+        "title": "DevelopmentRetestFixtureResponse",
+        "type": "object"
+      },
       "DevelopmentRunRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5144,6 +5170,98 @@
           "status"
         ],
         "title": "RestoredUnresolvedPromptMessage",
+        "type": "object"
+      },
+      "RetestLaunchResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "configured_duration_seconds": {
+            "const": 600,
+            "title": "Configured Duration Seconds",
+            "type": "integer"
+          },
+          "interview_path": {
+            "default": "/interview/demo",
+            "title": "Interview Path",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "const": "SIMULATION",
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_id": {
+            "format": "uuid",
+            "title": "Problem Id",
+            "type": "string"
+          },
+          "problem_title": {
+            "title": "Problem Title",
+            "type": "string"
+          },
+          "problem_version_id": {
+            "format": "uuid",
+            "title": "Problem Version Id",
+            "type": "string"
+          },
+          "recommendation_id": {
+            "format": "uuid",
+            "title": "Recommendation Id",
+            "type": "string"
+          },
+          "resumed": {
+            "title": "Resumed",
+            "type": "boolean"
+          },
+          "retest_attempt_id": {
+            "format": "uuid",
+            "title": "Retest Attempt Id",
+            "type": "string"
+          },
+          "target_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Target Level",
+            "type": "string"
+          },
+          "template": {
+            "const": "QUICK_DRILL",
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recommendation_id",
+          "retest_attempt_id",
+          "interview_session_id",
+          "problem_id",
+          "problem_version_id",
+          "problem_title",
+          "language",
+          "target_level",
+          "mode",
+          "template",
+          "configured_duration_seconds",
+          "resumed"
+        ],
+        "title": "RetestLaunchResponse",
         "type": "object"
       },
       "SessionReportDocument": {
@@ -6343,6 +6461,72 @@
         "summary": "Session Report Status",
         "tags": [
           "reports"
+        ]
+      }
+    },
+    "/api/retests/development/fixture": {
+      "post": {
+        "description": "Materialize canonical durable inputs, then run normal Mastery projection.",
+        "operationId": "development_retest_fixture_api_retests_development_fixture_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRetestFixtureResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Development Retest Fixture",
+        "tags": [
+          "retests"
+        ]
+      }
+    },
+    "/api/retests/development/recommendations/{recommendation_id}/start": {
+      "post": {
+        "description": "Use the fixed development principal at the future authenticated boundary.",
+        "operationId": "development_start_retest_api_retests_development_recommendations__recommendation_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recommendation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Recommendation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetestLaunchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Start Retest",
+        "tags": [
+          "retests"
         ]
       }
     },

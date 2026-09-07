@@ -429,6 +429,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/retests/development/fixture": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Development Retest Fixture
+         * @description Materialize canonical durable inputs, then run normal Mastery projection.
+         */
+        post: operations["development_retest_fixture_api_retests_development_fixture_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/retests/development/recommendations/{recommendation_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Development Start Retest
+         * @description Use the fixed development principal at the future authenticated boundary.
+         */
+        post: operations["development_start_retest_api_retests_development_recommendations__recommendation_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/health": {
         parameters: {
             query?: never;
@@ -936,7 +976,7 @@ export interface components {
             action_label: string;
             /**
              * Availability Message
-             * @default Quick Drill execution begins in Stage 8B.
+             * @default No suitable retest is available yet.
              */
             availability_message: string;
             /** Reason */
@@ -1734,6 +1774,24 @@ export interface components {
             /** Source Evidence Count */
             source_evidence_count: number;
         };
+        /** DevelopmentRetestFixtureResponse */
+        DevelopmentRetestFixtureResponse: {
+            /**
+             * Mastery Path
+             * @default /retests/demo
+             */
+            mastery_path: string;
+            /**
+             * Recommendation Id
+             * Format: uuid
+             */
+            recommendation_id: string;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
+        };
         /** DevelopmentRunRequest */
         DevelopmentRunRequest: {
             /** Client Event Id */
@@ -2178,6 +2236,68 @@ export interface components {
              * @constant
              */
             status: "AUTHORIZED";
+        };
+        /** RetestLaunchResponse */
+        RetestLaunchResponse: {
+            /**
+             * Configured Duration Seconds
+             * @constant
+             */
+            configured_duration_seconds: 600;
+            /**
+             * Interview Path
+             * @default /interview/demo
+             */
+            interview_path: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
+            /**
+             * Mode
+             * @constant
+             */
+            mode: "SIMULATION";
+            /**
+             * Problem Id
+             * Format: uuid
+             */
+            problem_id: string;
+            /** Problem Title */
+            problem_title: string;
+            /**
+             * Problem Version Id
+             * Format: uuid
+             */
+            problem_version_id: string;
+            /**
+             * Recommendation Id
+             * Format: uuid
+             */
+            recommendation_id: string;
+            /** Resumed */
+            resumed: boolean;
+            /**
+             * Retest Attempt Id
+             * Format: uuid
+             */
+            retest_attempt_id: string;
+            /**
+             * Target Level
+             * @enum {string}
+             */
+            target_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+            /**
+             * Template
+             * @constant
+             */
+            template: "QUICK_DRILL";
         };
         /** SessionReportDocument */
         SessionReportDocument: {
@@ -2982,6 +3102,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidateSessionReportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_retest_fixture_api_retests_development_fixture_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRetestFixtureResponse"];
+                };
+            };
+        };
+    };
+    development_start_retest_api_retests_development_recommendations__recommendation_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recommendation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetestLaunchResponse"];
                 };
             };
             /** @description Validation Error */

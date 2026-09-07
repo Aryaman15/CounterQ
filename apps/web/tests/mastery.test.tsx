@@ -200,7 +200,7 @@ describe("Stage 8A Mastery Map", () => {
     expect(screen.queryByRole("button", { name: /CounterQ me again/i })).not.toBeInTheDocument();
   });
 
-  it("shows freshness and an honest disabled Stage 8B retest action", () => {
+  it("shows freshness and keeps fixture-only retest actions unavailable", () => {
     render(<MasteryExperience overview={overview()} />);
 
     expect(screen.getAllByText("Retest due").length).toBeGreaterThan(0);

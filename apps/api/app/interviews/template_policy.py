@@ -57,11 +57,23 @@ STANDARD_STAGE_PLAN = (
     StagePlanEntry("WRAP_UP", 60),
 )
 
+QUICK_DRILL_STAGE_PLAN = (
+    StagePlanEntry("INTRODUCTION", 30),
+    StagePlanEntry("PROBLEM_UNDERSTANDING", 45),
+    StagePlanEntry("APPROACH_DISCOVERY", 60),
+    StagePlanEntry("APPROACH_DEFENSE", 45),
+    StagePlanEntry("IMPLEMENTATION", 165),
+    StagePlanEntry("TESTING_DEBUGGING", 45),
+    StagePlanEntry("COMPLEXITY_EDGE_CASES", 30),
+    StagePlanEntry("FINAL_DEFENSE", 120),
+    StagePlanEntry("WRAP_UP", 60),
+)
+
 TEMPLATE_POLICIES: dict[InterviewTemplate, InterviewTemplatePolicy] = {
     "QUICK_DRILL": InterviewTemplatePolicy(
         template="QUICK_DRILL",
         configured_duration_seconds=600,
-        stage_plan=(),
+        stage_plan=QUICK_DRILL_STAGE_PLAN,
         protected_final_defense_seconds=120,
         protected_wrap_up_seconds=60,
         max_probes=5,

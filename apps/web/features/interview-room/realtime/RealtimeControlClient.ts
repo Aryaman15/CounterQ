@@ -2,7 +2,7 @@ import type { components } from "@counterq/contracts/openapi";
 
 export const CONTROL_PROTOCOL_VERSION = "counterq.realtime.control.v1";
 const CLIENT_INSTANCE_STORAGE_KEY = "counterq:realtime-control:client-instance-id";
-const DEVELOPMENT_SESSION_STORAGE_KEY = "counterq:realtime-control:development-session-id";
+export const DEVELOPMENT_SESSION_STORAGE_KEY = "counterq:realtime-control:development-session-id";
 const CLIENT_SEQUENCE_STORAGE_PREFIX = "counterq:realtime-control:client-sequence:";
 const PENDING_STORAGE_PREFIX = "counterq:realtime-control:pending:";
 const MAX_PENDING_MESSAGES = 20;
@@ -152,6 +152,10 @@ export type RealtimeControlClientOptions = {
   storage?: Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>;
   randomUUID?: () => string;
 };
+
+export function storeDevelopmentInterviewSession(interviewSessionId: string): void {
+  globalThis.sessionStorage.setItem(DEVELOPMENT_SESSION_STORAGE_KEY, interviewSessionId);
+}
 
 type PendingEnvelope = {
   clientEventId: string;

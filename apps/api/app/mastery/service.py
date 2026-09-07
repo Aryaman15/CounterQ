@@ -19,6 +19,7 @@ from app.mastery.models import (
     ConceptMasteryEvidence,
     MasteryTransition,
     MasteryTransitionEvidence,
+    RetestAttempt,
     RetestRecommendation,
     SkillMastery,
     SkillMasteryEvidence,
@@ -32,6 +33,7 @@ from app.mastery.policy import (
 from app.mastery.source import MasterySourceBuilder, MasteryTargetSource
 from app.outbox.claims import OutboxWorkClaim
 from app.outbox.models import OutboxEvent
+from app.retests.finalization import RetestAttemptFinalizer
 
 
 class MasteryRecalculationError(RuntimeError):
@@ -111,6 +113,8 @@ class MasteryRecalculationService:
                     "INVALID_CLOCK", "Mastery clock must be timezone-aware"
                 )
             now = await _monotonic_projection_time(session, user_id, requested_now)
+            retest_finalizer = RetestAttemptFinalizer(session)
+            prepared_retests = await retest_finalizer.prepare(user_id=user_id, now=now)
             bundle = await MasterySourceBuilder(session).build(
                 user_id,
                 target_level=development_target_level,
@@ -129,6 +133,12 @@ class MasteryRecalculationService:
                 )
                 association_count += len(decision.contributions)
                 transition_count += int(transition_created)
+                await retest_finalizer.finalize_target(
+                    prepared_retests,
+                    target=target,
+                    decision=decision,
+                    now=now,
+                )
                 await _sync_recommendation(
                     session,
                     user_id=user_id,
@@ -138,6 +148,7 @@ class MasteryRecalculationService:
                     now=now,
                     projection_changed=changed,
                 )
+            await retest_finalizer.finalize_unmatched(prepared_retests, now=now)
             concept_count = sum(item.family == "CONCEPT" for item in bundle.targets)
             skill_count = sum(item.family == "SKILL" for item in bundle.targets)
             pending_count = len(
@@ -417,6 +428,25 @@ async def _sync_recommendation(
         f"{decision.retest_reason.value}:{policy_version}:breakpoint:{breakpoint_identity}:"
         f"{evidence_identity}"
     )
+    latest_completed_attempt_id = await session.scalar(
+        select(RetestAttempt.id)
+        .join(
+            RetestRecommendation,
+            RetestRecommendation.id == RetestAttempt.retest_recommendation_id,
+        )
+        .where(
+            RetestRecommendation.user_id == user_id,
+            RetestRecommendation.concept_id == target.target_id,
+            RetestRecommendation.skill_dimension_id.is_(None),
+            RetestAttempt.completed_at.is_not(None),
+        )
+        .order_by(RetestAttempt.completed_at.desc(), RetestAttempt.id.desc())
+        .limit(1)
+    )
+    if latest_completed_attempt_id is not None:
+        recommendation_key = (
+            f"{recommendation_key}:after-attempt:{latest_completed_attempt_id}"
+        )
     matching = next(
         (item for item in active if item.recommendation_key == recommendation_key), None
     )

@@ -2,19 +2,54 @@
 
 import type { components } from "@counterq/contracts/openapi";
 import { ArrowUpRight, Clock3, Layers3, RotateCcw } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { MasteryDetailDrawer } from "./MasteryDetailDrawer";
 
 type Overview = components["schemas"]["CandidateMasteryOverviewResponse"];
 type Target = components["schemas"]["CandidateMasteryTarget"];
+type RetestLaunch = components["schemas"]["RetestLaunchResponse"];
+type RetestState = "idle" | "starting" | "launched" | "error";
 
 const stateOrder = ["STRONG", "DEVELOPING", "WEAK", "EXPOSED"] as const;
 
-export function MasteryExperience({ overview }: { overview: Overview }) {
+export function MasteryExperience({
+  overview,
+  onStartRetest,
+  onRetestLaunched,
+}: {
+  overview: Overview;
+  onStartRetest?: (recommendationId: string) => Promise<RetestLaunch>;
+  onRetestLaunched?: (launch: RetestLaunch) => void;
+}) {
   const [selected, setSelected] = useState<Target | null>(null);
+  const [retestStates, setRetestStates] = useState<Record<string, RetestState>>({});
+  const [retestErrors, setRetestErrors] = useState<Record<string, string>>({});
+  const pendingRetests = useRef(new Set<string>());
   const concepts = useMemo(() => groupTargets(overview.technical_concepts), [overview]);
   const skills = useMemo(() => groupTargets(overview.interview_skills), [overview]);
+
+  const startRetest = async (recommendationId: string) => {
+    if (!onStartRetest || pendingRetests.current.has(recommendationId)) return;
+    pendingRetests.current.add(recommendationId);
+    setRetestStates((current) => ({ ...current, [recommendationId]: "starting" }));
+    setRetestErrors((current) => ({ ...current, [recommendationId]: "" }));
+    try {
+      const launch = await onStartRetest(recommendationId);
+      setRetestStates((current) => ({ ...current, [recommendationId]: "launched" }));
+      onRetestLaunched?.(launch);
+    } catch (error) {
+      setRetestStates((current) => ({ ...current, [recommendationId]: "error" }));
+      setRetestErrors((current) => ({
+        ...current,
+        [recommendationId]: error instanceof Error
+          ? error.message
+          : "No suitable retest is available yet.",
+      }));
+    } finally {
+      pendingRetests.current.delete(recommendationId);
+    }
+  };
 
   if (overview.status === "EMPTY") {
     return (
@@ -81,10 +116,27 @@ export function MasteryExperience({ overview }: { overview: Overview }) {
             {overview.retest_recommendations.map((item) => (
               <li key={item.recommendation_id}>
                 <div><strong>{item.target_name}</strong><span>{item.reason}</span></div>
-                <button type="button" disabled aria-describedby={`retest-${item.recommendation_id}`}>
-                  {item.action_label}
+                <button
+                  type="button"
+                  disabled={
+                    !item.action_enabled ||
+                    !onStartRetest ||
+                    ["starting", "launched"].includes(
+                      retestStates[item.recommendation_id] ?? "idle",
+                    )
+                  }
+                  aria-describedby={`retest-${item.recommendation_id}`}
+                  onClick={() => void startRetest(item.recommendation_id)}
+                >
+                  {retestStates[item.recommendation_id] === "starting"
+                    ? "Starting Quick Drill…"
+                    : retestStates[item.recommendation_id] === "launched"
+                      ? "Quick Drill ready"
+                      : item.action_label}
                 </button>
-                <small id={`retest-${item.recommendation_id}`}>{item.availability_message}</small>
+                <small id={`retest-${item.recommendation_id}`} aria-live="polite">
+                  {retestErrors[item.recommendation_id] || item.availability_message}
+                </small>
               </li>
             ))}
           </ul>
