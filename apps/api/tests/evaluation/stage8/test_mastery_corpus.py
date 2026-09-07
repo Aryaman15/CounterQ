@@ -1199,8 +1199,208 @@ def _cases() -> list[MasteryIntegrityCase]:
                 ).explanation
             ),
         ),
+        MasteryIntegrityCase(
+            95,
+            "recent independent mixed self-correction refreshes old verification",
+            lambda: _expect(
+                _decision(
+                    stale_one,
+                    taught,
+                    _fact(
+                        193,
+                        days_ago=0,
+                        polarity="MIXED",
+                        is_self_correction=True,
+                    ),
+                ),
+                state="DEVELOPING",
+                freshness="CURRENT",
+                retest=False,
+            ),
+        ),
+        MasteryIntegrityCase(
+            96,
+            "recent after-probe mixed correction does not refresh taught verification",
+            lambda: _assert_equal(
+                _decision(
+                    stale_one,
+                    taught,
+                    _fact(
+                        194,
+                        days_ago=0,
+                        polarity="MIXED",
+                        independence="AFTER_PROBE",
+                        is_self_correction=True,
+                    ),
+                ).retest_reason,
+                "INDEPENDENCE_NOT_VERIFIED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            97,
+            "recent guided mixed correction does not refresh taught verification",
+            lambda: _assert_equal(
+                _decision(
+                    stale_one,
+                    taught,
+                    _fact(
+                        195,
+                        days_ago=0,
+                        polarity="MIXED",
+                        independence="AFTER_LIGHT_GUIDANCE",
+                        is_self_correction=True,
+                    ),
+                ).retest_reason,
+                "INDEPENDENCE_NOT_VERIFIED",
+            ),
+        ),
+        MasteryIntegrityCase(
+            98,
+            "fresh mixed self-correction remains mixed and below strong",
+            lambda: _assert_equal(
+                (
+                    _decision(
+                        stale_one,
+                        taught,
+                        _fact(
+                            196,
+                            days_ago=0,
+                            polarity="MIXED",
+                            is_self_correction=True,
+                        ),
+                    ).state,
+                    _fact(
+                        196,
+                        days_ago=0,
+                        polarity="MIXED",
+                        is_self_correction=True,
+                    ).polarity,
+                ),
+                ("DEVELOPING", "MIXED"),
+            ),
+        ),
+        MasteryIntegrityCase(
+            99,
+            "non-diagnostic context does not unlock high across meaningful sessions",
+            lambda: _assert_equal(
+                _decision(
+                    _fact(
+                        197,
+                        session=20,
+                        context="one-meaningful-context",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        198,
+                        session=21,
+                        context="one-meaningful-context",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        199,
+                        session=22,
+                        context="one-meaningful-context",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        200,
+                        session=23,
+                        context="non-diagnostic-context",
+                        application=False,
+                    ),
+                ).evidence_sufficiency,
+                "MEDIUM",
+            ),
+        ),
+        MasteryIntegrityCase(
+            100,
+            "non-diagnostic second session does not dilute rich single-session evidence",
+            lambda: _assert_equal(
+                _decision(
+                    _fact(
+                        201,
+                        session=30,
+                        context="rich-single-session",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        202,
+                        session=30,
+                        context="rich-single-session",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        203,
+                        session=30,
+                        context="rich-single-session",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        204,
+                        session=31,
+                        context="rich-single-session",
+                        application=False,
+                    ),
+                ).evidence_sufficiency,
+                "HIGH",
+            ),
+        ),
+        MasteryIntegrityCase(
+            101,
+            "genuine meaningful context diversity unlocks high sufficiency",
+            lambda: _assert_equal(
+                _decision(
+                    _fact(
+                        205,
+                        session=40,
+                        context="meaningful-context-a",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        206,
+                        session=41,
+                        context="meaningful-context-b",
+                        strength="MODERATE",
+                    ),
+                    _fact(
+                        207,
+                        session=42,
+                        context="meaningful-context-b",
+                        strength="MODERATE",
+                    ),
+                ).evidence_sufficiency,
+                "HIGH",
+            ),
+        ),
+        MasteryIntegrityCase(
+            102,
+            "duplicate meaningful observations remain one diagnostic unit",
+            lambda: _assert_equal(
+                _decision(
+                    _fact(
+                        208,
+                        session=50,
+                        context="duplicate-context-a",
+                        observation="duplicate-observation",
+                    ),
+                    _fact(
+                        209,
+                        session=51,
+                        context="duplicate-context-b",
+                        observation="duplicate-observation",
+                    ),
+                    _fact(
+                        210,
+                        session=52,
+                        context="duplicate-context-c",
+                        observation="duplicate-observation",
+                    ),
+                ).evidence_sufficiency,
+                "MEDIUM",
+            ),
+        ),
     ]
-    assert [item.number for item in cases] == list(range(1, 95))
+    assert [item.number for item in cases] == list(range(1, 103))
     return cases
 
 
@@ -1214,7 +1414,7 @@ def test_stage8_deterministic_mastery_corpus(case: MasteryIntegrityCase) -> None
 
 
 def test_stage8_evaluation_case_count() -> None:
-    assert len(_cases()) == 94
+    assert len(_cases()) == 102
 
 
 def test_persisted_projection_metadata_is_read_truth() -> None:

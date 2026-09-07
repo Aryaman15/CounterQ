@@ -206,11 +206,7 @@ class MasteryPolicyV1:
             unresolved_negatives=unresolved_negative,
             unresolved_breakpoints=unresolved_breakpoints,
         )
-        sufficiency = _sufficiency(
-            evidence,
-            distinct_sessions=distinct_sessions,
-            distinct_contexts=distinct_contexts,
-        )
+        sufficiency = _sufficiency(evidence)
         freshness, retest_reason = _freshness(
             evidence=evidence,
             state=state,
@@ -338,6 +334,10 @@ def _meaningful_self_correction(item: MasteryEvidenceFact) -> bool:
     )
 
 
+def _establishes_verification_freshness(item: MasteryEvidenceFact) -> bool:
+    return _qualifying_positive(item) or _meaningful_self_correction(item)
+
+
 def _contribution(item: MasteryEvidenceFact) -> MasteryEvidenceContribution:
     if _qualifying_positive(item) or _meaningful_self_correction(item):
         classification: ContributionClassification = "SUPPORTING"
@@ -400,22 +400,21 @@ def _eligible_strong(
 
 def _sufficiency(
     evidence: tuple[MasteryEvidenceFact, ...],
-    *,
-    distinct_sessions: int,
-    distinct_contexts: int,
 ) -> EvidenceSufficiency:
     meaningful = tuple(
         item
         for item in evidence
         if item.strength in _MEANINGFUL_STRENGTH
         and item.demonstrates_reasoning_or_application
-        and (item.independence in _QUALIFYING_INDEPENDENCE or item.polarity == "MIXED")
+        and item.independence in _QUALIFYING_INDEPENDENCE
     )
     diagnostic_units = {
         (item.observation_key, item.demonstration_form) for item in meaningful
     }
+    meaningful_sessions = len({item.session_id for item in meaningful})
+    meaningful_contexts = len({item.context_key for item in meaningful})
     if len(diagnostic_units) >= 3 and (
-        distinct_contexts >= 2 or distinct_sessions == 1
+        meaningful_contexts >= 2 or meaningful_sessions == 1
     ):
         return "HIGH"
     if len(diagnostic_units) >= 2 or any(
@@ -452,10 +451,8 @@ def _freshness(
     independently_verified_after = bool(
         last_learning_at
         and any(
-            (
-                (_qualifying_positive(item) and item.independence == "INDEPENDENT")
-                or _meaningful_self_correction(item)
-            )
+            _establishes_verification_freshness(item)
+            and item.independence == "INDEPENDENT"
             and item.occurred_at > last_learning_at
             for item in evidence
         )
@@ -463,12 +460,15 @@ def _freshness(
     if has_learning and not independently_verified_after:
         return "RETEST_DUE", RetestReason.INDEPENDENCE_NOT_VERIFIED
     if unresolved_negatives and any(
-        _qualifying_positive(item) or _meaningful_self_correction(item)
-        for item in evidence
+        _establishes_verification_freshness(item) for item in evidence
     ):
         return "RETEST_DUE", RetestReason.CONTRADICTORY_EVIDENCE
     last_verification = max(
-        (item.occurred_at for item in evidence if _qualifying_positive(item)),
+        (
+            item.occurred_at
+            for item in evidence
+            if _establishes_verification_freshness(item)
+        ),
         default=evidence[-1].occurred_at,
     )
     age = now - last_verification
