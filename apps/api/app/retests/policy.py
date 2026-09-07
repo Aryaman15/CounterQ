@@ -83,6 +83,7 @@ class RetestOutcomeDecision:
     outcome: RetestOutcome
     qualifying_positive_ids: tuple[UUID, ...]
     qualifying_negative_ids: tuple[UUID, ...]
+    structured_self_correction_ids: tuple[UUID, ...]
     reason: str
 
 
@@ -99,7 +100,7 @@ class RetestOutcomePolicyV1:
         session_abandoned: bool = False,
     ) -> RetestOutcomeDecision:
         if session_abandoned:
-            return RetestOutcomeDecision("ABANDONED", (), (), "SESSION_ABANDONED")
+            return RetestOutcomeDecision("ABANDONED", (), (), (), "SESSION_ABANDONED")
         meaningful = tuple(
             item
             for item in evidence
@@ -107,28 +108,111 @@ class RetestOutcomePolicyV1:
             and item.strength in _MEANINGFUL
             and item.demonstrates_reasoning_or_application
         )
+        independent = tuple(item for item in meaningful if item.independence == "INDEPENDENT")
         negatives = tuple(
-            item.evidence_id
-            for item in meaningful
-            if item.polarity == "NEGATIVE" and item.independence == "INDEPENDENT"
+            item
+            for item in independent
+            if item.polarity == "NEGATIVE"
         )
-        if negatives:
-            return RetestOutcomeDecision(
-                "PERSISTED_GAP", (), negatives, "INDEPENDENT_GAP_PERSISTED"
-            )
         positives = tuple(
-            item.evidence_id
-            for item in meaningful
-            if item.independence == "INDEPENDENT"
-            and (item.polarity == "POSITIVE" or item.is_self_correction)
+            item
+            for item in independent
+            if item.polarity == "POSITIVE"
         )
-        if positives:
+        self_corrections = tuple(
+            item
+            for item in independent
+            if item.is_self_correction and item.polarity in {"POSITIVE", "MIXED"}
+        )
+
+        if not negatives:
+            satisfying = _ordered_unique((*positives, *self_corrections))
+            if satisfying:
+                return RetestOutcomeDecision(
+                    "SATISFIED",
+                    tuple(item.evidence_id for item in satisfying),
+                    (),
+                    tuple(item.evidence_id for item in self_corrections),
+                    f"{original_reason.value}_CANDIDATE_RESOLVED",
+                )
             return RetestOutcomeDecision(
-                "SATISFIED", positives, (), f"{original_reason.value}_CANDIDATE_RESOLVED"
+                "INCONCLUSIVE",
+                (),
+                (),
+                (),
+                "INSUFFICIENT_INDEPENDENT_TARGET_EVIDENCE",
+            )
+
+        negative_ids = tuple(item.evidence_id for item in negatives)
+        if not self_corrections:
+            if positives:
+                return RetestOutcomeDecision(
+                    "INCONCLUSIVE",
+                    (),
+                    (),
+                    (),
+                    "CONTRADICTORY_EVIDENCE_WITHOUT_STRUCTURED_CORRECTION",
+                )
+            return RetestOutcomeDecision(
+                "PERSISTED_GAP",
+                (),
+                negative_ids,
+                (),
+                "INDEPENDENT_GAP_PERSISTED",
+            )
+
+        if any(
+            negative.occurred_at == correction.occurred_at
+            for negative in negatives
+            for correction in self_corrections
+        ):
+            return RetestOutcomeDecision(
+                "INCONCLUSIVE", (), (), (), "SELF_CORRECTION_CHRONOLOGY_AMBIGUOUS"
+            )
+
+        latest_correction_at = max(item.occurred_at for item in self_corrections)
+        if any(item.occurred_at > latest_correction_at for item in negatives):
+            return RetestOutcomeDecision(
+                "PERSISTED_GAP",
+                (),
+                negative_ids,
+                (),
+                "GAP_RECURRED_AFTER_SELF_CORRECTION",
+            )
+
+        distinct_negative_observations = {item.observation_key for item in negatives}
+        if len(distinct_negative_observations) != 1:
+            return RetestOutcomeDecision(
+                "INCONCLUSIVE", (), (), (), "REPEATED_GAPS_WITH_SELF_CORRECTION"
+            )
+
+        latest_negative_at = max(item.occurred_at for item in negatives)
+        later_corrections = tuple(
+            item for item in self_corrections if item.occurred_at > latest_negative_at
+        )
+        if later_corrections:
+            return RetestOutcomeDecision(
+                "SATISFIED",
+                tuple(item.evidence_id for item in later_corrections),
+                (),
+                tuple(item.evidence_id for item in later_corrections),
+                f"{original_reason.value}_INDEPENDENT_SELF_CORRECTION",
             )
         return RetestOutcomeDecision(
-            "INCONCLUSIVE", (), (), "INSUFFICIENT_INDEPENDENT_TARGET_EVIDENCE"
+            "INCONCLUSIVE", (), (), (), "SELF_CORRECTION_CHRONOLOGY_UNPROVED"
         )
+
+
+def _ordered_unique(
+    evidence: tuple[MasteryEvidenceFact, ...],
+) -> tuple[MasteryEvidenceFact, ...]:
+    by_id = {item.evidence_id: item for item in evidence}
+    return tuple(
+        sorted(
+            by_id.values(),
+            key=lambda item: (item.occurred_at, str(item.evidence_id)),
+        )
+    )
 
 
 def recommendation_reason(recommendation_key: str) -> RetestReason:

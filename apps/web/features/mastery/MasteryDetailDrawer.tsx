@@ -4,10 +4,27 @@ import type { components } from "@counterq/contracts/openapi";
 import { AlertTriangle, Check, Clock3, Lightbulb, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
+import { RetestAction, type RetestState } from "./RetestAction";
+
 type Target = components["schemas"]["CandidateMasteryTarget"];
 type Evidence = components["schemas"]["CandidateMasteryEvidenceItem"];
+type Recommendation = components["schemas"]["CandidateRetestRecommendation"];
 
-export function MasteryDetailDrawer({ target, onClose }: { target: Target; onClose: () => void }) {
+export function MasteryDetailDrawer({
+  target,
+  recommendation,
+  retestState,
+  retestError,
+  onStartRetest,
+  onClose,
+}: {
+  target: Target;
+  recommendation?: Recommendation;
+  retestState?: RetestState;
+  retestError?: string;
+  onStartRetest?: (recommendationId: string) => void;
+  onClose: () => void;
+}) {
   const drawerRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -82,7 +99,15 @@ export function MasteryDetailDrawer({ target, onClose }: { target: Target; onClo
           <section className="mastery-detail-section mastery-next-action">
             <p className="mastery-section-label">Next</p>
             <p><Lightbulb size={15} /> {target.next_action}</p>
-            {target.retest_due ? <button type="button" disabled>CounterQ me again · Available in Stage 8B</button> : null}
+            {target.target_type === "CONCEPT" && recommendation ? (
+              <RetestAction
+                recommendation={recommendation}
+                state={retestState}
+                error={retestError}
+                descriptionId={`retest-drawer-${recommendation.recommendation_id}`}
+                onStart={onStartRetest}
+              />
+            ) : null}
           </section>
         </div>
       </aside>

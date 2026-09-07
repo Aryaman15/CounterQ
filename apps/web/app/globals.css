@@ -3088,7 +3088,10 @@ a:focus-visible,
 .mastery-evidence-timeline small { display: block; margin-top: 7px; color: #68756d; font-size: 9px; }
 .mastery-evidence-timeline em { display: inline-block; margin-top: 8px; color: #b09f69; font-size: 9px; font-style: normal; font-weight: 730; text-transform: uppercase; }
 .mastery-next-action > p:not(.mastery-section-label) { display: flex; gap: 9px; align-items: flex-start; color: #aebbb2; }
-.mastery-next-action button { width: 100%; margin-top: 10px; border: 1px solid #454236; background: #1b1a14; color: #706d61; padding: 11px; cursor: not-allowed; }
+.mastery-next-action button { width: 100%; margin-top: 10px; border: 1px solid #756e43; border-radius: 4px; background: #222116; color: #e3dba9; padding: 11px; cursor: pointer; }
+.mastery-next-action button:hover:not(:disabled), .mastery-next-action button:focus-visible { border-color: #a79b59; background: #2b2919; }
+.mastery-next-action button:disabled { border-color: #454236; background: #1b1a14; color: #706d61; cursor: not-allowed; }
+.mastery-next-action small { display: block; margin-top: 7px; color: #5e5c50; font-size: 9px; }
 
 @media (max-width: 720px) {
   .mastery-demo { padding-inline: 16px; }

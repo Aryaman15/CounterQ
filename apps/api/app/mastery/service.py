@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.auth.models import User
 from app.evidence.models import Evidence
+from app.interviews.models import InterviewSession
 from app.mastery.models import (
     ConceptMastery,
     ConceptMasteryEvidence,
@@ -405,6 +406,32 @@ async def _sync_recommendation(
             .with_for_update()
         )
     )
+    scheduled_ids = [item.id for item in active if item.status == "SCHEDULED"]
+    resumable_scheduled_ids = (
+        set(
+            await session.scalars(
+                select(RetestAttempt.retest_recommendation_id)
+                .join(
+                    InterviewSession,
+                    InterviewSession.id == RetestAttempt.interview_session_id,
+                )
+                .where(
+                    RetestAttempt.retest_recommendation_id.in_(scheduled_ids),
+                    RetestAttempt.outcome.is_(None),
+                    RetestAttempt.completed_at.is_(None),
+                    InterviewSession.status.in_(("READY", "ACTIVE", "RECONNECTING")),
+                )
+            )
+        )
+        if scheduled_ids
+        else set()
+    )
+    if resumable_scheduled_ids:
+        for item in active:
+            if item.id not in resumable_scheduled_ids:
+                item.status = "SUPERSEDED"
+                item.updated_at = now
+        return
     if target.family == "SKILL":
         for item in active:
             item.status = "SUPERSEDED"
@@ -428,7 +455,7 @@ async def _sync_recommendation(
         f"{decision.retest_reason.value}:{policy_version}:breakpoint:{breakpoint_identity}:"
         f"{evidence_identity}"
     )
-    latest_completed_attempt_id = await session.scalar(
+    latest_finalized_attempt_id = await session.scalar(
         select(RetestAttempt.id)
         .join(
             RetestRecommendation,
@@ -438,14 +465,14 @@ async def _sync_recommendation(
             RetestRecommendation.user_id == user_id,
             RetestRecommendation.concept_id == target.target_id,
             RetestRecommendation.skill_dimension_id.is_(None),
-            RetestAttempt.completed_at.is_not(None),
+            RetestAttempt.outcome.is_not(None),
         )
-        .order_by(RetestAttempt.completed_at.desc(), RetestAttempt.id.desc())
+        .order_by(RetestAttempt.started_at.desc(), RetestAttempt.id.desc())
         .limit(1)
     )
-    if latest_completed_attempt_id is not None:
+    if latest_finalized_attempt_id is not None:
         recommendation_key = (
-            f"{recommendation_key}:after-attempt:{latest_completed_attempt_id}"
+            f"{recommendation_key}:after-attempt:{latest_finalized_attempt_id}"
         )
     matching = next(
         (item for item in active if item.recommendation_key == recommendation_key), None

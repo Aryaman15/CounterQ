@@ -17,9 +17,12 @@ from app.evidence.models import (
     Evidence,
     EvidenceConcept,
     EvidenceSkill,
+    EvidenceSource,
     SkillDimension,
 )
+from app.evidence.source_admission import evidence_source_admission
 from app.interviews.models import InterviewSession
+from app.observation.models import InterviewEvent
 from app.problems.models import Concept
 
 MIN_BREAKPOINT_EVIDENCE_CONFIDENCE = Decimal("0.7000")
@@ -362,6 +365,88 @@ class BreakpointService:
         )
         return breakpoint_id
 
+    async def reinforce_from_independent_retest(
+        self,
+        *,
+        breakpoint_id: UUID,
+        user_id: UUID,
+        concept_id: UUID,
+        evidence_ids: tuple[UUID, ...],
+    ) -> tuple[UUID, ...]:
+        """Reinforce one exact active Breakpoint through its canonical evidence floor."""
+
+        breakpoint = await self._exact_active_breakpoint(
+            breakpoint_id=breakpoint_id,
+            user_id=user_id,
+            concept_id=concept_id,
+        )
+        if breakpoint is None:
+            return ()
+        linked: list[UUID] = []
+        for evidence_id in evidence_ids:
+            evidence = await self._qualifying_retest_evidence(
+                breakpoint=breakpoint,
+                evidence_id=evidence_id,
+                allowed_polarities=frozenset(("NEGATIVE", "MIXED")),
+            )
+            if evidence is None or evidence.independence_level != "INDEPENDENT":
+                continue
+            if await self._persist_relationship(
+                breakpoint_id=breakpoint.id,
+                evidence_id=evidence.id,
+                relationship="REINFORCED",
+            ):
+                linked.append(evidence.id)
+        await self._session.flush()
+        return tuple(linked)
+
+    async def resolve_from_independent_retest(
+        self,
+        *,
+        breakpoint_id: UUID,
+        user_id: UUID,
+        concept_id: UUID,
+        evidence_ids: tuple[UUID, ...],
+        structured_self_correction_ids: frozenset[UUID] = frozenset(),
+        resolved_at: datetime,
+    ) -> tuple[UUID, ...]:
+        """Resolve one exact active Breakpoint only from strict independent retest proof."""
+
+        breakpoint = await self._exact_active_breakpoint(
+            breakpoint_id=breakpoint_id,
+            user_id=user_id,
+            concept_id=concept_id,
+        )
+        if breakpoint is None:
+            return ()
+        linked: list[UUID] = []
+        for evidence_id in evidence_ids:
+            evidence = await self._qualifying_retest_evidence(
+                breakpoint=breakpoint,
+                evidence_id=evidence_id,
+                allowed_polarities=frozenset(("POSITIVE", "MIXED")),
+            )
+            if evidence is None or evidence.independence_level != "INDEPENDENT":
+                continue
+            if (
+                evidence.polarity != "POSITIVE"
+                and evidence.id not in structured_self_correction_ids
+            ):
+                continue
+            if await self._persist_relationship(
+                breakpoint_id=breakpoint.id,
+                evidence_id=evidence.id,
+                relationship="RESOLUTION_SUPPORT",
+            ):
+                linked.append(evidence.id)
+        if not linked:
+            return ()
+        breakpoint.status = "RESOLVED"
+        breakpoint.resolved_at = resolved_at
+        breakpoint.resolution_reason = "INDEPENDENT_RETEST_VERIFIED"
+        await self._session.flush()
+        return tuple(linked)
+
     async def active_support_count(self, breakpoint_id: UUID) -> int:
         """Count current qualifying support without erasing historical links."""
 
@@ -369,6 +454,10 @@ class BreakpointService:
             select(func.count())
             .select_from(BreakpointEvidence)
             .join(Evidence, Evidence.id == BreakpointEvidence.evidence_id)
+            .join(InterviewSession, InterviewSession.id == Evidence.interview_session_id)
+            .join(EvidenceConcept, EvidenceConcept.evidence_id == Evidence.id)
+            .join(EvidenceSkill, EvidenceSkill.evidence_id == Evidence.id)
+            .join(Breakpoint, Breakpoint.id == BreakpointEvidence.breakpoint_id)
             .where(
                 BreakpointEvidence.breakpoint_id == breakpoint_id,
                 BreakpointEvidence.relationship.in_(("CREATED", "REINFORCED")),
@@ -377,6 +466,36 @@ class BreakpointService:
                 Evidence.polarity.in_(("NEGATIVE", "MIXED")),
                 Evidence.strength.in_(QUALIFYING_EVIDENCE_STRENGTHS),
                 Evidence.confidence >= MIN_BREAKPOINT_EVIDENCE_CONFIDENCE,
+                InterviewSession.user_id == Breakpoint.user_id,
+                EvidenceConcept.concept_id == Breakpoint.concept_id,
+                EvidenceSkill.skill_dimension_id == Breakpoint.skill_dimension_id,
+            )
+        )
+        return int(value or 0)
+
+    async def active_resolution_support_count(self, breakpoint_id: UUID) -> int:
+        """Count current strict resolution support while retaining historical links."""
+
+        value = await self._session.scalar(
+            select(func.count())
+            .select_from(BreakpointEvidence)
+            .join(Evidence, Evidence.id == BreakpointEvidence.evidence_id)
+            .join(InterviewSession, InterviewSession.id == Evidence.interview_session_id)
+            .join(EvidenceConcept, EvidenceConcept.evidence_id == Evidence.id)
+            .join(EvidenceSkill, EvidenceSkill.evidence_id == Evidence.id)
+            .join(Breakpoint, Breakpoint.id == BreakpointEvidence.breakpoint_id)
+            .where(
+                BreakpointEvidence.breakpoint_id == breakpoint_id,
+                BreakpointEvidence.relationship == "RESOLUTION_SUPPORT",
+                Evidence.validation_status == "VALID",
+                Evidence.invalidated_at.is_(None),
+                Evidence.polarity.in_(("POSITIVE", "MIXED")),
+                Evidence.strength.in_(QUALIFYING_EVIDENCE_STRENGTHS),
+                Evidence.confidence >= MIN_BREAKPOINT_EVIDENCE_CONFIDENCE,
+                Evidence.independence_level == "INDEPENDENT",
+                InterviewSession.user_id == Breakpoint.user_id,
+                EvidenceConcept.concept_id == Breakpoint.concept_id,
+                EvidenceSkill.skill_dimension_id == Breakpoint.skill_dimension_id,
             )
         )
         return int(value or 0)
@@ -384,31 +503,159 @@ class BreakpointService:
     async def recalculate_support_for_evidence(
         self, evidence_id: UUID, *, recalculated_at: datetime | None = None
     ) -> tuple[UUID, ...]:
-        """Dismiss active diagnoses whose last valid qualifying support disappeared."""
+        """Recalculate diagnoses affected by invalidated support or resolution proof."""
 
         breakpoint_ids = tuple(
             await self._session.scalars(
                 select(BreakpointEvidence.breakpoint_id).where(
                     BreakpointEvidence.evidence_id == evidence_id,
-                    BreakpointEvidence.relationship.in_(("CREATED", "REINFORCED")),
+                    BreakpointEvidence.relationship.in_(
+                        ("CREATED", "REINFORCED", "RESOLUTION_SUPPORT")
+                    ),
                 )
             )
         )
-        dismissed: list[UUID] = []
+        recalculated: list[UUID] = []
         for breakpoint_id in breakpoint_ids:
             breakpoint = await self._session.scalar(
                 select(Breakpoint).where(Breakpoint.id == breakpoint_id).with_for_update()
             )
-            if breakpoint is None or breakpoint.status not in ACTIVE_BREAKPOINT_STATUSES:
+            if breakpoint is None or breakpoint.status == "DISMISSED":
                 continue
-            if await self.active_support_count(breakpoint.id) > 0:
+            negative_support = await self.active_support_count(breakpoint.id)
+            if breakpoint.status == "RESOLVED":
+                if await self.active_resolution_support_count(breakpoint.id) > 0:
+                    continue
+                if negative_support > 0:
+                    breakpoint.status = "RETEST_PENDING"
+                    breakpoint.resolved_at = None
+                    breakpoint.resolution_reason = None
+                else:
+                    breakpoint.status = "DISMISSED"
+                    breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
+                    breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+                recalculated.append(breakpoint.id)
+                continue
+            if breakpoint.status not in ACTIVE_BREAKPOINT_STATUSES or negative_support > 0:
                 continue
             breakpoint.status = "DISMISSED"
             breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
             breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
-            dismissed.append(breakpoint.id)
+            recalculated.append(breakpoint.id)
         await self._session.flush()
-        return tuple(dismissed)
+        return tuple(recalculated)
+
+    async def _exact_active_breakpoint(
+        self,
+        *,
+        breakpoint_id: UUID,
+        user_id: UUID,
+        concept_id: UUID,
+    ) -> Breakpoint | None:
+        breakpoint: Breakpoint | None = await self._session.scalar(
+            select(Breakpoint)
+            .where(
+                Breakpoint.id == breakpoint_id,
+                Breakpoint.user_id == user_id,
+                Breakpoint.concept_id == concept_id,
+                Breakpoint.status.in_(ACTIVE_BREAKPOINT_STATUSES),
+            )
+            .with_for_update()
+        )
+        return breakpoint
+
+    async def _qualifying_retest_evidence(
+        self,
+        *,
+        breakpoint: Breakpoint,
+        evidence_id: UUID,
+        allowed_polarities: frozenset[str],
+    ) -> Evidence | None:
+        evidence = await self._session.get(Evidence, evidence_id)
+        if (
+            evidence is None
+            or evidence.validation_status != "VALID"
+            or evidence.invalidated_at is not None
+            or evidence.polarity not in allowed_polarities
+            or evidence.strength not in QUALIFYING_EVIDENCE_STRENGTHS
+            or evidence.confidence < MIN_BREAKPOINT_EVIDENCE_CONFIDENCE
+        ):
+            return None
+        interview = await self._session.get(InterviewSession, evidence.interview_session_id)
+        if interview is None or interview.user_id != breakpoint.user_id:
+            return None
+        if not await self._evidence_targets_boundary(
+            evidence_id=evidence.id,
+            concept_id=breakpoint.concept_id,
+            skill_dimension_id=breakpoint.skill_dimension_id,
+        ):
+            return None
+        if not await self._demonstrates_reasoning_or_application(evidence.id):
+            return None
+        return evidence
+
+    async def _demonstrates_reasoning_or_application(self, evidence_id: UUID) -> bool:
+        rows = (
+            await self._session.execute(
+                select(EvidenceSource.source_role, InterviewEvent)
+                .join(InterviewEvent, InterviewEvent.id == EvidenceSource.interview_event_id)
+                .where(EvidenceSource.evidence_id == evidence_id)
+                .order_by(InterviewEvent.server_sequence)
+            )
+        ).all()
+        for source_role, event in rows:
+            admission = evidence_source_admission(
+                event_type=event.event_type,
+                event_source=event.source,
+                source_role=source_role,
+            )
+            if not admission.counts_as_candidate_demonstration:
+                continue
+            if event.event_type in {"TRANSCRIPT_FINALIZED", "MEANINGFUL_CODE_CHANGE"}:
+                return True
+            if (
+                event.event_type == "CODE_SNAPSHOT_CREATED"
+                and event.payload.get("trigger") != "INITIAL_EDITOR_STATE"
+            ):
+                return True
+        return False
+
+    async def _persist_relationship(
+        self,
+        *,
+        breakpoint_id: UUID,
+        evidence_id: UUID,
+        relationship: str,
+    ) -> bool:
+        existing = await self._session.scalar(
+            select(BreakpointEvidence).where(
+                BreakpointEvidence.breakpoint_id == breakpoint_id,
+                BreakpointEvidence.evidence_id == evidence_id,
+            )
+        )
+        if existing is not None:
+            return existing.relationship == relationship
+        await self._session.execute(
+            insert(BreakpointEvidence)
+            .values(
+                breakpoint_id=breakpoint_id,
+                evidence_id=evidence_id,
+                relationship=relationship,
+            )
+            .on_conflict_do_nothing(
+                index_elements=(
+                    BreakpointEvidence.breakpoint_id,
+                    BreakpointEvidence.evidence_id,
+                )
+            )
+        )
+        persisted = await self._session.scalar(
+            select(BreakpointEvidence.relationship).where(
+                BreakpointEvidence.breakpoint_id == breakpoint_id,
+                BreakpointEvidence.evidence_id == evidence_id,
+            )
+        )
+        return persisted == relationship
 
     async def _evidence_targets_boundary(
         self,

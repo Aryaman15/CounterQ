@@ -10,13 +10,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.evidence.models import (
-    Breakpoint,
-    BreakpointEvidence,
-    Evidence,
-    EvidenceConcept,
-    EvidenceSkill,
-)
+from app.evidence.breakpoints import BreakpointService
+from app.evidence.models import Breakpoint, Evidence, EvidenceConcept, EvidenceSkill
 from app.interviews.models import InterviewSession
 from app.mastery.models import RetestAttempt, RetestAttemptEvidence, RetestRecommendation
 from app.mastery.policy import MasteryProjectionDecision, RetestReason
@@ -37,6 +32,7 @@ class PreparedRetestFinalization:
     target_family: TargetFamily
     target_id: UUID
     breakpoint_resolved: bool
+    completed_at: datetime | None
 
 
 class RetestAttemptFinalizer:
@@ -110,6 +106,7 @@ class RetestAttemptFinalizer:
                     target_family=family,
                     target_id=target_id,
                     breakpoint_resolved=breakpoint_resolved,
+                    completed_at=interview.completed_at,
                 )
             )
         return prepared
@@ -134,7 +131,7 @@ class RetestAttemptFinalizer:
                 if same_reason_due or breakpoint_open:
                     outcome = "INCONCLUSIVE"
             item.attempt.outcome = outcome
-            item.attempt.completed_at = now
+            item.attempt.completed_at = item.completed_at
             item.recommendation.status = "SATISFIED" if outcome == "SATISFIED" else "ATTEMPTED"
             item.recommendation.updated_at = now
 
@@ -148,7 +145,7 @@ class RetestAttemptFinalizer:
             if outcome == "SATISFIED":
                 outcome = "INCONCLUSIVE"
             item.attempt.outcome = outcome
-            item.attempt.completed_at = now
+            item.attempt.completed_at = item.completed_at
             item.recommendation.status = "ATTEMPTED"
             item.recommendation.updated_at = now
 
@@ -193,82 +190,39 @@ class RetestAttemptFinalizer:
     ) -> bool:
         if recommendation.breakpoint_id is None:
             return False
-        breakpoint = await self._session.scalar(
-            select(Breakpoint)
-            .where(Breakpoint.id == recommendation.breakpoint_id)
-            .with_for_update()
-        )
-        if (
-            breakpoint is None
-            or breakpoint.user_id != recommendation.user_id
-            or breakpoint.concept_id != recommendation.concept_id
-        ):
+        if recommendation.concept_id is None:
             return False
-        if breakpoint.status in {"RESOLVED", "DISMISSED"}:
-            return breakpoint.status == "RESOLVED"
-
+        service = BreakpointService(self._session)
         if outcome.outcome == "PERSISTED_GAP":
-            evidence_ids = await self._exact_breakpoint_evidence_ids(
-                breakpoint, outcome.qualifying_negative_ids
+            await service.reinforce_from_independent_retest(
+                breakpoint_id=recommendation.breakpoint_id,
+                user_id=recommendation.user_id,
+                concept_id=recommendation.concept_id,
+                evidence_ids=outcome.qualifying_negative_ids,
             )
-            for evidence_id in evidence_ids:
-                await _link_breakpoint(self._session, breakpoint.id, evidence_id, "REINFORCED")
             return False
         if outcome.outcome != "SATISFIED":
             return False
-        evidence_ids = await self._exact_breakpoint_evidence_ids(
-            breakpoint, outcome.qualifying_positive_ids
+        linked = await service.resolve_from_independent_retest(
+            breakpoint_id=recommendation.breakpoint_id,
+            user_id=recommendation.user_id,
+            concept_id=recommendation.concept_id,
+            evidence_ids=outcome.qualifying_positive_ids,
+            structured_self_correction_ids=frozenset(
+                outcome.structured_self_correction_ids
+            ),
+            resolved_at=now,
         )
-        if not evidence_ids:
-            return False
-        for evidence_id in evidence_ids:
-            await _link_breakpoint(self._session, breakpoint.id, evidence_id, "RESOLUTION_SUPPORT")
-        breakpoint.status = "RESOLVED"
-        breakpoint.resolved_at = now
-        breakpoint.resolution_reason = "INDEPENDENT_RETEST_VERIFIED"
-        return True
-
-    async def _exact_breakpoint_evidence_ids(
-        self, breakpoint: Breakpoint, evidence_ids: tuple[UUID, ...]
-    ) -> tuple[UUID, ...]:
-        if not evidence_ids:
-            return ()
-        values = await self._session.scalars(
-            select(Evidence.id)
-            .join(EvidenceConcept, EvidenceConcept.evidence_id == Evidence.id)
-            .join(EvidenceSkill, EvidenceSkill.evidence_id == Evidence.id)
-            .where(
-                Evidence.id.in_(evidence_ids),
-                Evidence.validation_status == "VALID",
-                Evidence.invalidated_at.is_(None),
-                EvidenceConcept.concept_id == breakpoint.concept_id,
-                EvidenceSkill.skill_dimension_id == breakpoint.skill_dimension_id,
-            )
-            .order_by(Evidence.created_at, Evidence.id)
-        )
-        return tuple(values)
-
-
-async def _link_breakpoint(
-    session: AsyncSession,
-    breakpoint_id: UUID,
-    evidence_id: UUID,
-    relationship: str,
-) -> None:
-    existing = await session.scalar(
-        select(BreakpointEvidence).where(
-            BreakpointEvidence.breakpoint_id == breakpoint_id,
-            BreakpointEvidence.evidence_id == evidence_id,
-        )
-    )
-    if existing is None:
-        session.add(
-            BreakpointEvidence(
-                breakpoint_id=breakpoint_id,
-                evidence_id=evidence_id,
-                relationship=relationship,
+        if linked:
+            return True
+        breakpoint = await self._session.scalar(
+            select(Breakpoint).where(
+                Breakpoint.id == recommendation.breakpoint_id,
+                Breakpoint.user_id == recommendation.user_id,
+                Breakpoint.concept_id == recommendation.concept_id,
             )
         )
+        return breakpoint is not None and breakpoint.status == "RESOLVED"
 
 
 def _target_identity(recommendation: RetestRecommendation) -> tuple[TargetFamily, UUID]:

@@ -5,11 +5,11 @@ import { ArrowUpRight, Clock3, Layers3, RotateCcw } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 
 import { MasteryDetailDrawer } from "./MasteryDetailDrawer";
+import { RetestAction, type RetestState } from "./RetestAction";
 
 type Overview = components["schemas"]["CandidateMasteryOverviewResponse"];
 type Target = components["schemas"]["CandidateMasteryTarget"];
 type RetestLaunch = components["schemas"]["RetestLaunchResponse"];
-type RetestState = "idle" | "starting" | "launched" | "error";
 
 const stateOrder = ["STRONG", "DEVELOPING", "WEAK", "EXPOSED"] as const;
 
@@ -28,6 +28,14 @@ export function MasteryExperience({
   const pendingRetests = useRef(new Set<string>());
   const concepts = useMemo(() => groupTargets(overview.technical_concepts), [overview]);
   const skills = useMemo(() => groupTargets(overview.interview_skills), [overview]);
+  const selectedRecommendation = selected
+    ? overview.retest_recommendations.find(
+        (item) =>
+          item.target_type === "CONCEPT" &&
+          item.target_id === selected.target_id &&
+          item.recommendation_id === selected.recommendation_id,
+      )
+    : undefined;
 
   const startRetest = async (recommendationId: string) => {
     if (!onStartRetest || pendingRetests.current.has(recommendationId)) return;
@@ -116,27 +124,13 @@ export function MasteryExperience({
             {overview.retest_recommendations.map((item) => (
               <li key={item.recommendation_id}>
                 <div><strong>{item.target_name}</strong><span>{item.reason}</span></div>
-                <button
-                  type="button"
-                  disabled={
-                    !item.action_enabled ||
-                    !onStartRetest ||
-                    ["starting", "launched"].includes(
-                      retestStates[item.recommendation_id] ?? "idle",
-                    )
-                  }
-                  aria-describedby={`retest-${item.recommendation_id}`}
-                  onClick={() => void startRetest(item.recommendation_id)}
-                >
-                  {retestStates[item.recommendation_id] === "starting"
-                    ? "Starting Quick Drill…"
-                    : retestStates[item.recommendation_id] === "launched"
-                      ? "Quick Drill ready"
-                      : item.action_label}
-                </button>
-                <small id={`retest-${item.recommendation_id}`} aria-live="polite">
-                  {retestErrors[item.recommendation_id] || item.availability_message}
-                </small>
+                <RetestAction
+                  recommendation={item}
+                  state={retestStates[item.recommendation_id]}
+                  error={retestErrors[item.recommendation_id]}
+                  descriptionId={`retest-overview-${item.recommendation_id}`}
+                  onStart={onStartRetest ? (id) => void startRetest(id) : undefined}
+                />
               </li>
             ))}
           </ul>
@@ -150,7 +144,24 @@ export function MasteryExperience({
         onOpen={setSelected}
       />
 
-      {selected ? <MasteryDetailDrawer target={selected} onClose={() => setSelected(null)} /> : null}
+      {selected ? (
+        <MasteryDetailDrawer
+          target={selected}
+          recommendation={selectedRecommendation}
+          retestState={
+            selectedRecommendation
+              ? retestStates[selectedRecommendation.recommendation_id]
+              : undefined
+          }
+          retestError={
+            selectedRecommendation
+              ? retestErrors[selectedRecommendation.recommendation_id]
+              : undefined
+          }
+          onStartRetest={onStartRetest ? (id) => void startRetest(id) : undefined}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
     </section>
   );
 }

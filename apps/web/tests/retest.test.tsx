@@ -1,5 +1,5 @@
 import type { components } from "@counterq/contracts/openapi";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,7 @@ import { RetestDemo } from "@/features/mastery/RetestDemo";
 
 type Overview = components["schemas"]["CandidateMasteryOverviewResponse"];
 type Launch = components["schemas"]["RetestLaunchResponse"];
+type Target = components["schemas"]["CandidateMasteryTarget"];
 
 const recommendationId = "8b000000-0000-4000-8000-000000000001";
 const userId = "8b000000-0000-4000-8000-000000000002";
@@ -52,6 +53,55 @@ const launch: Launch = {
   resumed: false,
   interview_path: "/interview/demo",
 };
+
+function masteryTarget(overrides: Partial<Target> = {}): Target {
+  return {
+    target_type: "CONCEPT",
+    target_id: overview.retest_recommendations[0].target_id,
+    canonical_key: "hash_table_complexity",
+    display_name: "Hash Map",
+    category: "DATA_STRUCTURES",
+    state: "WEAK",
+    state_label: "Needs work",
+    evidence_sufficiency: "MEDIUM",
+    evidence_sufficiency_label: "Some evidence",
+    freshness: "RETEST_DUE",
+    freshness_label: "Retest due",
+    reason: "Independent evidence shows a meaningful gap that still needs verification.",
+    evidence_count: 1,
+    distinct_session_count: 1,
+    distinct_problem_count: 1,
+    distinct_context_count: 1,
+    retest_due: true,
+    recommendation_id: recommendationId,
+    next_action: "Verify this gap independently in another context.",
+    unresolved_breakpoint_ids: ["8b000000-0000-4000-8000-000000000008"],
+    evidence: [{
+      evidence_id: "8b000000-0000-4000-8000-000000000009",
+      contribution: "CONTRADICTING",
+      recorded_at: "2026-09-01T12:00:00Z",
+      problem: "Prior Hash Map Interview",
+      mode: "SIMULATION",
+      candidate_level: "NEW_GRAD",
+      polarity: "NEGATIVE",
+      strength: "STRONG",
+      independence: "INDEPENDENT",
+      retest_linked: false,
+      finding: "Could not defend the worst-case lookup boundary.",
+      source_session_id: "8b000000-0000-4000-8000-000000000010",
+    }],
+    child_target_ids: [],
+    ...overrides,
+  };
+}
+
+function overviewWithTarget(target: Target = masteryTarget()): Overview {
+  return {
+    ...overview,
+    technical_concepts: target.target_type === "CONCEPT" ? [target] : [],
+    interview_skills: target.target_type === "SKILL" ? [target] : [],
+  };
+}
 
 function response(value: unknown, ok = true) {
   return { ok, json: async () => value } as Response;
@@ -130,6 +180,90 @@ describe("Stage 8B retest experience", () => {
       }],
     }} onStartRetest={async () => launch} />);
     expect(screen.getByRole("button", { name: "CounterQ me again" })).toBeDisabled();
+  });
+
+  it("launches an actionable concept retest from the mastery detail drawer", async () => {
+    const start = vi.fn(async () => launch);
+    render(<MasteryExperience overview={overviewWithTarget()} onStartRetest={start} />);
+    fireEvent.click(screen.getByRole("button", { name: /Open Hash Map mastery detail/i }));
+    const drawer = screen.getByRole("dialog");
+    fireEvent.click(within(drawer).getByRole("button", { name: "CounterQ me again" }));
+    await waitFor(() => expect(start).toHaveBeenCalledWith(recommendationId));
+    expect(within(drawer).getByRole("button", { name: "Quick Drill ready" })).toBeDisabled();
+  });
+
+  it("shares double-submit protection between overview and drawer actions", () => {
+    const start = vi.fn(() => new Promise<Launch>(() => undefined));
+    render(<MasteryExperience overview={overviewWithTarget()} onStartRetest={start} />);
+    fireEvent.click(screen.getByRole("button", { name: /Open Hash Map mastery detail/i }));
+    const actions = screen.getAllByRole("button", { name: "CounterQ me again" });
+    expect(actions).toHaveLength(2);
+    fireEvent.click(actions[0]);
+    fireEvent.click(actions[1]);
+    expect(start).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole("button", { name: /Starting Quick Drill/ })).toHaveLength(2);
+  });
+
+  it("does not invent a drawer action for WEAK without a persisted recommendation", () => {
+    const weak = masteryTarget({ recommendation_id: null });
+    render(
+      <MasteryExperience
+        overview={{ ...overviewWithTarget(weak), retest_recommendations: [] }}
+        onStartRetest={async () => launch}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open Hash Map mastery detail/i }));
+    expect(within(screen.getByRole("dialog")).queryByRole("button", {
+      name: "CounterQ me again",
+    })).not.toBeInTheDocument();
+  });
+
+  it("does not expose a drill action for a skill-only target", () => {
+    const skill = masteryTarget({
+      target_type: "SKILL",
+      target_id: "8b000000-0000-4000-8000-000000000011",
+      canonical_key: "correctness",
+      display_name: "Correctness",
+    });
+    render(
+      <MasteryExperience
+        overview={{
+          ...overviewWithTarget(skill),
+          retest_recommendations: [{
+            ...overview.retest_recommendations[0],
+            target_type: "SKILL",
+            target_id: skill.target_id,
+            action_enabled: false,
+          }],
+        }}
+        onStartRetest={async () => launch}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open Correctness mastery detail/i }));
+    expect(within(screen.getByRole("dialog")).queryByRole("button", {
+      name: "CounterQ me again",
+    })).not.toBeInTheDocument();
+  });
+
+  it("shows safe launch errors in the drawer's shared action state", async () => {
+    render(
+      <MasteryExperience
+        overview={overviewWithTarget()}
+        onStartRetest={async () => {
+          throw new Error("No suitable retest is available yet.");
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Open Hash Map mastery detail/i }));
+    const drawer = screen.getByRole("dialog");
+    fireEvent.click(within(drawer).getByRole("button", { name: "CounterQ me again" }));
+    expect(await within(drawer).findByText("No suitable retest is available yet.")).toBeInTheDocument();
+  });
+
+  it("contains no stale Stage 8B availability wording", () => {
+    render(<MasteryExperience overview={overviewWithTarget()} onStartRetest={async () => launch} />);
+    fireEvent.click(screen.getByRole("button", { name: /Open Hash Map mastery detail/i }));
+    expect(document.body.textContent).not.toContain("Available in Stage 8B");
   });
 
   it("shows only fresh Quick Drill context in the Interview Room header", () => {

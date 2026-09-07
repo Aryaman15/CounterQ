@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -23,9 +24,15 @@ from app.interviews.models import InterviewSession, SessionBudget
 from app.interviews.repository import InterviewRepository
 from app.interviews.template_policy import template_policy
 from app.main import create_app
-from app.mastery.models import RetestAttempt, RetestAttemptEvidence, RetestRecommendation
-from app.mastery.policy import MasteryEvidenceFact, RetestReason
+from app.mastery.models import (
+    ConceptMastery,
+    RetestAttempt,
+    RetestAttemptEvidence,
+    RetestRecommendation,
+)
+from app.mastery.policy import MasteryEvidenceFact, MasteryPolicyV1, RetestReason
 from app.mastery.service import MasteryRecalculationService
+from app.mastery.source import MasterySourceBuilder
 from app.problems.models import Concept, ProblemVersion
 from app.retests.development import (
     DEVELOPMENT_RETEST_POLICY_KEY,
@@ -154,13 +161,15 @@ def _fact(
     valid: bool = True,
     reasoning: bool = True,
     self_correction: bool = False,
+    occurred_at: datetime = NOW,
+    observation_key: str = "observation",
 ) -> MasteryEvidenceFact:
     return MasteryEvidenceFact(
         evidence_id=uuid4(),
         session_id=uuid4(),
         problem_version_id=uuid4(),
         problem_id=uuid4(),
-        occurred_at=NOW,
+        occurred_at=occurred_at,
         polarity=polarity,  # type: ignore[arg-type]
         strength=strength,  # type: ignore[arg-type]
         independence=independence,  # type: ignore[arg-type]
@@ -168,7 +177,7 @@ def _fact(
         interview_mode="SIMULATION",
         interview_level="NEW_GRAD",
         context_key="context",
-        observation_key="observation",
+        observation_key=observation_key,
         concept_family_key="hash_map",
         valid=valid,
         demonstrates_reasoning_or_application=reasoning,
@@ -195,7 +204,7 @@ OUTCOME_CASES = (
     ((_fact(polarity="MIXED"),), False, "INCONCLUSIVE"),
     ((_fact(polarity="NEGATIVE", strength="WEAK"),), False, "INCONCLUSIVE"),
     ((_fact(polarity="POSITIVE", strength="MODERATE"),), False, "SATISFIED"),
-    ((_fact(polarity="POSITIVE"), _fact(polarity="NEGATIVE")), False, "PERSISTED_GAP"),
+    ((_fact(polarity="POSITIVE"), _fact(polarity="NEGATIVE")), False, "INCONCLUSIVE"),
     ((_fact(polarity="POSITIVE", valid=False), _fact()), False, "SATISFIED"),
     (
         (_fact(polarity="POSITIVE", reasoning=False), _fact(polarity="NEGATIVE")),
@@ -226,7 +235,7 @@ OUTCOME_CASES = (
         "27_mixed_without_self_correction_inconclusive",
         "28_weak_negative_inconclusive",
         "29_moderate_positive_is_meaningful",
-        "30_independent_negative_has_priority",
+        "30_ambiguous_contradiction_is_inconclusive",
         "31_valid_positive_survives_invalid_noise",
         "32_valid_negative_survives_shallow_noise",
     ),
@@ -238,6 +247,135 @@ def test_outcome_acceptance(
         evidence,
         original_reason=RetestReason.INDEPENDENCE_NOT_VERIFIED,
         session_abandoned=abandoned,
+    )
+    assert decision.outcome == expected
+
+
+@pytest.mark.parametrize(
+    ("evidence", "expected"),
+    (
+        (
+            (
+                _fact(
+                    polarity="NEGATIVE",
+                    occurred_at=NOW,
+                    observation_key="isolated-gap",
+                ),
+                _fact(
+                    polarity="MIXED",
+                    self_correction=True,
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="structured-correction",
+                ),
+            ),
+            "SATISFIED",
+        ),
+        (
+            (
+                _fact(
+                    polarity="MIXED",
+                    self_correction=True,
+                    occurred_at=NOW,
+                    observation_key="structured-correction",
+                ),
+                _fact(
+                    polarity="NEGATIVE",
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="later-gap",
+                ),
+            ),
+            "PERSISTED_GAP",
+        ),
+        (
+            (
+                _fact(polarity="NEGATIVE", observation_key="gap"),
+                _fact(
+                    polarity="MIXED",
+                    self_correction=True,
+                    observation_key="correction",
+                ),
+            ),
+            "INCONCLUSIVE",
+        ),
+        (
+            (
+                _fact(
+                    polarity="NEGATIVE",
+                    occurred_at=NOW,
+                    observation_key="gap-one",
+                ),
+                _fact(
+                    polarity="NEGATIVE",
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="gap-two",
+                ),
+                _fact(
+                    polarity="MIXED",
+                    self_correction=True,
+                    occurred_at=NOW + timedelta(seconds=2),
+                    observation_key="correction",
+                ),
+            ),
+            "INCONCLUSIVE",
+        ),
+        (
+            (
+                _fact(
+                    polarity="NEGATIVE",
+                    occurred_at=NOW,
+                    observation_key="gap",
+                ),
+                _fact(
+                    polarity="POSITIVE",
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="ordinary-positive",
+                ),
+            ),
+            "INCONCLUSIVE",
+        ),
+        (
+            (
+                _fact(polarity="NEGATIVE", observation_key="gap"),
+                _fact(
+                    polarity="MIXED",
+                    independence="AFTER_LIGHT_GUIDANCE",
+                    self_correction=True,
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="assisted-correction",
+                ),
+            ),
+            "PERSISTED_GAP",
+        ),
+        (
+            (
+                _fact(polarity="NEGATIVE", observation_key="gap"),
+                _fact(
+                    polarity="MIXED",
+                    independence="AFTER_PROBE",
+                    self_correction=True,
+                    occurred_at=NOW + timedelta(seconds=1),
+                    observation_key="probed-correction",
+                ),
+            ),
+            "PERSISTED_GAP",
+        ),
+    ),
+    ids=(
+        "negative_then_structured_independent_self_correction",
+        "self_correction_then_later_negative",
+        "same_timestamp_is_ambiguous",
+        "repeated_negative_observations_remain_inconclusive",
+        "generic_later_positive_is_not_a_self_correction",
+        "assisted_self_correction_cannot_satisfy",
+        "after_probe_self_correction_cannot_satisfy",
+    ),
+)
+def test_self_correction_chronology(
+    evidence: tuple[MasteryEvidenceFact, ...], expected: str
+) -> None:
+    decision = RetestOutcomePolicyV1().evaluate(
+        evidence,
+        original_reason=RetestReason.UNRESOLVED_BREAKPOINT,
     )
     assert decision.outcome == expected
 
@@ -417,15 +555,51 @@ async def test_62_unavailable_selection_creates_no_partial_rows() -> None:
 
 
 async def _complete_attempt(
-    sessions: async_sessionmaker[AsyncSession], *, positive: bool
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    positive: bool,
+    confidence: Decimal = Decimal("0.9500"),
+    independence: str = "INDEPENDENT",
+    strength: str = "STRONG",
+    completed_at: datetime | None = None,
 ) -> tuple[UUID, UUID, UUID, UUID]:
     user_id, recommendation = await _fixture(sessions)
-    launch = await RetestService(sessionmaker=sessions).start(
-        principal_user_id=user_id, recommendation_id=recommendation.id
+    evidence_id, attempt_id = await _finish_recommendation(
+        sessions,
+        user_id=user_id,
+        recommendation_id=recommendation.id,
+        positive=positive,
+        confidence=confidence,
+        independence=independence,
+        strength=strength,
+        completed_at=completed_at,
+    )
+    return user_id, recommendation.id, evidence_id, attempt_id
+
+
+async def _finish_recommendation(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    user_id: UUID,
+    recommendation_id: UUID,
+    positive: bool,
+    confidence: Decimal = Decimal("0.9500"),
+    independence: str = "INDEPENDENT",
+    strength: str = "STRONG",
+    completed_at: datetime | None = None,
+    event_type: str = "TRANSCRIPT_FINALIZED",
+    event_source: str = "CANDIDATE_VOICE",
+    start_at: datetime | None = None,
+) -> tuple[UUID, UUID]:
+    launch = await RetestService(
+        sessionmaker=sessions,
+        clock=(lambda: start_at) if start_at is not None else None,
+    ).start(
+        principal_user_id=user_id, recommendation_id=recommendation_id
     )
     async with sessions() as session, session.begin():
         interview = await session.get(InterviewSession, launch.interview_session_id)
-        rec = await session.get(RetestRecommendation, recommendation.id)
+        rec = await session.get(RetestRecommendation, recommendation_id)
         assert interview is not None and rec is not None and rec.concept_id is not None
         concept = await session.get(Concept, rec.concept_id)
         skill = await session.scalar(
@@ -438,13 +612,14 @@ async def _complete_attempt(
             )
         )
         assert concept is not None and skill is not None and evaluator is not None
+        event_at = start_at + timedelta(seconds=1) if start_at is not None else datetime.now(UTC)
         event = await InterviewRepository(session).add_event(
             session_id=interview.id,
             user_id=user_id,
-            event_type="TRANSCRIPT_FINALIZED",
-            source="CANDIDATE_VOICE",
-            occurred_at=datetime.now(UTC),
-            received_at=datetime.now(UTC),
+            event_type=event_type,
+            source=event_source,
+            occurred_at=event_at,
+            received_at=event_at,
             server_sequence=1,
             interview_state_version=1,
             schema_version="transcript.final.v1",
@@ -465,18 +640,22 @@ async def _complete_attempt(
             event.id,
             occurred_at=event.occurred_at,
             polarity="POSITIVE" if positive else "NEGATIVE",
-            strength="STRONG",
-            independence="INDEPENDENT",
+            strength=strength,
+            independence=independence,
             finding=(
                 "Defended the target boundary independently in a different context."
                 if positive
                 else "Repeated the target gap independently in a different context."
             ),
         )
+        evidence.confidence = confidence
         interview.status = "COMPLETED"
         interview.current_stage = "COMPLETED"
-        interview.completed_at = datetime.now(UTC)
-        return user_id, recommendation.id, evidence.id, launch.retest_attempt_id
+        interview.completed_at = (
+            completed_at
+            or (start_at + timedelta(seconds=2) if start_at is not None else datetime.now(UTC))
+        )
+        return evidence.id, launch.retest_attempt_id
 
 
 @pytest.mark.asyncio
@@ -503,6 +682,14 @@ async def test_63_success_links_evidence_resolves_exact_breakpoint_and_converges
             ) == 1
             breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
             assert breakpoint is not None and breakpoint.status == "RESOLVED"
+            mastery = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == user_id,
+                    ConceptMastery.concept_id == recommendation.concept_id,
+                )
+            )
+            assert mastery is not None and mastery.state == "DEVELOPING"
+            assert mastery.state != "STRONG"
             link = await session.scalar(
                 select(BreakpointEvidence).where(
                     BreakpointEvidence.breakpoint_id == breakpoint.id,
@@ -529,6 +716,13 @@ async def test_64_failure_reinforces_and_preserves_auditable_history() -> None:
             old = await session.get(RetestRecommendation, recommendation_id)
             assert attempt is not None and attempt.outcome == "PERSISTED_GAP"
             assert old is not None and old.status == "ATTEMPTED"
+            mastery = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == user_id,
+                    ConceptMastery.concept_id == old.concept_id,
+                )
+            )
+            assert mastery is not None and mastery.state == "WEAK"
             assert await session.scalar(
                 select(func.count(RetestRecommendation.id)).where(
                     RetestRecommendation.user_id == user_id,
@@ -542,6 +736,397 @@ async def test_64_failure_reinforces_and_preserves_auditable_history() -> None:
                 )
             )
             assert link is not None and link.relationship == "REINFORCED"
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_negative_retest_does_not_reinforce_breakpoint() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, evidence_id, attempt_id = await _complete_attempt(
+            sessions,
+            positive=False,
+            confidence=Decimal("0.6000"),
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, attempt_id)
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert attempt is not None and attempt.outcome == "PERSISTED_GAP"
+            assert recommendation is not None
+            assert await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == recommendation.breakpoint_id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                    BreakpointEvidence.relationship == "REINFORCED",
+                )
+            ) == 0
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_low_confidence_positive_retest_cannot_resolve_breakpoint() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, evidence_id, attempt_id = await _complete_attempt(
+            sessions,
+            positive=True,
+            confidence=Decimal("0.6000"),
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, attempt_id)
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert attempt is not None and attempt.outcome == "INCONCLUSIVE"
+            assert recommendation is not None and recommendation.status == "ATTEMPTED"
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status != "RESOLVED"
+            assert await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == breakpoint.id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                    BreakpointEvidence.relationship == "RESOLUTION_SUPPORT",
+                )
+            ) == 0
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_assisted_retest_evidence_cannot_resolve_breakpoint() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, evidence_id, attempt_id = await _complete_attempt(
+            sessions,
+            positive=True,
+            independence="AFTER_LIGHT_GUIDANCE",
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, attempt_id)
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert attempt is not None and attempt.outcome == "INCONCLUSIVE"
+            assert recommendation is not None
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status != "RESOLVED"
+            assert await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == breakpoint.id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                )
+            ) == 0
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_after_probe_retest_is_linked_but_does_not_satisfy_or_resolve() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, evidence_id, attempt_id = await _complete_attempt(
+            sessions,
+            positive=True,
+            independence="AFTER_PROBE",
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, attempt_id)
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert attempt is not None and attempt.outcome == "INCONCLUSIVE"
+            assert recommendation is not None and recommendation.status == "ATTEMPTED"
+            assert await session.scalar(
+                select(func.count())
+                .select_from(RetestAttemptEvidence)
+                .where(
+                    RetestAttemptEvidence.retest_attempt_id == attempt_id,
+                    RetestAttemptEvidence.evidence_id == evidence_id,
+                )
+            ) == 1
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status != "RESOLVED"
+            assert await session.scalar(
+                select(func.count(RetestRecommendation.id)).where(
+                    RetestRecommendation.user_id == user_id,
+                    RetestRecommendation.status == "PENDING",
+                )
+            ) == 1
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_execution_only_retest_noise_cannot_resolve_breakpoint() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation = await _fixture(sessions)
+        evidence_id, attempt_id = await _finish_recommendation(
+            sessions,
+            user_id=user_id,
+            recommendation_id=recommendation.id,
+            positive=True,
+            event_type="RUN_CLICKED",
+            event_source="NATIVE_RUNNER",
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, attempt_id)
+            old = await session.get(RetestRecommendation, recommendation.id)
+            assert attempt is not None and attempt.outcome == "INCONCLUSIVE"
+            assert old is not None
+            breakpoint = await session.get(Breakpoint, old.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status != "RESOLVED"
+            assert await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == breakpoint.id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                )
+            ) == 0
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_active_scheduled_retest_survives_recompute_and_terminal_flow_resumes() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation = await _fixture(sessions)
+        retests = RetestService(sessionmaker=sessions)
+        launch = await retests.start(
+            principal_user_id=user_id,
+            recommendation_id=recommendation.id,
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session:
+            active = await session.get(RetestRecommendation, recommendation.id)
+            assert active is not None and active.status == "SCHEDULED"
+            assert await session.scalar(
+                select(func.count(RetestRecommendation.id)).where(
+                    RetestRecommendation.user_id == user_id,
+                    RetestRecommendation.status == "PENDING",
+                )
+            ) == 0
+        resumed = await retests.start(
+            principal_user_id=user_id,
+            recommendation_id=recommendation.id,
+        )
+        assert resumed.resumed
+        assert resumed.interview_session_id == launch.interview_session_id
+        assert resumed.retest_attempt_id == launch.retest_attempt_id
+
+        canonical_completed_at = NOW + timedelta(minutes=12)
+        async with sessions() as session, session.begin():
+            interview = await session.get(InterviewSession, launch.interview_session_id)
+            assert interview is not None
+            interview.status = "COMPLETED"
+            interview.current_stage = "COMPLETED"
+            interview.completed_at = canonical_completed_at
+        delayed_worker_at = canonical_completed_at + timedelta(minutes=6)
+        await MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: delayed_worker_at,
+        ).recalculate(user_id=user_id)
+        async with sessions() as session:
+            attempt = await session.get(RetestAttempt, launch.retest_attempt_id)
+            old = await session.get(RetestRecommendation, recommendation.id)
+            assert attempt is not None and attempt.outcome == "INCONCLUSIVE"
+            assert attempt.completed_at == canonical_completed_at
+            assert old is not None and old.status == "ATTEMPTED"
+            assert await session.scalar(
+                select(func.count(RetestRecommendation.id)).where(
+                    RetestRecommendation.user_id == user_id,
+                    RetestRecommendation.status == "PENDING",
+                )
+            ) == 1
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_invalidated_resolution_support_reopens_exact_breakpoint_idempotently() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, evidence_id, _attempt_id = await _complete_attempt(
+            sessions,
+            positive=True,
+        )
+        mastery = MasteryRecalculationService(sessionmaker=sessions)
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session, session.begin():
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert recommendation is not None
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status == "RESOLVED"
+            created_unrelated = Breakpoint(
+                user_id=user_id,
+                concept_id=breakpoint.concept_id,
+                skill_dimension_id=breakpoint.skill_dimension_id,
+                breakpoint_key=f"{breakpoint.breakpoint_key}_unrelated",
+                first_detected_session_id=breakpoint.first_detected_session_id,
+                first_detected_at=breakpoint.first_detected_at,
+                severity="MODERATE",
+                status="OPEN",
+                summary="Independent unrelated fixture boundary.",
+            )
+            session.add(created_unrelated)
+            await session.flush()
+            unrelated_id = created_unrelated.id
+
+        invalidated_at = NOW + timedelta(days=1)
+        async with sessions() as session, session.begin():
+            evidence = await session.get(Evidence, evidence_id)
+            assert evidence is not None
+            validation = EvidenceValidationService(session)
+            first = await validation.invalidate(
+                interview_session_id=evidence.interview_session_id,
+                evidence_id=evidence.id,
+                reason="Founder integrity invalidation fixture.",
+                invalidated_at=invalidated_at,
+            )
+            second = await validation.invalidate(
+                interview_session_id=evidence.interview_session_id,
+                evidence_id=evidence.id,
+                reason="Duplicate invalidation must converge.",
+                invalidated_at=invalidated_at + timedelta(minutes=1),
+            )
+            assert first.changed and not second.changed
+
+        await mastery.recalculate(user_id=user_id)
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session:
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert recommendation is not None
+            reopened = await session.get(Breakpoint, recommendation.breakpoint_id)
+            unrelated = await session.get(Breakpoint, unrelated_id)
+            assert reopened is not None and reopened.status == "RETEST_PENDING"
+            assert reopened.resolved_at is None and reopened.resolution_reason is None
+            assert unrelated is not None and unrelated.status == "OPEN"
+            historical = await session.scalar(
+                select(BreakpointEvidence).where(
+                    BreakpointEvidence.breakpoint_id == reopened.id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                )
+            )
+            assert historical is not None and historical.relationship == "RESOLUTION_SUPPORT"
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stale_strong_retest_refreshes_without_downgrading_mastery() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, first_recommendation = await _fixture(sessions)
+        await _finish_recommendation(
+            sessions,
+            user_id=user_id,
+            recommendation_id=first_recommendation.id,
+            positive=True,
+        )
+        mastery = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: NOW)
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session:
+            second_recommendation = await active_development_recommendation(session, user_id)
+            assert second_recommendation is not None
+            second_recommendation_id = second_recommendation.id
+        await _finish_recommendation(
+            sessions,
+            user_id=user_id,
+            recommendation_id=second_recommendation_id,
+            positive=True,
+            start_at=NOW + timedelta(minutes=1),
+        )
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session, session.begin():
+            rows = list(
+                await session.scalars(
+                    select(Evidence)
+                    .join(InterviewSession, InterviewSession.id == Evidence.interview_session_id)
+                    .where(InterviewSession.user_id == user_id)
+                    .order_by(Evidence.created_at, Evidence.id)
+                )
+            )
+            historical_base = NOW - timedelta(days=240)
+            for index, evidence in enumerate(rows):
+                evidence.created_at = historical_base + timedelta(days=index)
+
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session:
+            stale_recommendation = await active_development_recommendation(session, user_id)
+            assert stale_recommendation is not None
+            assert f":{RetestReason.STALE_VERIFICATION.value}:" in (
+                stale_recommendation.recommendation_key
+            )
+            stale_recommendation_id = stale_recommendation.id
+            concept_id = stale_recommendation.concept_id
+            projection = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == user_id,
+                    ConceptMastery.concept_id == concept_id,
+                )
+            )
+            assert projection is not None and projection.state == "STRONG"
+
+        await _finish_recommendation(
+            sessions,
+            user_id=user_id,
+            recommendation_id=stale_recommendation_id,
+            positive=True,
+            start_at=NOW + timedelta(minutes=30),
+        )
+        refreshed_at = NOW + timedelta(hours=1)
+        await MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: refreshed_at,
+        ).recalculate(user_id=user_id)
+        async with sessions() as session:
+            old = await session.get(RetestRecommendation, stale_recommendation_id)
+            projection = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == user_id,
+                    ConceptMastery.concept_id == concept_id,
+                )
+            )
+            assert old is not None and old.status == "SATISFIED"
+            assert projection is not None and projection.state == "STRONG"
+            bundle = await MasterySourceBuilder(session).build(user_id)
+            target = next(
+                item
+                for item in bundle.targets
+                if item.family == "CONCEPT" and item.target_id == concept_id
+            )
+            detail = MasteryPolicyV1().describe_persisted(
+                target.facts,
+                persisted_state="STRONG",
+                now=refreshed_at,
+            )
+            assert detail.freshness == "CURRENT"
+            assert detail.retest_reason is None
     finally:
         await _reset_fixture(sessions)
         await engine.dispose()
