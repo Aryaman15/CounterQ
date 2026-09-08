@@ -9,7 +9,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.models import User
@@ -22,6 +22,7 @@ from app.mastery.models import (
     ConceptMastery,
     ConceptMasteryEvidence,
     MasteryTransition,
+    RetestAttempt,
     RetestRecommendation,
     SkillMastery,
     SkillMasteryEvidence,
@@ -107,11 +108,28 @@ async def development_user_mastery(
     )
     recommendation_ids: dict[tuple[str, UUID], UUID] = {}
     recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] = {}
+    resumable_scheduled_attempt = (
+        select(RetestAttempt.id)
+        .join(InterviewSession, InterviewSession.id == RetestAttempt.interview_session_id)
+        .where(
+            RetestAttempt.retest_recommendation_id == RetestRecommendation.id,
+            RetestAttempt.outcome.is_(None),
+            RetestAttempt.completed_at.is_(None),
+            InterviewSession.status.in_(("READY", "ACTIVE", "RECONNECTING")),
+        )
+        .exists()
+    )
     for row in await session.scalars(
         select(RetestRecommendation)
         .where(
             RetestRecommendation.user_id == user_id,
-            RetestRecommendation.status.in_(("PENDING", "SCHEDULED")),
+            or_(
+                RetestRecommendation.status == "PENDING",
+                and_(
+                    RetestRecommendation.status == "SCHEDULED",
+                    resumable_scheduled_attempt,
+                ),
+            ),
         )
         .order_by(
             RetestRecommendation.priority.desc(),
@@ -123,10 +141,16 @@ async def development_user_mastery(
         target_id = row.concept_id or row.skill_dimension_id
         if target_id is not None:
             target_type = "CONCEPT" if row.concept_id is not None else "SKILL"
-            recommendation_ids.setdefault((target_type, target_id), row.id)
             recommendation_statuses[row.id] = cast(
                 Literal["PENDING", "SCHEDULED"], row.status
             )
+            target_key = (target_type, target_id)
+            selected_id = recommendation_ids.get(target_key)
+            if selected_id is None or (
+                row.status == "SCHEDULED"
+                and recommendation_statuses[selected_id] == "PENDING"
+            ):
+                recommendation_ids[target_key] = row.id
     latest_job = await session.scalar(
         select(OutboxEvent)
         .where(

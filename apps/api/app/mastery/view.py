@@ -159,12 +159,20 @@ def build_persisted_candidate_mastery_overview(
     technical = [
         item
         for item in targets
-        if item.target_type == "CONCEPT" and item.state != "UNTESTED"
+        if item.target_type == "CONCEPT"
+        and (
+            item.state != "UNTESTED"
+            or _has_scheduled_workflow(item, recommendation_statuses)
+        )
     ]
     skills = [
         item
         for item in targets
-        if item.target_type == "SKILL" and item.state != "UNTESTED"
+        if item.target_type == "SKILL"
+        and (
+            item.state != "UNTESTED"
+            or _has_scheduled_workflow(item, recommendation_statuses)
+        )
     ]
     parent_summaries = _parents(
         tuple(
@@ -239,9 +247,23 @@ def build_candidate_mastery_overview(
         targets.append(_target(source, decision, recommendation_id))
 
     technical = [
-        item for item in targets if item.target_type == "CONCEPT" and item.state != "UNTESTED"
+        item
+        for item in targets
+        if item.target_type == "CONCEPT"
+        and (
+            item.state != "UNTESTED"
+            or _has_scheduled_workflow(item, recommendation_statuses)
+        )
     ]
-    skills = [item for item in targets if item.target_type == "SKILL" and item.state != "UNTESTED"]
+    skills = [
+        item
+        for item in targets
+        if item.target_type == "SKILL"
+        and (
+            item.state != "UNTESTED"
+            or _has_scheduled_workflow(item, recommendation_statuses)
+        )
+    ]
     parent_summaries = _parents(bundle.targets, decisions)
     recommendations = _recommendations(
         technical,
@@ -585,13 +607,15 @@ def _recommendations(
 ) -> list[CandidateRetestRecommendation]:
     rows: list[CandidateRetestRecommendation] = []
     for item in [*technical, *skills]:
-        if not item.retest_due or item.recommendation_id is None:
+        if item.recommendation_id is None:
             continue
         persisted_status = (
             recommendation_statuses.get(item.recommendation_id)
             if recommendation_statuses is not None
             else None
         )
+        if not item.retest_due and persisted_status != "SCHEDULED":
+            continue
         actionable = item.target_type == "CONCEPT" and persisted_status is not None
         status = persisted_status or "PENDING"
         rows.append(
@@ -615,6 +639,17 @@ def _recommendations(
             )
         )
     return rows
+
+
+def _has_scheduled_workflow(
+    item: CandidateMasteryTarget,
+    recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] | None,
+) -> bool:
+    return bool(
+        item.recommendation_id is not None
+        and recommendation_statuses is not None
+        and recommendation_statuses.get(item.recommendation_id) == "SCHEDULED"
+    )
 
 
 def _target_order(item: CandidateMasteryTarget) -> tuple[int, str]:

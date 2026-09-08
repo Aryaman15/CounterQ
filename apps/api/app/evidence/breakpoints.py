@@ -524,16 +524,17 @@ class BreakpointService:
                 continue
             negative_support = await self.active_support_count(breakpoint.id)
             if breakpoint.status == "RESOLVED":
-                if await self.active_resolution_support_count(breakpoint.id) > 0:
-                    continue
-                if negative_support > 0:
+                resolution_support = await self.active_resolution_support_count(breakpoint.id)
+                if negative_support == 0:
+                    breakpoint.status = "DISMISSED"
+                    breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
+                    breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+                elif resolution_support == 0:
                     breakpoint.status = "RETEST_PENDING"
                     breakpoint.resolved_at = None
                     breakpoint.resolution_reason = None
                 else:
-                    breakpoint.status = "DISMISSED"
-                    breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
-                    breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+                    continue
                 recalculated.append(breakpoint.id)
                 continue
             if breakpoint.status not in ACTIVE_BREAKPOINT_STATUSES or negative_support > 0:

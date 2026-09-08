@@ -125,6 +125,19 @@ describe("Stage 8B retest experience", () => {
     expect(screen.getByRole("button", { name: "CounterQ me again" })).toBeEnabled();
   });
 
+  it("makes a scheduled Quick Drill's resume state explicit", () => {
+    render(<MasteryExperience overview={{
+      ...overview,
+      retest_recommendations: [{
+        ...overview.retest_recommendations[0],
+        status: "SCHEDULED",
+        availability_message: "Your 10-minute Quick Drill is ready to resume.",
+      }],
+    }} onStartRetest={async () => ({ ...launch, resumed: true })} />);
+    expect(screen.getByRole("button", { name: "CounterQ me again" })).toBeEnabled();
+    expect(screen.getByText("Your 10-minute Quick Drill is ready to resume.")).toBeInTheDocument();
+  });
+
   it("shows starting state and blocks double submit", async () => {
     let resolveStart: (value: Launch) => void = () => undefined;
     const start = vi.fn(() => new Promise<Launch>((resolve) => { resolveStart = resolve; }));

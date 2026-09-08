@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -16,7 +19,8 @@ from app.ai_gateway.models import AIPolicyVersion
 from app.auth.models import User
 from app.config.settings import create_settings, get_settings
 from app.db.constants import BREAKPOINT_EVIDENCE_RELATIONSHIPS, RETEST_RECOMMENDATION_STATUSES
-from app.db.session import build_engine
+from app.db.session import build_engine, get_session
+from app.evidence.breakpoints import BreakpointService
 from app.evidence.models import Breakpoint, BreakpointEvidence, Evidence, SkillDimension
 from app.evidence.validation import EvidenceValidationService
 from app.interviews.mode_policy import ModePolicy
@@ -26,6 +30,7 @@ from app.interviews.template_policy import template_policy
 from app.main import create_app
 from app.mastery.models import (
     ConceptMastery,
+    ConceptMasteryEvidence,
     RetestAttempt,
     RetestAttemptEvidence,
     RetestRecommendation,
@@ -453,6 +458,60 @@ async def _fixture(
     return user_id, recommendation
 
 
+async def _candidate_mastery_get(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    user_id: UUID,
+    settings_path: Path,
+) -> dict[str, Any]:
+    settings = create_settings(env_file=settings_path)
+    settings.app_env = "development"
+    app = create_app()
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        async with sessions() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = override_session
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(f"/api/mastery/development/users/{user_id}")
+    assert response.status_code == 200
+    return cast(dict[str, Any], response.json())
+
+
+async def _invalidate_all_user_evidence(
+    sessions: async_sessionmaker[AsyncSession],
+    *,
+    user_id: UUID,
+    invalidated_at: datetime,
+) -> tuple[UUID, ...]:
+    async with sessions() as session, session.begin():
+        rows = list(
+            await session.scalars(
+                select(Evidence)
+                .join(InterviewSession, InterviewSession.id == Evidence.interview_session_id)
+                .where(
+                    InterviewSession.user_id == user_id,
+                    Evidence.validation_status == "VALID",
+                    Evidence.invalidated_at.is_(None),
+                )
+                .order_by(Evidence.created_at, Evidence.id)
+            )
+        )
+        validation = EvidenceValidationService(session)
+        for evidence in rows:
+            await validation.invalidate(
+                interview_session_id=evidence.interview_session_id,
+                evidence_id=evidence.id,
+                reason="Stage 8B candidate workflow visibility fixture.",
+                invalidated_at=invalidated_at,
+            )
+        return tuple(item.id for item in rows)
+
+
 @pytest.mark.asyncio
 async def test_60_start_is_atomic_simulation_and_idempotent() -> None:
     engine = build_engine()
@@ -590,6 +649,7 @@ async def _finish_recommendation(
     event_type: str = "TRANSCRIPT_FINALIZED",
     event_source: str = "CANDIDATE_VOICE",
     start_at: datetime | None = None,
+    polarity: str | None = None,
 ) -> tuple[UUID, UUID]:
     launch = await RetestService(
         sessionmaker=sessions,
@@ -613,6 +673,7 @@ async def _finish_recommendation(
         )
         assert concept is not None and skill is not None and evaluator is not None
         event_at = start_at + timedelta(seconds=1) if start_at is not None else datetime.now(UTC)
+        evidence_polarity = polarity or ("POSITIVE" if positive else "NEGATIVE")
         event = await InterviewRepository(session).add_event(
             session_id=interview.id,
             user_id=user_id,
@@ -623,7 +684,7 @@ async def _finish_recommendation(
             server_sequence=1,
             interview_state_version=1,
             schema_version="transcript.final.v1",
-            idempotency_key=f"stage8b:{'positive' if positive else 'negative'}:{interview.id}",
+            idempotency_key=f"stage8b:{evidence_polarity.lower()}:{interview.id}",
             payload={"fixture": "independent retest evidence"},
         )
         interview.last_server_sequence = 1
@@ -639,7 +700,7 @@ async def _finish_recommendation(
             skill,
             event.id,
             occurred_at=event.occurred_at,
-            polarity="POSITIVE" if positive else "NEGATIVE",
+            polarity=evidence_polarity,
             strength=strength,
             independence=independence,
             finding=(
@@ -965,6 +1026,104 @@ async def test_active_scheduled_retest_survives_recompute_and_terminal_flow_resu
 
 
 @pytest.mark.asyncio
+async def test_active_scheduled_workflow_remains_in_candidate_get_when_target_is_untested(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation = await _fixture(sessions)
+        retests = RetestService(sessionmaker=sessions)
+        launch = await retests.start(
+            principal_user_id=user_id,
+            recommendation_id=recommendation.id,
+        )
+        invalidated_ids = await _invalidate_all_user_evidence(
+            sessions,
+            user_id=user_id,
+            invalidated_at=NOW + timedelta(days=1),
+        )
+        assert len(invalidated_ids) >= 2
+
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        body = await _candidate_mastery_get(
+            sessions,
+            user_id=user_id,
+            settings_path=tmp_path / "missing.env",
+        )
+
+        concepts = body["technical_concepts"]
+        recommendations = body["retest_recommendations"]
+        assert isinstance(concepts, list) and len(concepts) == 1
+        assert concepts[0]["state"] == "UNTESTED"
+        assert concepts[0]["retest_due"] is False
+        assert concepts[0]["freshness"] != "RETEST_DUE"
+        assert isinstance(recommendations, list) and len(recommendations) == 1
+        assert recommendations[0]["recommendation_id"] == str(recommendation.id)
+        assert recommendations[0]["status"] == "SCHEDULED"
+        assert recommendations[0]["action_enabled"] is True
+        assert recommendations[0]["availability_message"] == (
+            "Your 10-minute Quick Drill is ready to resume."
+        )
+
+        resumed = await retests.start(
+            principal_user_id=user_id,
+            recommendation_id=recommendation.id,
+        )
+        assert resumed.resumed
+        assert resumed.interview_session_id == launch.interview_session_id
+        assert resumed.retest_attempt_id == launch.retest_attempt_id
+        async with sessions() as session:
+            row = await session.get(RetestRecommendation, recommendation.id)
+            assert row is not None and row.status == "SCHEDULED"
+            assert await session.scalar(
+                select(func.count(RetestRecommendation.id)).where(
+                    RetestRecommendation.user_id == user_id,
+                    RetestRecommendation.status == "PENDING",
+                )
+            ) == 0
+            assert await session.scalar(
+                select(func.count(RetestAttempt.id)).where(
+                    RetestAttempt.retest_recommendation_id == recommendation.id
+                )
+            ) == 1
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_pending_candidate_workflow_still_requires_current_retest_due(
+    tmp_path: Path,
+) -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation = await _fixture(sessions)
+        await _invalidate_all_user_evidence(
+            sessions,
+            user_id=user_id,
+            invalidated_at=NOW + timedelta(days=1),
+        )
+        await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+        async with sessions() as session, session.begin():
+            stale = await session.get(RetestRecommendation, recommendation.id)
+            assert stale is not None and stale.status == "SUPERSEDED"
+            stale.status = "PENDING"
+
+        body = await _candidate_mastery_get(
+            sessions,
+            user_id=user_id,
+            settings_path=tmp_path / "missing.env",
+        )
+        assert body["technical_concepts"] == []
+        assert body["retest_recommendations"] == []
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_invalidated_resolution_support_reopens_exact_breakpoint_idempotently() -> None:
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
@@ -1020,10 +1179,10 @@ async def test_invalidated_resolution_support_reopens_exact_breakpoint_idempoten
             recommendation = await session.get(RetestRecommendation, recommendation_id)
             assert recommendation is not None
             reopened = await session.get(Breakpoint, recommendation.breakpoint_id)
-            unrelated = await session.get(Breakpoint, unrelated_id)
+            loaded_unrelated = await session.get(Breakpoint, unrelated_id)
             assert reopened is not None and reopened.status == "RETEST_PENDING"
             assert reopened.resolved_at is None and reopened.resolution_reason is None
-            assert unrelated is not None and unrelated.status == "OPEN"
+            assert loaded_unrelated is not None and loaded_unrelated.status == "OPEN"
             historical = await session.scalar(
                 select(BreakpointEvidence).where(
                     BreakpointEvidence.breakpoint_id == reopened.id,
@@ -1031,6 +1190,173 @@ async def test_invalidated_resolution_support_reopens_exact_breakpoint_idempoten
                 )
             )
             assert historical is not None and historical.relationship == "RESOLUTION_SUPPORT"
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_invalidated_original_support_dismisses_resolved_breakpoint_idempotently() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation_id, resolution_evidence_id, _attempt_id = (
+            await _complete_attempt(sessions, positive=True)
+        )
+        mastery = MasteryRecalculationService(sessionmaker=sessions)
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session, session.begin():
+            recommendation = await session.get(RetestRecommendation, recommendation_id)
+            assert recommendation is not None
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert breakpoint is not None and breakpoint.status == "RESOLVED"
+            diagnostic_link = await session.scalar(
+                select(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == breakpoint.id,
+                    BreakpointEvidence.relationship.in_(("CREATED", "REINFORCED")),
+                )
+                .order_by(BreakpointEvidence.evidence_id)
+                .limit(1)
+            )
+            assert diagnostic_link is not None
+            diagnostic_evidence_id = diagnostic_link.evidence_id
+            unrelated = Breakpoint(
+                user_id=user_id,
+                concept_id=breakpoint.concept_id,
+                skill_dimension_id=breakpoint.skill_dimension_id,
+                breakpoint_key=f"{breakpoint.breakpoint_key}_original_support_unrelated",
+                first_detected_session_id=breakpoint.first_detected_session_id,
+                first_detected_at=breakpoint.first_detected_at,
+                severity="MODERATE",
+                status="OPEN",
+                summary="Independent unrelated diagnostic boundary.",
+            )
+            session.add(unrelated)
+            await session.flush()
+            breakpoint_id = breakpoint.id
+            concept_id = breakpoint.concept_id
+            unrelated_id = unrelated.id
+
+        invalidated_at = NOW + timedelta(days=2)
+        async with sessions() as session, session.begin():
+            diagnostic = await session.get(Evidence, diagnostic_evidence_id)
+            assert diagnostic is not None
+            validation = EvidenceValidationService(session)
+            first = await validation.invalidate(
+                interview_session_id=diagnostic.interview_session_id,
+                evidence_id=diagnostic.id,
+                reason="Original diagnostic support no longer qualifies.",
+                invalidated_at=invalidated_at,
+            )
+            second = await validation.invalidate(
+                interview_session_id=diagnostic.interview_session_id,
+                evidence_id=diagnostic.id,
+                reason="Duplicate diagnostic invalidation must converge.",
+                invalidated_at=invalidated_at + timedelta(minutes=1),
+            )
+            assert first.changed and not second.changed
+
+        await mastery.recalculate(user_id=user_id)
+        await mastery.recalculate(user_id=user_id)
+        async with sessions() as session:
+            dismissed = await session.get(Breakpoint, breakpoint_id)
+            loaded_unrelated = await session.get(Breakpoint, unrelated_id)
+            resolution_evidence = await session.get(Evidence, resolution_evidence_id)
+            projection = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == user_id,
+                    ConceptMastery.concept_id == concept_id,
+                )
+            )
+            resolution_contribution = await session.scalar(
+                select(ConceptMasteryEvidence).where(
+                    ConceptMasteryEvidence.user_id == user_id,
+                    ConceptMasteryEvidence.concept_id == concept_id,
+                    ConceptMasteryEvidence.evidence_id == resolution_evidence_id,
+                )
+            )
+            historical_links = list(
+                await session.scalars(
+                    select(BreakpointEvidence).where(
+                        BreakpointEvidence.breakpoint_id == breakpoint_id
+                    )
+                )
+            )
+            assert dismissed is not None and dismissed.status == "DISMISSED"
+            assert dismissed.resolved_at == invalidated_at
+            assert dismissed.resolution_reason == "SUPPORT_INVALIDATED"
+            assert loaded_unrelated is not None and loaded_unrelated.status == "OPEN"
+            assert resolution_evidence is not None
+            assert resolution_evidence.validation_status == "VALID"
+            assert resolution_evidence.invalidated_at is None
+            assert projection is not None and projection.state != "UNTESTED"
+            assert resolution_contribution is not None
+            assert resolution_contribution.contribution_classification == "SUPPORTING"
+            relationships = {
+                (item.evidence_id, item.relationship) for item in historical_links
+            }
+            assert (diagnostic_evidence_id, diagnostic_link.relationship) in relationships
+            assert (resolution_evidence_id, "RESOLUTION_SUPPORT") in relationships
+    finally:
+        await _reset_fixture(sessions)
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_mixed_retest_requires_explicit_structured_self_correction_to_resolve() -> None:
+    engine = build_engine()
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        user_id, recommendation = await _fixture(sessions)
+        assert recommendation.breakpoint_id is not None
+        assert recommendation.concept_id is not None
+        evidence_id, attempt_id = await _finish_recommendation(
+            sessions,
+            user_id=user_id,
+            recommendation_id=recommendation.id,
+            positive=True,
+            polarity="MIXED",
+        )
+        async with sessions() as session, session.begin():
+            session.add(
+                RetestAttemptEvidence(
+                    retest_attempt_id=attempt_id,
+                    evidence_id=evidence_id,
+                )
+            )
+            service = BreakpointService(session)
+            unstructured = await service.resolve_from_independent_retest(
+                breakpoint_id=recommendation.breakpoint_id,
+                user_id=user_id,
+                concept_id=recommendation.concept_id,
+                evidence_ids=(evidence_id,),
+                structured_self_correction_ids=frozenset(),
+                resolved_at=NOW,
+            )
+            breakpoint = await session.get(Breakpoint, recommendation.breakpoint_id)
+            assert unstructured == ()
+            assert breakpoint is not None and breakpoint.status == "OPEN"
+
+            structured = await service.resolve_from_independent_retest(
+                breakpoint_id=recommendation.breakpoint_id,
+                user_id=user_id,
+                concept_id=recommendation.concept_id,
+                evidence_ids=(evidence_id,),
+                structured_self_correction_ids=frozenset((evidence_id,)),
+                resolved_at=NOW,
+            )
+            assert structured == (evidence_id,)
+            assert breakpoint.status == "RESOLVED"
+            assert await session.scalar(
+                select(func.count())
+                .select_from(BreakpointEvidence)
+                .where(
+                    BreakpointEvidence.breakpoint_id == breakpoint.id,
+                    BreakpointEvidence.evidence_id == evidence_id,
+                    BreakpointEvidence.relationship == "RESOLUTION_SUPPORT",
+                )
+            ) == 1
     finally:
         await _reset_fixture(sessions)
         await engine.dispose()
