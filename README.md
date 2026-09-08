@@ -60,7 +60,7 @@ Only variables prefixed with `NEXT_PUBLIC_` are exposed to browser code. `CLERK_
 2. Open **API keys**. In **Quick Copy**, copy the development **Publishable Key** and **Secret Key** into `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` in `apps/web/.env.local`.
 3. On the same **API keys** page, choose **Show JWT public key**, then copy the **PEM Public Key**. Put the complete PEM, including its begin/end lines, in repository-root `.env` as the quoted multiline value of `COUNTERQ_CLERK_JWT_VERIFICATION_KEY`.
 4. Open **Domains** in the Clerk Dashboard and copy the instance's **Frontend API URL** (for example, a development URL ending in `clerk.accounts.dev`). This URL is the Clerk session token issuer; put it in `COUNTERQ_CLERK_ISSUER` without a `/.well-known/jwks.json` suffix.
-5. Keep the exact local web origin in `COUNTERQ_ALLOWED_FRONTEND_ORIGINS`. CounterQ validates it against the token's authorized-party claim.
+5. Keep `http://localhost:3000` as the standard local web origin in `COUNTERQ_ALLOWED_FRONTEND_ORIGINS`. The example also permits the exact compatibility origin `http://127.0.0.1:3000`; CounterQ continues to validate the token's authorized-party claim against exact configured origins.
 
 The resulting repository-root `.env` authentication entries are:
 
@@ -70,7 +70,7 @@ COUNTERQ_CLERK_ISSUER=https://your-development-instance.clerk.accounts.dev
 COUNTERQ_CLERK_JWT_VERIFICATION_KEY="-----BEGIN PUBLIC KEY-----
 ...
 -----END PUBLIC KEY-----"
-COUNTERQ_ALLOWED_FRONTEND_ORIGINS=http://127.0.0.1:3000
+COUNTERQ_ALLOWED_FRONTEND_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 ```
 
 CounterQ's FastAPI verifier uses this PEM directly for networkless RS256 signature verification; it does not use the Clerk secret key or fetch a JWKS during a request. Clerk documents the [Next.js key setup](https://clerk.com/docs/nextjs/getting-started/quickstart) and [manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification) separately.
@@ -98,12 +98,12 @@ pnpm run dev:api
 pnpm run dev:worker
 ```
 
-The frontend uses Next.js at `http://127.0.0.1:3000`. The API uses FastAPI at `http://127.0.0.1:8000`; `GET /health` is the basic liveness endpoint.
+The standard `pnpm run dev:web` command serves Next.js at `http://localhost:3000`, which is the canonical browser origin for local Clerk development. The API remains at `http://127.0.0.1:8000`; `GET /health` is the basic liveness endpoint.
 
 Open the Stage 1 Interview Room preview at:
 
 ```text
-http://127.0.0.1:3000/interview/demo
+http://localhost:3000/interview/demo
 ```
 
 For live realtime voice, start web and API, open the demo route, then use **Enable microphone**. Real provider testing consumes OpenAI API credit.

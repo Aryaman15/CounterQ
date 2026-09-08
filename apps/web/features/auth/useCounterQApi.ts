@@ -1,11 +1,14 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
-import { useMemo } from "react";
+import { useState } from "react";
 
 import { CounterQApiClient } from "@/lib/counterq-api";
 
-export function useCounterQApi(): CounterQApiClient {
-  const { getToken } = useAuth();
-  return useMemo(() => new CounterQApiClient(() => getToken()), [getToken]);
+type GetToken = () => Promise<string | null>;
+
+export function useCounterQApi(
+  getToken: GetToken,
+): CounterQApiClient {
+  const [api] = useState(() => new CounterQApiClient(() => getToken()));
+  return api;
 }

@@ -1,15 +1,37 @@
 "use client";
 
-import type { CandidateProfileUpdate, CounterQApiClient } from "@/lib/counterq-api";
+import { useAuth } from "@clerk/nextjs";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+import { CounterQApiError } from "@/lib/counterq-api";
+import type {
+  CandidateProfileUpdate,
+  CounterQApiClient,
+  CurrentUserResponse,
+} from "@/lib/counterq-api";
 
 import { useCounterQApi } from "./useCounterQApi";
 
 export function OnboardingExperience() {
-  const api = useCounterQApi();
+  const { getToken, isLoaded, isSignedIn, sessionId, userId } = useAuth();
+
+  if (!isLoaded) return <AuthLoadingState />;
+  if (!isSignedIn) return <SignedOutState />;
+  return (
+    <AuthenticatedOnboarding
+      key={sessionId ?? userId ?? "authenticated-session"}
+      getToken={getToken}
+    />
+  );
+}
+
+function AuthenticatedOnboarding({ getToken }: { getToken: () => Promise<string | null> }) {
+  const api = useCounterQApi(getToken);
   const router = useRouter();
-  return <OnboardingForm api={api} onComplete={() => router.replace("/?profile=ready")} />;
+  const onComplete = useCallback(() => router.replace("/?profile=ready"), [router]);
+  return <OnboardingForm api={api} onComplete={onComplete} />;
 }
 
 export function OnboardingForm({
@@ -22,6 +44,10 @@ export function OnboardingForm({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const profileLoad = useRef<{
+    api: CounterQApiClient;
+    request: Promise<CurrentUserResponse>;
+  } | null>(null);
   const [form, setForm] = useState<CandidateProfileUpdate>({
     display_name: null,
     preferred_language: "python",
@@ -33,7 +59,10 @@ export function OnboardingForm({
 
   useEffect(() => {
     let active = true;
-    void api.getMe()
+    if (profileLoad.current?.api !== api) {
+      profileLoad.current = { api, request: api.getMe() };
+    }
+    void profileLoad.current.request
       .then((me) => {
         if (!active) return;
         if (!me.onboarding_required && me.profile) {
@@ -43,8 +72,8 @@ export function OnboardingForm({
         const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || null;
         setForm((current) => ({ ...current, timezone }));
       })
-      .catch(() => {
-        if (active) setError("CounterQ could not load your profile. Try again.");
+      .catch((requestError: unknown) => {
+        if (active) setError(profileLoadFailureMessage(requestError));
       })
       .finally(() => {
         if (active) setLoading(false);
@@ -59,8 +88,8 @@ export function OnboardingForm({
     try {
       await api.saveProfile(form);
       onComplete();
-    } catch {
-      setError("Your preferences were not saved. Check the selections and try again.");
+    } catch (requestError: unknown) {
+      setError(profileSaveFailureMessage(requestError));
     } finally {
       setSaving(false);
     }
@@ -142,4 +171,78 @@ export function OnboardingForm({
       </form>
     </main>
   );
+}
+
+function AuthLoadingState() {
+  return (
+    <OnboardingBoundary
+      title="Preparing your interview settings."
+      description="Confirming your secure CounterQ session before loading your profile."
+    >
+      <p className="onboarding-status" role="status">Connecting your signed-in workspace…</p>
+    </OnboardingBoundary>
+  );
+}
+
+function SignedOutState() {
+  return (
+    <OnboardingBoundary
+      title="Sign in to continue your setup."
+      description="Your interview settings stay connected to your authenticated CounterQ account."
+    >
+      <Link className="launcher-link launcher-link-primary" href="/sign-in">
+        Continue to sign in
+      </Link>
+    </OnboardingBoundary>
+  );
+}
+
+function OnboardingBoundary({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <main className="onboarding-page">
+      <section className="onboarding-intro" aria-labelledby="onboarding-boundary-title">
+        <p className="launcher-kicker">Interview calibration</p>
+        <h1 id="onboarding-boundary-title">{title}</h1>
+        <p>{description}</p>
+      </section>
+      <section className="onboarding-form" aria-live="polite">
+        {children}
+      </section>
+    </main>
+  );
+}
+
+function profileLoadFailureMessage(error: unknown): string {
+  if (error instanceof CounterQApiError) {
+    if (error.category === "AUTHENTICATION_REQUIRED") {
+      return "CounterQ could not confirm your sign-in. Sign in again and retry.";
+    }
+    if (error.category === "ACCESS_DENIED") {
+      return "CounterQ could not access this profile. Sign in again or contact support.";
+    }
+  }
+  return "CounterQ could not load your profile. Check your connection and try again.";
+}
+
+function profileSaveFailureMessage(error: unknown): string {
+  if (error instanceof CounterQApiError) {
+    if (error.category === "AUTHENTICATION_REQUIRED") {
+      return "Your sign-in expired before these preferences were saved. Sign in again and retry.";
+    }
+    if (error.category === "ACCESS_DENIED") {
+      return "CounterQ could not update this profile. Sign in again or contact support.";
+    }
+    if (error.status === 400 || error.status === 422) {
+      return "Your preferences were not saved. Check the selections and try again.";
+    }
+  }
+  return "Your preferences were not saved. Check your connection and try again.";
 }

@@ -1,11 +1,17 @@
+import { StrictMode } from "react";
 import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CurrentUserResponse } from "@/lib/counterq-api";
 import { CounterQApiClient, CounterQApiError } from "@/lib/counterq-api";
+
+const clerkMocks = vi.hoisted(() => ({
+  router: { replace: vi.fn() },
+  useAuth: vi.fn(),
+}));
 
 vi.mock("@clerk/nextjs", () => ({
   ClerkProvider: ({ children }: { children: ReactNode }) => (
@@ -17,13 +23,20 @@ vi.mock("@clerk/nextjs", () => ({
   SignUp: ({ forceRedirectUrl }: { forceRedirectUrl: string }) => (
     <div data-testid="clerk-sign-up" data-redirect={forceRedirectUrl} />
   ),
-  useAuth: () => ({ getToken: async () => "test-token" }),
+  useAuth: () => clerkMocks.useAuth(),
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => clerkMocks.router,
 }));
 
 import SignInPage from "@/app/sign-in/[[...sign-in]]/page";
 import SignUpPage from "@/app/sign-up/[[...sign-up]]/page";
 import { CounterQAuthProvider } from "@/features/auth/CounterQAuthProvider";
-import { OnboardingForm } from "@/features/auth/OnboardingExperience";
+import {
+  OnboardingExperience,
+  OnboardingForm,
+} from "@/features/auth/OnboardingExperience";
 
 const userId = "01991b74-927a-7000-8000-000000000001";
 
@@ -37,6 +50,27 @@ function currentUser(overrides: Partial<CurrentUserResponse> = {}): CurrentUserR
   };
 }
 
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+beforeEach(() => {
+  clerkMocks.router.replace.mockReset();
+  clerkMocks.useAuth.mockReset();
+  clerkMocks.useAuth.mockReturnValue({
+    getToken: vi.fn(async () => "test-token"),
+    isLoaded: true,
+    isSignedIn: true,
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 describe("Stage 9A authenticated frontend", () => {
   it("keeps the Next environment contract in the Next project root", () => {
     const webEnvironment = readFileSync(resolve(process.cwd(), ".env.example"), "utf8")
@@ -46,6 +80,9 @@ describe("Stage 9A authenticated frontend", () => {
       resolve(process.cwd(), "../../.env.example"),
       "utf8",
     );
+    const webPackage = JSON.parse(
+      readFileSync(resolve(process.cwd(), "package.json"), "utf8"),
+    ) as { scripts: { dev: string } };
 
     expect(webEnvironment).toBe([
       "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000",
@@ -55,9 +92,155 @@ describe("Stage 9A authenticated frontend", () => {
     expect(repositoryEnvironment).toMatch(/^COUNTERQ_AUTH_PROVIDER=clerk$/m);
     expect(repositoryEnvironment).toMatch(/^COUNTERQ_CLERK_ISSUER=$/m);
     expect(repositoryEnvironment).toMatch(/^COUNTERQ_CLERK_JWT_VERIFICATION_KEY=$/m);
+    expect(repositoryEnvironment).toMatch(/^COUNTERQ_LOCAL_WEB_ORIGIN=http:\/\/localhost:3000$/m);
+    expect(repositoryEnvironment).toMatch(
+      /^COUNTERQ_ALLOWED_FRONTEND_ORIGINS=http:\/\/localhost:3000,http:\/\/127\.0\.0\.1:3000$/m,
+    );
     expect(repositoryEnvironment).not.toMatch(/^NEXT_PUBLIC_API_BASE_URL=/m);
     expect(repositoryEnvironment).not.toMatch(/^NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=/m);
     expect(repositoryEnvironment).not.toMatch(/^CLERK_SECRET_KEY=/m);
+    expect(webPackage.scripts.dev).toBe("next dev --hostname localhost --port 3000");
+  });
+
+  it("waits for Clerk hydration before loading the profile exactly once", async () => {
+    const unreadyGetToken = vi.fn(async () => null);
+    const readyGetToken = vi.fn(async () => "hydrated-session-token");
+    let resolveProfile!: (response: Response) => void;
+    const profileResponse = new Promise<Response>((resolveResponse) => {
+      resolveProfile = resolveResponse;
+    });
+    const fetchFn = vi.fn(
+      (input: RequestInfo | URL, init?: RequestInit) => {
+        void input;
+        void init;
+        return profileResponse;
+      },
+    );
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue({
+      getToken: unreadyGetToken,
+      isLoaded: false,
+      isSignedIn: undefined,
+    });
+
+    const { rerender } = render(
+      <StrictMode><OnboardingExperience /></StrictMode>,
+    );
+
+    expect(screen.getByRole("status")).toHaveTextContent(/Connecting your signed-in workspace/i);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(fetchFn).not.toHaveBeenCalled();
+    expect(unreadyGetToken).not.toHaveBeenCalled();
+
+    clerkMocks.useAuth.mockReturnValue({
+      getToken: readyGetToken,
+      isLoaded: true,
+      isSignedIn: true,
+    });
+    rerender(<StrictMode><OnboardingExperience /></StrictMode>);
+
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+    expect(readyGetToken).toHaveBeenCalledOnce();
+    expect(unreadyGetToken).not.toHaveBeenCalled();
+    const [requestUrl, requestInit] = fetchFn.mock.calls[0];
+    expect(requestUrl).toBe("http://127.0.0.1:8000/api/me");
+    expect(new Headers(requestInit?.headers).get("Authorization"))
+      .toBe("Bearer hydrated-session-token");
+    expect(screen.getByRole("status")).toHaveTextContent(/Loading your profile/i);
+
+    resolveProfile(jsonResponse(currentUser()));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Save interview preferences/i })).toBeEnabled();
+    });
+    expect(screen.getByLabelText(/Interview level/i)).toBeInTheDocument();
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("shows a safe sign-in handoff without contacting CounterQ when signed out", () => {
+    const getToken = vi.fn(async () => null);
+    const fetchFn = vi.fn();
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: false });
+
+    render(<OnboardingExperience />);
+
+    expect(screen.getByRole("link", { name: /Continue to sign in/i }))
+      .toHaveAttribute("href", "/sign-in");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(getToken).not.toHaveBeenCalled();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("shows profile failure only after an authenticated CounterQ request fails", async () => {
+    const getToken = vi.fn(async () => "authenticated-token");
+    const fetchFn = vi.fn(async () => new Response(null, { status: 503 }));
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: true });
+
+    render(<OnboardingExperience />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not load your profile.*connection/i,
+    );
+    expect(getToken).toHaveBeenCalledOnce();
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("loads then saves a user-id-free profile through the authenticated lifecycle", async () => {
+    const getToken = vi.fn(async () => "authenticated-token");
+    const responses = [
+      jsonResponse(currentUser()),
+      jsonResponse(currentUser({ onboarding_required: false })),
+    ];
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      void input;
+      void init;
+      const response = responses.shift();
+      if (!response) throw new Error("Unexpected CounterQ request");
+      return response;
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: true });
+
+    render(<OnboardingExperience />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Save interview preferences/i })).toBeEnabled();
+    });
+    fireEvent.change(screen.getByLabelText(/Display name/i), {
+      target: { value: "Ada" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Save interview preferences/i }));
+
+    await waitFor(() => expect(clerkMocks.router.replace).toHaveBeenCalledOnce());
+    expect(clerkMocks.router.replace).toHaveBeenCalledWith("/?profile=ready");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+    expect(getToken).toHaveBeenCalledTimes(2);
+    const [requestUrl, requestInit] = fetchFn.mock.calls[1];
+    const requestBody = JSON.parse(String(requestInit?.body));
+    expect(requestUrl).toBe("http://127.0.0.1:8000/api/me/profile");
+    expect(requestInit?.method).toBe("PUT");
+    expect(new Headers(requestInit?.headers).get("Authorization"))
+      .toBe("Bearer authenticated-token");
+    expect(requestBody).toMatchObject({ display_name: "Ada" });
+    expect(requestBody).not.toHaveProperty("user_id");
+  });
+
+  it("does not describe an authentication save failure as invalid selections", async () => {
+    const api = {
+      getMe: vi.fn(async () => currentUser()),
+      saveProfile: vi.fn(async () => {
+        throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401);
+      }),
+    } as unknown as CounterQApiClient;
+
+    render(<OnboardingForm api={api} onComplete={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("button")).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: /Save interview preferences/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/sign-in expired/i);
+    expect(alert).not.toHaveTextContent(/Check the selections/i);
   });
 
   it("wraps the application and presents managed sign-in and sign-up surfaces", () => {
