@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -18,7 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.auth.models import User
 from app.auth.providers.clerk import ClerkJWTVerifier
 from app.auth.verifier import AuthenticationError
-from app.config.settings import Settings, get_settings
+from app.config.settings import (
+    REPOSITORY_ENV_FILE,
+    REPOSITORY_ROOT,
+    Settings,
+    create_settings,
+    get_settings,
+)
 from app.db.session import build_engine, get_session
 from app.main import create_app
 
@@ -72,6 +79,32 @@ def _verifier() -> ClerkJWTVerifier:
         authorized_parties=(AUTHORIZED_PARTY,),
         clock_skew_seconds=0,
     )
+
+
+def test_backend_auth_configuration_remains_in_repository_root_env(tmp_path: Path) -> None:
+    assert REPOSITORY_ENV_FILE == REPOSITORY_ROOT / ".env"
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "COUNTERQ_AUTH_PROVIDER=clerk\n"
+        f"COUNTERQ_CLERK_ISSUER={ISSUER}\n"
+        'COUNTERQ_CLERK_JWT_VERIFICATION_KEY="-----BEGIN PUBLIC KEY-----\n'
+        "test-only-key-material\n"
+        '-----END PUBLIC KEY-----"\n'
+        f"COUNTERQ_ALLOWED_FRONTEND_ORIGINS={AUTHORIZED_PARTY}\n",
+        encoding="utf-8",
+    )
+
+    settings = create_settings(env_file)
+
+    assert settings.auth_provider == "clerk"
+    assert settings.clerk_issuer == ISSUER
+    assert settings.clerk_jwt_verification_key is not None
+    assert settings.clerk_jwt_verification_key.get_secret_value() == (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "test-only-key-material\n"
+        "-----END PUBLIC KEY-----"
+    )
+    assert settings.allowed_frontend_origin_values == (AUTHORIZED_PARTY,)
 
 
 async def _request(

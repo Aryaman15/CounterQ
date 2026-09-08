@@ -445,12 +445,19 @@ async def _reset_fixture(sessions: async_sessionmaker[AsyncSession]) -> None:
 
 async def _fixture(
     sessions: async_sessionmaker[AsyncSession],
+    *,
+    now: datetime | None = None,
 ) -> tuple[UUID, RetestRecommendation]:
     await _reset_fixture(sessions)
     async with sessions() as session, session.begin():
         user = await ensure_development_retest_fixture(session)
         user_id = user.id
-    await MasteryRecalculationService(sessionmaker=sessions).recalculate(user_id=user_id)
+    mastery = (
+        MasteryRecalculationService(sessionmaker=sessions)
+        if now is None
+        else MasteryRecalculationService(sessionmaker=sessions, clock=lambda: now)
+    )
+    await mastery.recalculate(user_id=user_id)
     async with sessions() as session:
         recommendation = await active_development_recommendation(session, user_id)
         assert recommendation is not None
@@ -972,8 +979,8 @@ async def test_active_scheduled_retest_survives_recompute_and_terminal_flow_resu
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        user_id, recommendation = await _fixture(sessions)
-        retests = RetestService(sessionmaker=sessions)
+        user_id, recommendation = await _fixture(sessions, now=NOW)
+        retests = RetestService(sessionmaker=sessions, clock=lambda: NOW)
         launch = await retests.start(
             principal_user_id=user_id,
             recommendation_id=recommendation.id,
@@ -1367,12 +1374,13 @@ async def test_stale_strong_retest_refreshes_without_downgrading_mastery() -> No
     engine = build_engine()
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        user_id, first_recommendation = await _fixture(sessions)
+        user_id, first_recommendation = await _fixture(sessions, now=NOW)
         await _finish_recommendation(
             sessions,
             user_id=user_id,
             recommendation_id=first_recommendation.id,
             positive=True,
+            start_at=NOW,
         )
         mastery = MasteryRecalculationService(sessionmaker=sessions, clock=lambda: NOW)
         await mastery.recalculate(user_id=user_id)

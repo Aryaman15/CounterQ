@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CurrentUserResponse } from "@/lib/counterq-api";
@@ -37,6 +38,28 @@ function currentUser(overrides: Partial<CurrentUserResponse> = {}): CurrentUserR
 }
 
 describe("Stage 9A authenticated frontend", () => {
+  it("keeps the Next environment contract in the Next project root", () => {
+    const webEnvironment = readFileSync(resolve(process.cwd(), ".env.example"), "utf8")
+      .replaceAll("\r\n", "\n")
+      .trimEnd();
+    const repositoryEnvironment = readFileSync(
+      resolve(process.cwd(), "../../.env.example"),
+      "utf8",
+    );
+
+    expect(webEnvironment).toBe([
+      "NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000",
+      "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=",
+      "CLERK_SECRET_KEY=",
+    ].join("\n"));
+    expect(repositoryEnvironment).toMatch(/^COUNTERQ_AUTH_PROVIDER=clerk$/m);
+    expect(repositoryEnvironment).toMatch(/^COUNTERQ_CLERK_ISSUER=$/m);
+    expect(repositoryEnvironment).toMatch(/^COUNTERQ_CLERK_JWT_VERIFICATION_KEY=$/m);
+    expect(repositoryEnvironment).not.toMatch(/^NEXT_PUBLIC_API_BASE_URL=/m);
+    expect(repositoryEnvironment).not.toMatch(/^NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=/m);
+    expect(repositoryEnvironment).not.toMatch(/^CLERK_SECRET_KEY=/m);
+  });
+
   it("wraps the application and presents managed sign-in and sign-up surfaces", () => {
     const { rerender } = render(
       <CounterQAuthProvider><span>private workspace</span></CounterQAuthProvider>,

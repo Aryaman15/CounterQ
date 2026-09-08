@@ -13,15 +13,19 @@ The current realtime path is a development spike: FastAPI mints short-lived Open
 - Docker Desktop
 - OpenAI API key with Realtime access for live voice testing
 
-## Local Secrets
+## Local Configuration
 
-Local monorepo secrets live in the repository-root `.env` file:
+CounterQ uses separate environment files for the server processes and the Next.js application. Keep real values only in the ignored local files; never commit them.
+
+### FastAPI, worker, and infrastructure
+
+Repository-root `.env` configures FastAPI, the background worker, local infrastructure integrations, the CounterQ auth verifier, and OpenAI providers:
 
 ```sh
 cp .env.example .env
 ```
 
-Set `OPENAI_API_KEY` in `.env` for live realtime testing. The key is server-only: do not put it in `NEXT_PUBLIC_*`, frontend code, generated contracts, or committed files.
+Set `OPENAI_API_KEY` in `.env` for live realtime testing. The key is server-only: do not put it in `NEXT_PUBLIC_*`, frontend code, generated contracts, or committed files. The API settings loader continues to resolve this file from the repository root even when the API command runs from `apps/api`.
 
 Useful realtime defaults are documented in `.env.example`:
 
@@ -31,6 +35,45 @@ COUNTERQ_REALTIME_MODEL=gpt-realtime-2.1
 COUNTERQ_REALTIME_VOICE=marin
 COUNTERQ_REALTIME_TRANSCRIPTION_MODEL=gpt-live-transcribe
 ```
+
+### Next.js and Clerk
+
+The Next.js project is rooted at `apps/web`, so its local environment file must live there. Create it with:
+
+```sh
+cp apps/web/.env.example apps/web/.env.local
+```
+
+`apps/web/.env.local` configures the browser-visible API base URL plus the publishable key and server-only secret used by `@clerk/nextjs`:
+
+```text
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=...
+CLERK_SECRET_KEY=...
+```
+
+Only variables prefixed with `NEXT_PUBLIC_` are exposed to browser code. `CLERK_SECRET_KEY` must remain private even though it belongs in the Next.js environment file.
+
+#### Real Clerk development setup
+
+1. Create or select a **Development** application in the [Clerk Dashboard](https://dashboard.clerk.com/).
+2. Open **API keys**. In **Quick Copy**, copy the development **Publishable Key** and **Secret Key** into `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_SECRET_KEY` in `apps/web/.env.local`.
+3. On the same **API keys** page, choose **Show JWT public key**, then copy the **PEM Public Key**. Put the complete PEM, including its begin/end lines, in repository-root `.env` as the quoted multiline value of `COUNTERQ_CLERK_JWT_VERIFICATION_KEY`.
+4. Open **Domains** in the Clerk Dashboard and copy the instance's **Frontend API URL** (for example, a development URL ending in `clerk.accounts.dev`). This URL is the Clerk session token issuer; put it in `COUNTERQ_CLERK_ISSUER` without a `/.well-known/jwks.json` suffix.
+5. Keep the exact local web origin in `COUNTERQ_ALLOWED_FRONTEND_ORIGINS`. CounterQ validates it against the token's authorized-party claim.
+
+The resulting repository-root `.env` authentication entries are:
+
+```text
+COUNTERQ_AUTH_PROVIDER=clerk
+COUNTERQ_CLERK_ISSUER=https://your-development-instance.clerk.accounts.dev
+COUNTERQ_CLERK_JWT_VERIFICATION_KEY="-----BEGIN PUBLIC KEY-----
+...
+-----END PUBLIC KEY-----"
+COUNTERQ_ALLOWED_FRONTEND_ORIGINS=http://127.0.0.1:3000
+```
+
+CounterQ's FastAPI verifier uses this PEM directly for networkless RS256 signature verification; it does not use the Clerk secret key or fetch a JWKS during a request. Clerk documents the [Next.js key setup](https://clerk.com/docs/nextjs/getting-started/quickstart) and [manual JWT verification](https://clerk.com/docs/guides/sessions/manual-jwt-verification) separately.
 
 ## Bootstrap
 

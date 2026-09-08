@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
+from app.db.constants import INTERVIEW_LEVELS, INTERVIEW_MODES
 from app.db.ids import uuid7
 
 if TYPE_CHECKING:
@@ -25,8 +26,6 @@ if TYPE_CHECKING:
 
 
 PROFILE_LANGUAGES = ("cpp", "java", "python")
-PROFILE_INTERVIEW_MODES = ("COACH", "SIMULATION")
-PROFILE_INTERVIEW_LEVELS = ("INTERN", "NEW_GRAD", "EARLY_CAREER")
 
 
 def _in_values(column_name: str, values: tuple[str, ...]) -> str:
@@ -73,11 +72,11 @@ class CandidateProfile(Base):
             name="preferred_language",
         ),
         CheckConstraint(
-            _in_values("default_interview_mode", PROFILE_INTERVIEW_MODES),
+            _in_values("default_interview_mode", INTERVIEW_MODES),
             name="default_interview_mode",
         ),
         CheckConstraint(
-            _in_values("interview_level", PROFILE_INTERVIEW_LEVELS),
+            _in_values("interview_level", INTERVIEW_LEVELS),
             name="interview_level",
         ),
         CheckConstraint("profile_version > 0", name="profile_version_positive"),
