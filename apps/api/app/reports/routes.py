@@ -12,9 +12,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_gateway.models import AIPolicyVersion
+from app.auth.dependencies import get_current_user
+from app.auth.principal import CurrentUser
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_session, get_sessionmaker
+from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
@@ -81,11 +84,29 @@ class DevelopmentReportInspection(BaseModel):
     "/sessions/{interview_session_id}",
     response_model=CandidateSessionReportResponse,
 )
-async def session_report_status(
+async def candidate_session_report_status(
     interview_session_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CandidateSessionReportResponse:
-    interview, configuration, problem = await _session_facts(session, interview_session_id)
+    return await session_report_status(
+        interview_session_id,
+        session,
+        principal_user_id=current_user.id,
+    )
+
+
+async def session_report_status(
+    interview_session_id: UUID,
+    session: AsyncSession,
+    *,
+    principal_user_id: UUID | None = None,
+) -> CandidateSessionReportResponse:
+    interview, configuration, problem = await _session_facts(
+        session,
+        interview_session_id,
+        principal_user_id=principal_user_id,
+    )
     if interview.status != "COMPLETED" or interview.completed_at is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -153,6 +174,25 @@ async def session_report_status(
         generated_at=None,
         report=None,
         message="CounterQ is reviewing what you demonstrated.",
+    )
+
+
+@router.get(
+    "/development/sessions/{interview_session_id}",
+    response_model=CandidateSessionReportResponse,
+)
+async def development_session_report_status(
+    interview_session_id: UUID,
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateSessionReportResponse:
+    _require_development(settings)
+    interview = await session.get(InterviewSession, interview_session_id)
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Interview session was not found")
+    return await session_report_status(
+        interview_session_id,
+        session,
     )
 
 
@@ -275,11 +315,23 @@ async def development_report_inspection(
 
 
 async def _session_facts(
-    session: AsyncSession, session_id: UUID
+    session: AsyncSession,
+    session_id: UUID,
+    *,
+    principal_user_id: UUID | None,
 ) -> tuple[InterviewSession, InterviewConfiguration, ProblemVersion]:
-    interview = await session.get(InterviewSession, session_id)
-    if interview is None:
-        raise HTTPException(status_code=404, detail="Interview session was not found")
+    if principal_user_id is None:
+        interview = await session.get(InterviewSession, session_id)
+        if interview is None:
+            raise HTTPException(status_code=404, detail="Interview session was not found")
+    else:
+        try:
+            interview = await InterviewOwnershipRepository(session).get_owned(
+                principal_user_id=principal_user_id,
+                interview_session_id=session_id,
+            )
+        except OwnedInterviewNotFound as exc:
+            raise HTTPException(status_code=404, detail="Interview session was not found") from exc
     configuration = await session.get(InterviewConfiguration, interview.interview_configuration_id)
     problem = await session.get(ProblemVersion, interview.problem_version_id)
     if configuration is None or problem is None:

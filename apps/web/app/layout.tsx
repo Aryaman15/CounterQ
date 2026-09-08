@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
+
+import { CounterQAuthProvider } from "@/features/auth/CounterQAuthProvider";
+
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "CounterQ",
-  description: "CounterQ repository foundation",
+  description: "Adaptive technical interview practice with evidence-backed memory.",
 };
 
 export default function RootLayout({
@@ -13,8 +16,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <CounterQAuthProvider>{children}</CounterQAuthProvider>
+      </body>
     </html>
   );
 }
-

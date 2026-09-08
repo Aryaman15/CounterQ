@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai_gateway.routes import router as ai_gateway_router
 from app.api.routes.health import router as health_router
+from app.auth.routes import router as auth_router
 from app.config.settings import get_settings
 from app.core.logging import CorrelationIdMiddleware, configure_logging
 from app.countermap.routes import router as countermap_router
@@ -26,17 +27,18 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CounterQ API",
         version="0.0.0",
-        summary="Stage 1 Core Interaction Spike API for CounterQ.",
+        summary="CounterQ application API.",
     )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[settings.local_web_origin],
+        allow_origins=list(settings.allowed_frontend_origin_values),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
-        allow_headers=["Content-Type", "X-Request-ID"],
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
     )
     app.add_middleware(CorrelationIdMiddleware)
     app.include_router(health_router)
+    app.include_router(auth_router)
     app.include_router(ai_gateway_router)
     app.include_router(examiner_router)
     app.include_router(execution_router)

@@ -12,9 +12,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.9.1",
+    "@counterq/contracts": "workspace:*",
     "@dagrejs/dagre": "^1.1.5",
     "@monaco-editor/react": "^4.7.0",
-    "@counterq/contracts": "workspace:*",
     "@xyflow/react": "^12.9.3",
     "lucide-react": "^1.33.0",
     "monaco-editor": "^0.56.0",

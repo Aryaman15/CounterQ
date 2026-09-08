@@ -39,11 +39,14 @@ export function SessionReportExperience({
 }: SessionReportExperienceProps) {
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [requestFailed, setRequestFailed] = useState(false);
+  const reportPath = process.env.NODE_ENV === "development"
+    ? `/api/reports/development/sessions/${interviewSessionId}`
+    : `/api/reports/sessions/${interviewSessionId}`;
 
   const load = useCallback(async (signal?: AbortSignal): Promise<ReportResponse["status"] | null> => {
     try {
       const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/reports/sessions/${interviewSessionId}`,
+        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}${reportPath}`,
         { signal, cache: "no-store" },
       );
       if (!result.ok) throw new Error("Report status unavailable");
@@ -56,7 +59,7 @@ export function SessionReportExperience({
       setRequestFailed(true);
       return null;
     }
-  }, [interviewSessionId]);
+  }, [reportPath]);
 
   useEffect(() => {
     const controller = new AbortController();

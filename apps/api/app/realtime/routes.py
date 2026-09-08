@@ -7,7 +7,7 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_gateway.provider import (
     ProviderReasoningResult,
@@ -15,6 +15,8 @@ from app.ai_gateway.provider import (
     ReasoningRequest,
 )
 from app.ai_gateway.providers.openai_reasoning import OpenAIReasoningProvider
+from app.auth.dependencies import get_current_user
+from app.auth.principal import CurrentUser
 from app.config.environment import DEVELOPMENT_SPIKE_ENVS, development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_session, get_sessionmaker
@@ -22,6 +24,7 @@ from app.examiner.coordinator import (
     LiveExaminerCoordinator,
     observation_is_live_examiner_eligible,
 )
+from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.completion import DeadlineNotReached, InterviewCompletionService
 from app.interviews.dev_factory import create_curated_development_interview
 from app.interviews.floor import ConversationFloor
@@ -76,10 +79,15 @@ from app.realtime.control_service import (
 )
 from app.realtime.openai_provider import OpenAIRealtimeVoiceProvider
 from app.realtime.provider import RealtimeProviderError, RealtimeVoiceProvider
+from app.realtime.tickets import ControlTicketStore, get_control_ticket_store
 
 router = APIRouter(prefix="/api/realtime", tags=["realtime"])
 DEVELOPMENT_REALTIME_ENVS = DEVELOPMENT_SPIKE_ENVS
 logger = structlog.get_logger(__name__)
+
+
+def get_realtime_sessionmaker() -> async_sessionmaker[AsyncSession]:
+    return get_sessionmaker()
 
 
 class CreateRealtimeSessionRequest(BaseModel):
@@ -103,6 +111,12 @@ class CreateRealtimeSessionResponse(BaseModel):
     expires_at: datetime | None
     expires_after_seconds: int
     turn_detection: RealtimeTurnDetectionConfig
+
+
+class RealtimeControlTicketResponse(BaseModel):
+    ticket: str = Field(description="Single-use opaque realtime control ticket.")
+    expires_after_seconds: int
+    control_websocket_path: str
 
 
 def realtime_credential_minting_allowed(settings: Settings) -> bool:
@@ -240,7 +254,7 @@ async def create_realtime_development_interview(
         deadline_at=interview.deadline_at,
         time_remaining_seconds=restored.time_remaining_seconds,
         time_pressure=restored.time_pressure,
-        control_websocket_path=f"/api/realtime/control/{interview.id}",
+        control_websocket_path=f"/api/realtime/development/control/{interview.id}",
         restoration=restoration,
         restore_protocol_version=RESTORE_PROTOCOL_VERSION,
         started_at=interview.started_at,
@@ -282,18 +296,96 @@ async def create_realtime_development_interview(
     )
 
 
+@router.post(
+    "/interviews/{interview_session_id}/control-ticket",
+    response_model=RealtimeControlTicketResponse,
+)
+async def create_realtime_control_ticket(
+    interview_session_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    tickets: Annotated[ControlTicketStore, Depends(get_control_ticket_store)],
+) -> RealtimeControlTicketResponse:
+    try:
+        interview = await InterviewOwnershipRepository(session).get_owned(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+            allowed_statuses=("READY", "ACTIVE", "RECONNECTING"),
+        )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    interview_id = interview.id
+    await session.rollback()
+    issued = await tickets.issue(user_id=current_user.id, interview_session_id=interview_id)
+    return RealtimeControlTicketResponse(
+        ticket=issued.token,
+        expires_after_seconds=issued.expires_after_seconds,
+        control_websocket_path=f"/api/realtime/control/{interview_id}",
+    )
+
+
 @router.websocket("/control/{interview_session_id}")
-async def realtime_control_websocket(
+async def authenticated_realtime_control_websocket(
     websocket: WebSocket,
     interview_session_id: UUID,
     settings: Annotated[Settings, Depends(get_settings)],
+    tickets: Annotated[ControlTicketStore, Depends(get_control_ticket_store)],
+    sessionmaker: Annotated[
+        async_sessionmaker[AsyncSession], Depends(get_realtime_sessionmaker)
+    ],
 ) -> None:
-    if not realtime_credential_minting_allowed(settings):
+    claims = await tickets.consume(websocket.query_params.get("ticket", ""))
+    if claims is None or claims.interview_session_id != interview_session_id:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
+    try:
+        async with sessionmaker() as session:
+            await InterviewOwnershipRepository(session).get_owned(
+                principal_user_id=claims.user_id,
+                interview_session_id=interview_session_id,
+                allowed_statuses=("READY", "ACTIVE", "RECONNECTING"),
+            )
+    except OwnedInterviewNotFound:
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+
+    await _run_realtime_control_connection(
+        websocket,
+        interview_session_id,
+        settings,
+        sessionmaker,
+    )
+
+
+@router.websocket("/development/control/{interview_session_id}")
+async def development_realtime_control_websocket(
+    websocket: WebSocket,
+    interview_session_id: UUID,
+    settings: Annotated[Settings, Depends(get_settings)],
+    sessionmaker: Annotated[
+        async_sessionmaker[AsyncSession], Depends(get_realtime_sessionmaker)
+    ],
+) -> None:
+    if not development_spike_enabled(settings):
+        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        return
+    await _run_realtime_control_connection(
+        websocket,
+        interview_session_id,
+        settings,
+        sessionmaker,
+    )
+
+
+async def _run_realtime_control_connection(
+    websocket: WebSocket,
+    interview_session_id: UUID,
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+) -> None:
+
     await websocket.accept()
-    sessionmaker = get_sessionmaker()
     floor = ConversationFloor()
     runtime_state = RealtimeControlRuntimeState()
 

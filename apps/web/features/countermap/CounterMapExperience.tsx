@@ -18,11 +18,14 @@ export function CounterMapExperience({
 }) {
   const [response, setResponse] = useState<CounterMapResponse | null>(null);
   const [requestFailed, setRequestFailed] = useState(false);
+  const sessionPath = process.env.NODE_ENV === "development"
+    ? `/api/countermap/development/sessions/${interviewSessionId}`
+    : `/api/countermap/sessions/${interviewSessionId}`;
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/countermap/sessions/${interviewSessionId}`,
+        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}${sessionPath}`,
         { signal, cache: "no-store" },
       );
       if (!result.ok) throw new Error("CounterMap status unavailable");
@@ -35,7 +38,7 @@ export function CounterMapExperience({
       setRequestFailed(true);
       return null;
     }
-  }, [interviewSessionId]);
+  }, [sessionPath]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,7 +81,7 @@ export function CounterMapExperience({
           graph={response.graph}
           detailUrlForNode={(nodeId) => (
             `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
-            + `/api/countermap/sessions/${interviewSessionId}/nodes/${encodeURIComponent(nodeId)}`
+            + `${sessionPath}/nodes/${encodeURIComponent(nodeId)}`
           )}
         />
       ) : response?.status === "NOT_AVAILABLE" ? (

@@ -55,6 +55,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/countermap/development/sessions/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Countermap Status */
+        get: operations["development_countermap_status_api_countermap_development_sessions__interview_session_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/countermap/development/sessions/{interview_session_id}/inspection": {
         parameters: {
             query?: never;
@@ -64,6 +81,23 @@ export interface paths {
         };
         /** Development Countermap Inspection */
         get: operations["development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/countermap/development/sessions/{interview_session_id}/nodes/{node_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Countermap Node Detail For Session */
+        get: operations["development_countermap_node_detail_for_session_api_countermap_development_sessions__interview_session_id__nodes__node_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -96,8 +130,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Countermap Status */
-        get: operations["countermap_status_api_countermap_sessions__interview_session_id__get"];
+        /** Candidate Countermap Status */
+        get: operations["candidate_countermap_status_api_countermap_sessions__interview_session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -113,8 +147,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Countermap Node Detail */
-        get: operations["countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get"];
+        /** Candidate Countermap Node Detail */
+        get: operations["candidate_countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -310,6 +344,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current User */
+        get: operations["current_user_api_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/me/profile": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Current User Profile */
+        put: operations["update_current_user_profile_api_me_profile_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/problems/curated": {
         parameters: {
             query?: never;
@@ -361,6 +429,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/realtime/interviews/{interview_session_id}/control-ticket": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Realtime Control Ticket */
+        post: operations["create_realtime_control_ticket_api_realtime_interviews__interview_session_id__control_ticket_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/session": {
         parameters: {
             query?: never;
@@ -372,6 +457,23 @@ export interface paths {
         put?: never;
         /** Create Realtime Session */
         post: operations["create_realtime_session_api_realtime_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/reports/development/sessions/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Development Session Report Status */
+        get: operations["development_session_report_status_api_reports_development_sessions__interview_session_id__get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -419,8 +521,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Session Report Status */
-        get: operations["session_report_status_api_reports_sessions__interview_session_id__get"];
+        /** Candidate Session Report Status */
+        get: operations["candidate_session_report_status_api_reports_sessions__interview_session_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -962,6 +1064,30 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** CandidateProfileUpdate */
+        CandidateProfileUpdate: {
+            /**
+             * Default Interview Mode
+             * @enum {string}
+             */
+            default_interview_mode: "COACH" | "SIMULATION";
+            /** Display Name */
+            display_name?: string | null;
+            /**
+             * Interview Level
+             * @enum {string}
+             */
+            interview_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+            /**
+             * Preferred Language
+             * @enum {string}
+             */
+            preferred_language: "cpp" | "java" | "python";
+            /** Target Role */
+            target_role?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+        };
         /** CandidateRetestRecommendation */
         CandidateRetestRecommendation: {
             /**
@@ -1352,6 +1478,55 @@ export interface components {
             supported_languages: ("cpp" | "python" | "java")[];
             /** Title */
             title: string;
+        };
+        /** CurrentUserProfileResponse */
+        CurrentUserProfileResponse: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Default Interview Mode
+             * @enum {string}
+             */
+            default_interview_mode: "COACH" | "SIMULATION";
+            /** Display Name */
+            display_name: string | null;
+            /**
+             * Interview Level
+             * @enum {string}
+             */
+            interview_level: "INTERN" | "NEW_GRAD" | "EARLY_CAREER";
+            /**
+             * Preferred Language
+             * @enum {string}
+             */
+            preferred_language: "cpp" | "java" | "python";
+            /** Profile Version */
+            profile_version: number;
+            /** Target Role */
+            target_role: string | null;
+            /** Timezone */
+            timezone: string | null;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /** CurrentUserResponse */
+        CurrentUserResponse: {
+            /** Account Status */
+            account_status: string;
+            /** Onboarding Required */
+            onboarding_required: boolean;
+            profile: components["schemas"]["CurrentUserProfileResponse"] | null;
+            /**
+             * User Id
+             * Format: uuid
+             */
+            user_id: string;
         };
         /** DevelopmentAnalyzeAndAuthorizeResponse */
         DevelopmentAnalyzeAndAuthorizeResponse: {
@@ -1943,6 +2118,18 @@ export interface components {
             status: "ok";
         };
         JsonValue: unknown;
+        /** RealtimeControlTicketResponse */
+        RealtimeControlTicketResponse: {
+            /** Control Websocket Path */
+            control_websocket_path: string;
+            /** Expires After Seconds */
+            expires_after_seconds: number;
+            /**
+             * Ticket
+             * @description Single-use opaque realtime control ticket.
+             */
+            ticket: string;
+        };
         /** RealtimeDevelopmentBootstrapRequest */
         RealtimeDevelopmentBootstrapRequest: {
             /** Client Instance Id */
@@ -2433,6 +2620,37 @@ export interface operations {
             };
         };
     };
+    development_countermap_status_api_countermap_development_sessions__interview_session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCounterMapResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get: {
         parameters: {
             query?: never;
@@ -2451,6 +2669,38 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DevelopmentCounterMapInspection"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_countermap_node_detail_for_session_api_countermap_development_sessions__interview_session_id__nodes__node_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+                node_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateCounterMapNodeDetailResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2499,7 +2749,7 @@ export interface operations {
             };
         };
     };
-    countermap_status_api_countermap_sessions__interview_session_id__get: {
+    candidate_countermap_status_api_countermap_sessions__interview_session_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -2530,7 +2780,7 @@ export interface operations {
             };
         };
     };
-    countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get: {
+    candidate_countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get: {
         parameters: {
             query?: never;
             header?: never;
@@ -2899,6 +3149,59 @@ export interface operations {
             };
         };
     };
+    current_user_api_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+        };
+    };
+    update_current_user_profile_api_me_profile_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateProfileUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CurrentUserResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_curated_problems_api_problems_curated_get: {
         parameters: {
             query?: never;
@@ -2985,6 +3288,37 @@ export interface operations {
             };
         };
     };
+    create_realtime_control_ticket_api_realtime_interviews__interview_session_id__control_ticket_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RealtimeControlTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_realtime_session_api_realtime_session_post: {
         parameters: {
             query?: never;
@@ -3005,6 +3339,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateRealtimeSessionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    development_session_report_status_api_reports_development_sessions__interview_session_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateSessionReportResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3084,7 +3449,7 @@ export interface operations {
             };
         };
     };
-    session_report_status_api_reports_sessions__interview_session_id__get: {
+    candidate_session_report_status_api_reports_sessions__interview_session_id__get: {
         parameters: {
             query?: never;
             header?: never;

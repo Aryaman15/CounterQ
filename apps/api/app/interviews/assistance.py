@@ -34,6 +34,7 @@ from app.examiner.models import CandidateClaim
 from app.interviews.assistance_facts import initial_final_defense_answer_captured
 from app.interviews.assistance_policy import CoachAssistanceInput, relevant_reviewed_reference
 from app.interviews.assistance_wording import CoachAssistanceWordingService
+from app.interviews.authorization import InterviewOwnershipRepository
 from app.interviews.budget_policy import (
     AssistanceBudgetSnapshot,
     assistance_budget_snapshot,
@@ -146,8 +147,13 @@ class CoachAssistanceWorkflow:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._mode_policy = ModePolicy()
 
-    async def request(self, command: AssistanceRequestCommand) -> AssistanceRequestResult:
-        facts = await self._persist_request(command)
+    async def request(
+        self,
+        command: AssistanceRequestCommand,
+        *,
+        principal_user_id: UUID | None = None,
+    ) -> AssistanceRequestResult:
+        facts = await self._persist_request(command, principal_user_id=principal_user_id)
         reserved = await self._reserve_or_short_circuit(command, facts)
         if isinstance(reserved, AssistanceRequestResult):
             return reserved
@@ -199,9 +205,19 @@ class CoachAssistanceWorkflow:
             await self._terminalize(prompt_id, "REJECTED")
             raise
 
-    async def _persist_request(self, command: AssistanceRequestCommand) -> _RequestFacts:
+    async def _persist_request(
+        self,
+        command: AssistanceRequestCommand,
+        *,
+        principal_user_id: UUID | None,
+    ) -> _RequestFacts:
         async with self._sessionmaker() as session:
             async with session.begin():
+                if principal_user_id is not None:
+                    await InterviewOwnershipRepository(session).get_owned(
+                        principal_user_id=principal_user_id,
+                        interview_session_id=command.interview_session_id,
+                    )
                 runtime = InterviewRuntime(session, clock=self._clock)
                 interview = await runtime.ensure_activity_allowed(command.interview_session_id)
                 configuration = await session.get(

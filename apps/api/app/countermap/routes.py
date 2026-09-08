@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_current_user
+from app.auth.principal import CurrentUser
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.countermap.detail import (
@@ -30,6 +32,7 @@ from app.countermap.repository import CounterMapProjectionRepository
 from app.countermap.schema import COUNTERMAP_GENERATION_POLICY_VERSION, CounterMapGraph
 from app.countermap.validator import CounterMapValidator
 from app.db.session import get_session, get_sessionmaker
+from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
@@ -124,11 +127,29 @@ async def development_countermap_fixtures(
     "/sessions/{interview_session_id}",
     response_model=CandidateCounterMapResponse,
 )
-async def countermap_status(
+async def candidate_countermap_status(
     interview_session_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> CandidateCounterMapResponse:
-    interview, configuration, problem = await _session_facts(session, interview_session_id)
+    return await countermap_status(
+        interview_session_id,
+        session,
+        principal_user_id=current_user.id,
+    )
+
+
+async def countermap_status(
+    interview_session_id: UUID,
+    session: AsyncSession,
+    *,
+    principal_user_id: UUID | None = None,
+) -> CandidateCounterMapResponse:
+    interview, configuration, problem = await _session_facts(
+        session,
+        interview_session_id,
+        principal_user_id=principal_user_id,
+    )
     if interview.status != "COMPLETED" or interview.completed_at is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -213,12 +234,32 @@ async def countermap_status(
     "/sessions/{interview_session_id}/nodes/{node_id}",
     response_model=CandidateCounterMapNodeDetailResponse,
 )
+async def candidate_countermap_node_detail(
+    interview_session_id: UUID,
+    node_id: str,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateCounterMapNodeDetailResponse:
+    return await countermap_node_detail(
+        interview_session_id,
+        node_id,
+        session,
+        principal_user_id=current_user.id,
+    )
+
+
 async def countermap_node_detail(
     interview_session_id: UUID,
     node_id: str,
-    session: Annotated[AsyncSession, Depends(get_session)],
+    session: AsyncSession,
+    *,
+    principal_user_id: UUID | None = None,
 ) -> CandidateCounterMapNodeDetailResponse:
-    interview, _configuration, _problem = await _session_facts(session, interview_session_id)
+    interview, _configuration, _problem = await _session_facts(
+        session,
+        interview_session_id,
+        principal_user_id=principal_user_id,
+    )
     if interview.status != "COMPLETED" or interview.completed_at is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -237,6 +278,46 @@ async def countermap_node_detail(
         )
     except (ValidationError, CounterMapNodeNotFound) as exc:
         raise HTTPException(status_code=404, detail="CounterMap node was not found") from exc
+
+
+@router.get(
+    "/development/sessions/{interview_session_id}",
+    response_model=CandidateCounterMapResponse,
+)
+async def development_countermap_status(
+    interview_session_id: UUID,
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateCounterMapResponse:
+    _require_development(settings)
+    interview = await session.get(InterviewSession, interview_session_id)
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Interview session was not found")
+    return await countermap_status(
+        interview_session_id,
+        session,
+    )
+
+
+@router.get(
+    "/development/sessions/{interview_session_id}/nodes/{node_id}",
+    response_model=CandidateCounterMapNodeDetailResponse,
+)
+async def development_countermap_node_detail_for_session(
+    interview_session_id: UUID,
+    node_id: str,
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateCounterMapNodeDetailResponse:
+    _require_development(settings)
+    interview = await session.get(InterviewSession, interview_session_id)
+    if interview is None:
+        raise HTTPException(status_code=404, detail="Interview session was not found")
+    return await countermap_node_detail(
+        interview_session_id,
+        node_id,
+        session,
+    )
 
 
 @router.post(
@@ -421,10 +502,21 @@ def _failure_message() -> str:
 async def _session_facts(
     session: AsyncSession,
     session_id: UUID,
+    *,
+    principal_user_id: UUID | None,
 ) -> tuple[InterviewSession, InterviewConfiguration, ProblemVersion]:
-    interview = await session.get(InterviewSession, session_id)
-    if interview is None:
-        raise HTTPException(status_code=404, detail="Interview session was not found")
+    if principal_user_id is None:
+        interview = await session.get(InterviewSession, session_id)
+        if interview is None:
+            raise HTTPException(status_code=404, detail="Interview session was not found")
+    else:
+        try:
+            interview = await InterviewOwnershipRepository(session).get_owned(
+                principal_user_id=principal_user_id,
+                interview_session_id=session_id,
+            )
+        except OwnedInterviewNotFound as exc:
+            raise HTTPException(status_code=404, detail="Interview session was not found") from exc
     configuration = await session.get(InterviewConfiguration, interview.interview_configuration_id)
     problem = await session.get(ProblemVersion, interview.problem_version_id)
     if configuration is None or problem is None:

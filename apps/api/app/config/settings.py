@@ -1,7 +1,8 @@
 from functools import lru_cache
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.execution.policy import (
@@ -29,6 +30,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="COUNTERQ_",
         extra="ignore",
+        populate_by_name=True,
     )
 
     app_name: str = "counterq-api"
@@ -51,6 +53,32 @@ class Settings(BaseSettings):
     local_web_origin: str = Field(
         default="http://127.0.0.1:3000",
         validation_alias="COUNTERQ_LOCAL_WEB_ORIGIN",
+    )
+    allowed_frontend_origins: str = Field(
+        default="http://127.0.0.1:3000",
+        validation_alias="COUNTERQ_ALLOWED_FRONTEND_ORIGINS",
+    )
+
+    auth_provider: str = Field(
+        default="clerk",
+        validation_alias="COUNTERQ_AUTH_PROVIDER",
+    )
+    clerk_issuer: str = Field(default="", validation_alias="COUNTERQ_CLERK_ISSUER")
+    clerk_jwt_verification_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="COUNTERQ_CLERK_JWT_VERIFICATION_KEY",
+    )
+    auth_clock_skew_seconds: int = Field(
+        default=5,
+        ge=0,
+        le=60,
+        validation_alias="COUNTERQ_AUTH_CLOCK_SKEW_SECONDS",
+    )
+    realtime_control_ticket_ttl_seconds: int = Field(
+        default=60,
+        ge=30,
+        le=90,
+        validation_alias="COUNTERQ_REALTIME_CONTROL_TICKET_TTL_SECONDS",
     )
 
     openai_api_key: SecretStr | None = Field(
@@ -141,6 +169,34 @@ class Settings(BaseSettings):
     execution_output_limit_bytes: int = Field(
         default=DEFAULT_OUTPUT_LIMIT_BYTES, ge=1024, le=131072
     )
+
+    @field_validator("allowed_frontend_origins")
+    @classmethod
+    def validate_allowed_frontend_origins(cls, value: str) -> str:
+        origins = tuple(origin.strip().rstrip("/") for origin in value.split(",") if origin.strip())
+        if not origins:
+            raise ValueError("At least one frontend origin is required")
+        for origin in origins:
+            parsed = urlsplit(origin)
+            if (
+                "*" in origin
+                or parsed.scheme not in {"http", "https"}
+                or not parsed.netloc
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("Frontend origins must be exact HTTP(S) origins")
+        return value
+
+    @property
+    def allowed_frontend_origin_values(self) -> tuple[str, ...]:
+        values = tuple(
+            value.strip().rstrip("/")
+            for value in self.allowed_frontend_origins.split(",")
+            if value.strip()
+        )
+        return values
 
 
 def create_settings(env_file: Path | str | None = REPOSITORY_ENV_FILE) -> Settings:

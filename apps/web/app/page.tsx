@@ -4,14 +4,24 @@ export default function Home() {
   return (
     <main className="launcher-page">
       <section className="launcher-panel">
-        <p className="launcher-kicker">Stage 1.3 preview</p>
+        <p className="launcher-kicker">CounterQ</p>
         <h1>CounterQ Interview Room</h1>
         <p>
-          Open the deterministic visual development room for the first polished Monaco and interviewer-surface review.
+          CounterQ observes your reasoning and code, waits for the moments that matter,
+          and tests whether your decisions survive scrutiny.
         </p>
-        <Link className="launcher-link" href="/interview/demo">
-          Open Interview Room Preview
-        </Link>
+        <div className="launcher-actions">
+          <Link className="launcher-link" href="/sign-up">Create account</Link>
+          <Link className="launcher-link launcher-link-secondary" href="/sign-in">Sign in</Link>
+          <Link className="launcher-link launcher-link-secondary" href="/onboarding">
+            Continue to preferences
+          </Link>
+        </div>
+        {process.env.NODE_ENV !== "production" ? (
+          <Link className="launcher-development-link" href="/interview/demo">
+            Open Interview Room Preview
+          </Link>
+        ) : null}
       </section>
     </main>
   );

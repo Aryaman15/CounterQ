@@ -12,11 +12,11 @@ from sqlalchemy.engine import make_url
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage8a_mastery_head() -> None:
+def test_alembic_configuration_has_stage9a_candidate_profile_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609060120"
+    assert script.get_current_head() == "202609080121"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -46,13 +46,14 @@ def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
         get_settings.cache_clear()
 
 
-def test_stage8a_table_boundary_is_explicit() -> None:
+def test_stage9a_table_boundary_is_explicit() -> None:
     table_names = asyncio.run(public_table_names())
 
     assert {
         "ai_policy_versions",
         "ai_invocations",
         "candidate_claims",
+        "candidate_profiles",
         "candidate_responses",
         "candidate_response_sources",
         "assessment_sources",
@@ -100,11 +101,58 @@ def test_stage8a_table_boundary_is_explicit() -> None:
         "users",
     }.issubset(table_names)
     assert {
-        "candidate_profiles",
         "countermap_edges",
         "countermap_nodes",
         "mastery_snapshots",
     }.isdisjoint(table_names)
+
+
+def test_stage9a_candidate_profile_columns_are_explicit() -> None:
+    columns = asyncio.run(table_columns("candidate_profiles"))
+
+    assert columns == {
+        "created_at",
+        "default_interview_mode",
+        "display_name",
+        "interview_level",
+        "preferred_language",
+        "profile_version",
+        "target_role",
+        "timezone",
+        "updated_at",
+        "user_id",
+    }
+
+
+def test_stage9a_candidate_profile_constraints_preserve_one_to_one_domain() -> None:
+    constraints = asyncio.run(table_constraints("candidate_profiles"))
+
+    assert constraints == {
+        "pk_candidate_profiles": ("PRIMARY KEY", "PRIMARY KEY (user_id)"),
+        "fk_candidate_profiles_user_id_users": (
+            "FOREIGN KEY",
+            "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE",
+        ),
+        "ck_candidate_profiles_default_interview_mode": (
+            "CHECK",
+            "CHECK (((default_interview_mode)::text = ANY "
+            "((ARRAY['COACH'::character varying, 'SIMULATION'::character varying])::text[])))",
+        ),
+        "ck_candidate_profiles_interview_level": (
+            "CHECK",
+            "CHECK (((interview_level)::text = ANY ((ARRAY['INTERN'::character varying, "
+            "'NEW_GRAD'::character varying, 'EARLY_CAREER'::character varying])::text[])))",
+        ),
+        "ck_candidate_profiles_preferred_language": (
+            "CHECK",
+            "CHECK (((preferred_language)::text = ANY ((ARRAY['cpp'::character varying, "
+            "'java'::character varying, 'python'::character varying])::text[])))",
+        ),
+        "ck_candidate_profiles_profile_version_positive": (
+            "CHECK",
+            "CHECK ((profile_version > 0))",
+        ),
+    }
 
 
 def test_stage6b_report_budget_columns_are_safe_for_existing_sessions() -> None:
@@ -237,6 +285,36 @@ async def session_budget_report_columns() -> dict[str, tuple[str, str | None]]:
             str(row["column_name"]): (
                 str(row["is_nullable"]),
                 str(row["column_default"]) if row["column_default"] is not None else None,
+            )
+            for row in rows
+        }
+    finally:
+        await connection.close()
+
+
+async def table_constraints(table_name: str) -> dict[str, tuple[str, str]]:
+    database_url = get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://")
+    connection = await asyncpg.connect(database_url)
+    try:
+        rows = await connection.fetch(
+            """
+            SELECT
+                constraint_name,
+                constraint_type,
+                pg_get_constraintdef(pg_constraint.oid) AS definition
+            FROM information_schema.table_constraints
+            JOIN pg_constraint
+              ON pg_constraint.conname = constraint_name
+            WHERE table_schema = 'public'
+              AND table_name = $1
+            ORDER BY constraint_name
+            """,
+            table_name,
+        )
+        return {
+            str(row["constraint_name"]): (
+                str(row["constraint_type"]),
+                str(row["definition"]),
             )
             for row in rows
         }

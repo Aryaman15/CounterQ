@@ -5,14 +5,17 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai_gateway.gateway import AIGateway
 from app.ai_gateway.provider_factory import (
     ReasoningProviderConfigurationError,
     build_reasoning_provider,
 )
+from app.auth.dependencies import get_current_user
+from app.auth.principal import CurrentUser
 from app.config.settings import Settings, get_settings
-from app.db.session import get_sessionmaker
+from app.db.session import get_session, get_sessionmaker
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
 from app.interviews.assistance import (
     AssistanceRequestCommand,
@@ -20,6 +23,7 @@ from app.interviews.assistance import (
     CoachAssistanceWorkflow,
 )
 from app.interviews.assistance_wording import CoachAssistanceWordingService
+from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.mode_policy import ModePolicy
 from app.interviews.runtime import InterviewRuntimeError
 
@@ -96,8 +100,18 @@ class CandidateAssistanceResponse(BaseModel):
 async def request_candidate_assistance(
     interview_session_id: UUID,
     request: CandidateAssistanceRequest,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> CandidateAssistanceResponse:
+    try:
+        await InterviewOwnershipRepository(database_session).get_owned(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+        )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    await database_session.rollback()
     sessionmaker = get_sessionmaker()
     evidence_coordinator: SessionEvidenceEvaluationCoordinator | None = None
     wording_service: CoachAssistanceWordingService | None = None
@@ -127,8 +141,11 @@ async def request_candidate_assistance(
             AssistanceRequestCommand(
                 interview_session_id=interview_session_id,
                 idempotency_key=request.idempotency_key,
-            )
+            ),
+            principal_user_id=current_user.id,
         )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
     except (InterviewRuntimeError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

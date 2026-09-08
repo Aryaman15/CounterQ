@@ -1387,6 +1387,80 @@
         "title": "CandidateProblemDetail",
         "type": "object"
       },
+      "CandidateProfileUpdate": {
+        "additionalProperties": false,
+        "properties": {
+          "default_interview_mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Default Interview Mode",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "interview_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Interview Level",
+            "type": "string"
+          },
+          "preferred_language": {
+            "enum": [
+              "cpp",
+              "java",
+              "python"
+            ],
+            "title": "Preferred Language",
+            "type": "string"
+          },
+          "target_role": {
+            "anyOf": [
+              {
+                "maxLength": 160,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Role"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          }
+        },
+        "required": [
+          "preferred_language",
+          "default_interview_mode",
+          "interview_level"
+        ],
+        "title": "CandidateProfileUpdate",
+        "type": "object"
+      },
       "CandidateRetestRecommendation": {
         "additionalProperties": false,
         "properties": {
@@ -2570,6 +2644,131 @@
           "catalog_order"
         ],
         "title": "CuratedCatalogItem",
+        "type": "object"
+      },
+      "CurrentUserProfileResponse": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "default_interview_mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Default Interview Mode",
+            "type": "string"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
+          },
+          "interview_level": {
+            "enum": [
+              "INTERN",
+              "NEW_GRAD",
+              "EARLY_CAREER"
+            ],
+            "title": "Interview Level",
+            "type": "string"
+          },
+          "preferred_language": {
+            "enum": [
+              "cpp",
+              "java",
+              "python"
+            ],
+            "title": "Preferred Language",
+            "type": "string"
+          },
+          "profile_version": {
+            "title": "Profile Version",
+            "type": "integer"
+          },
+          "target_role": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Role"
+          },
+          "timezone": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timezone"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "display_name",
+          "preferred_language",
+          "default_interview_mode",
+          "interview_level",
+          "target_role",
+          "timezone",
+          "profile_version",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "CurrentUserProfileResponse",
+        "type": "object"
+      },
+      "CurrentUserResponse": {
+        "properties": {
+          "account_status": {
+            "title": "Account Status",
+            "type": "string"
+          },
+          "onboarding_required": {
+            "title": "Onboarding Required",
+            "type": "boolean"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CurrentUserProfileResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "user_id": {
+            "format": "uuid",
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_id",
+          "account_status",
+          "onboarding_required",
+          "profile"
+        ],
+        "title": "CurrentUserResponse",
         "type": "object"
       },
       "DevelopmentAnalyzeAndAuthorizeResponse": {
@@ -4430,6 +4629,30 @@
         "type": "object"
       },
       "JsonValue": {},
+      "RealtimeControlTicketResponse": {
+        "properties": {
+          "control_websocket_path": {
+            "title": "Control Websocket Path",
+            "type": "string"
+          },
+          "expires_after_seconds": {
+            "title": "Expires After Seconds",
+            "type": "integer"
+          },
+          "ticket": {
+            "description": "Single-use opaque realtime control ticket.",
+            "title": "Ticket",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "expires_after_seconds",
+          "control_websocket_path"
+        ],
+        "title": "RealtimeControlTicketResponse",
+        "type": "object"
+      },
       "RealtimeDevelopmentBootstrapRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5395,10 +5618,16 @@
         "title": "ValidationError",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
-    "summary": "Stage 1 Core Interaction Spike API for CounterQ.",
+    "summary": "CounterQ application API.",
     "title": "CounterQ API",
     "version": "0.0.0"
   },
@@ -5521,6 +5750,49 @@
         ]
       }
     },
+    "/api/countermap/development/sessions/{interview_session_id}": {
+      "get": {
+        "operationId": "development_countermap_status_api_countermap_development_sessions__interview_session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCounterMapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Countermap Status",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
     "/api/countermap/development/sessions/{interview_session_id}/inspection": {
       "get": {
         "operationId": "development_countermap_inspection_api_countermap_development_sessions__interview_session_id__inspection_get",
@@ -5559,6 +5831,58 @@
           }
         },
         "summary": "Development Countermap Inspection",
+        "tags": [
+          "countermap"
+        ]
+      }
+    },
+    "/api/countermap/development/sessions/{interview_session_id}/nodes/{node_id}": {
+      "get": {
+        "operationId": "development_countermap_node_detail_for_session_api_countermap_development_sessions__interview_session_id__nodes__node_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateCounterMapNodeDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Countermap Node Detail For Session",
         "tags": [
           "countermap"
         ]
@@ -5619,7 +5943,7 @@
     },
     "/api/countermap/sessions/{interview_session_id}": {
       "get": {
-        "operationId": "countermap_status_api_countermap_sessions__interview_session_id__get",
+        "operationId": "candidate_countermap_status_api_countermap_sessions__interview_session_id__get",
         "parameters": [
           {
             "in": "path",
@@ -5654,7 +5978,12 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Countermap Status",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Candidate Countermap Status",
         "tags": [
           "countermap"
         ]
@@ -5662,7 +5991,7 @@
     },
     "/api/countermap/sessions/{interview_session_id}/nodes/{node_id}": {
       "get": {
-        "operationId": "countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get",
+        "operationId": "candidate_countermap_node_detail_api_countermap_sessions__interview_session_id__nodes__node_id__get",
         "parameters": [
           {
             "in": "path",
@@ -5706,7 +6035,12 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Countermap Node Detail",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Candidate Countermap Node Detail",
         "tags": [
           "countermap"
         ]
@@ -5991,6 +6325,11 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
         "summary": "Request Candidate Assistance",
         "tags": [
           "interviews"
@@ -6161,6 +6500,78 @@
         ]
       }
     },
+    "/api/me": {
+      "get": {
+        "operationId": "current_user_api_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Current User",
+        "tags": [
+          "current-user"
+        ]
+      }
+    },
+    "/api/me/profile": {
+      "put": {
+        "operationId": "update_current_user_profile_api_me_profile_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateProfileUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CurrentUserResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Update Current User Profile",
+        "tags": [
+          "current-user"
+        ]
+      }
+    },
     "/api/problems/curated": {
       "get": {
         "operationId": "list_curated_problems_api_problems_curated_get",
@@ -6284,6 +6695,54 @@
         ]
       }
     },
+    "/api/realtime/interviews/{interview_session_id}/control-ticket": {
+      "post": {
+        "operationId": "create_realtime_control_ticket_api_realtime_interviews__interview_session_id__control_ticket_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RealtimeControlTicketResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Realtime Control Ticket",
+        "tags": [
+          "realtime"
+        ]
+      }
+    },
     "/api/realtime/session": {
       "post": {
         "operationId": "create_realtime_session_api_realtime_session_post",
@@ -6322,6 +6781,49 @@
         "summary": "Create Realtime Session",
         "tags": [
           "realtime"
+        ]
+      }
+    },
+    "/api/reports/development/sessions/{interview_session_id}": {
+      "get": {
+        "operationId": "development_session_report_status_api_reports_development_sessions__interview_session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateSessionReportResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Development Session Report Status",
+        "tags": [
+          "reports"
         ]
       }
     },
@@ -6423,7 +6925,7 @@
     },
     "/api/reports/sessions/{interview_session_id}": {
       "get": {
-        "operationId": "session_report_status_api_reports_sessions__interview_session_id__get",
+        "operationId": "candidate_session_report_status_api_reports_sessions__interview_session_id__get",
         "parameters": [
           {
             "in": "path",
@@ -6458,7 +6960,12 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Session Report Status",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Candidate Session Report Status",
         "tags": [
           "reports"
         ]
