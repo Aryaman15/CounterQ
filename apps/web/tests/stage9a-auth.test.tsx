@@ -10,7 +10,7 @@ import { CounterQApiClient, CounterQApiError } from "@/lib/counterq-api";
 
 const clerkMocks = vi.hoisted(() => ({
   router: { replace: vi.fn() },
-  useAuth: vi.fn(),
+  useSession: vi.fn(),
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -23,7 +23,7 @@ vi.mock("@clerk/nextjs", () => ({
   SignUp: ({ forceRedirectUrl }: { forceRedirectUrl: string }) => (
     <div data-testid="clerk-sign-up" data-redirect={forceRedirectUrl} />
   ),
-  useAuth: () => clerkMocks.useAuth(),
+  useSession: () => clerkMocks.useSession(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -39,6 +39,17 @@ import {
 } from "@/features/auth/OnboardingExperience";
 
 const userId = "01991b74-927a-7000-8000-000000000001";
+
+function clerkSession(
+  getToken: () => Promise<string | null>,
+  sessionId = "sess_test",
+) {
+  return {
+    id: sessionId,
+    user: { id: "clerk_user_test" },
+    getToken,
+  };
+}
 
 function currentUser(overrides: Partial<CurrentUserResponse> = {}): CurrentUserResponse {
   return {
@@ -59,11 +70,11 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   clerkMocks.router.replace.mockReset();
-  clerkMocks.useAuth.mockReset();
-  clerkMocks.useAuth.mockReturnValue({
-    getToken: vi.fn(async () => "test-token"),
+  clerkMocks.useSession.mockReset();
+  clerkMocks.useSession.mockReturnValue({
     isLoaded: true,
     isSignedIn: true,
+    session: clerkSession(vi.fn(async () => "test-token")),
   });
 });
 
@@ -117,10 +128,10 @@ describe("Stage 9A authenticated frontend", () => {
       },
     );
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useAuth.mockReturnValue({
-      getToken: unreadyGetToken,
+    clerkMocks.useSession.mockReturnValue({
       isLoaded: false,
       isSignedIn: undefined,
+      session: undefined,
     });
 
     const { rerender } = render(
@@ -132,10 +143,10 @@ describe("Stage 9A authenticated frontend", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(unreadyGetToken).not.toHaveBeenCalled();
 
-    clerkMocks.useAuth.mockReturnValue({
-      getToken: readyGetToken,
+    clerkMocks.useSession.mockReturnValue({
       isLoaded: true,
       isSignedIn: true,
+      session: clerkSession(readyGetToken),
     });
     rerender(<StrictMode><OnboardingExperience /></StrictMode>);
 
@@ -160,7 +171,11 @@ describe("Stage 9A authenticated frontend", () => {
     const getToken = vi.fn(async () => null);
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: false });
+    clerkMocks.useSession.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: false,
+      session: null,
+    });
 
     render(<OnboardingExperience />);
 
@@ -175,7 +190,11 @@ describe("Stage 9A authenticated frontend", () => {
     const getToken = vi.fn(async () => "authenticated-token");
     const fetchFn = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: true });
+    clerkMocks.useSession.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      session: clerkSession(getToken),
+    });
 
     render(<OnboardingExperience />);
 
@@ -184,6 +203,53 @@ describe("Stage 9A authenticated frontend", () => {
     );
     expect(getToken).toHaveBeenCalledOnce();
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it("uses a replacement Clerk session and recovers a poisoned profile load", async () => {
+    const providerDetail = "Clerk provider failed with internal session detail";
+    const staleGetToken = vi.fn(async () => {
+      throw new Error(providerDetail);
+    });
+    const currentGetToken = vi.fn(async () => "replacement-session-token");
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization"))
+        .toBe("Bearer replacement-session-token");
+      return jsonResponse(currentUser());
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useSession.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      session: clerkSession(staleGetToken),
+    });
+
+    const { rerender } = render(<OnboardingExperience />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/could not confirm your sign-in/i);
+    expect(alert).not.toHaveTextContent(/check your connection/i);
+    expect(alert).not.toHaveTextContent(providerDetail);
+    expect(fetchFn).not.toHaveBeenCalled();
+    const submitButton = screen.getByRole("button", {
+      name: /Save interview preferences/i,
+    });
+    expect(submitButton).toBeDisabled();
+
+    clerkMocks.useSession.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      session: clerkSession(currentGetToken),
+    });
+    rerender(<OnboardingExperience />);
+
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
+    expect(staleGetToken).toHaveBeenCalledOnce();
+    expect(currentGetToken).toHaveBeenCalledOnce();
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/api/me");
+    await waitFor(() => expect(submitButton).toBeEnabled());
+    expect(screen.getByRole("button", { name: /Save interview preferences/i }))
+      .toBe(submitButton);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("loads then saves a user-id-free profile through the authenticated lifecycle", async () => {
@@ -200,7 +266,11 @@ describe("Stage 9A authenticated frontend", () => {
       return response;
     });
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useAuth.mockReturnValue({ getToken, isLoaded: true, isSignedIn: true });
+    clerkMocks.useSession.mockReturnValue({
+      isLoaded: true,
+      isSignedIn: true,
+      session: clerkSession(getToken),
+    });
 
     render(<OnboardingExperience />);
 
@@ -241,6 +311,30 @@ describe("Stage 9A authenticated frontend", () => {
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/sign-in expired/i);
     expect(alert).not.toHaveTextContent(/Check the selections/i);
+  });
+
+  it("retries a rejected profile request without retaining its failed promise", async () => {
+    const getMe = vi.fn()
+      .mockRejectedValueOnce(new CounterQApiError("AUTHENTICATION_REQUIRED", 401))
+      .mockResolvedValueOnce(currentUser());
+    const api = {
+      getMe,
+      saveProfile: vi.fn(),
+    } as unknown as CounterQApiClient;
+
+    render(<OnboardingForm api={api} onComplete={vi.fn()} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /could not confirm your sign-in/i,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Retry profile load/i }));
+
+    await waitFor(() => expect(getMe).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Save interview preferences/i }))
+        .toBeEnabled();
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("wraps the application and presents managed sign-in and sign-up surfaces", () => {
@@ -292,20 +386,34 @@ describe("Stage 9A authenticated frontend", () => {
 
   it("normalizes auth failures without leaking bearer material", async () => {
     const secret = "secret-session-token-that-must-not-leak";
+    const providerDetail = "ClerkOfflineError with private provider detail";
+    const fetchAfterProviderFailure = vi.fn();
     const unauthorized = new CounterQApiClient(
       async () => secret,
       "https://api.counterq.example",
       (async () => new Response("provider details", { status: 401 })) as typeof fetch,
     );
     const missing = new CounterQApiClient(async () => null);
+    const providerFailure = new CounterQApiClient(
+      async () => {
+        throw new Error(providerDetail);
+      },
+      "https://api.counterq.example",
+      fetchAfterProviderFailure as typeof fetch,
+    );
 
     const first = await unauthorized.getMe().catch((error: unknown) => error);
     const second = await missing.getMe().catch((error: unknown) => error);
+    const third = await providerFailure.getMe().catch((error: unknown) => error);
 
     expect(first).toBeInstanceOf(CounterQApiError);
     expect(first).toMatchObject({ category: "AUTHENTICATION_REQUIRED", status: 401 });
     expect(String(first)).not.toContain(secret);
     expect(second).toMatchObject({ category: "AUTHENTICATION_REQUIRED", status: 401 });
+    expect(third).toBeInstanceOf(CounterQApiError);
+    expect(third).toMatchObject({ category: "AUTHENTICATION_REQUIRED", status: 401 });
+    expect(String(third)).not.toContain(providerDetail);
+    expect(fetchAfterProviderFailure).not.toHaveBeenCalled();
   });
 
   it("collects only interview calibration preferences and never a mastery self-rating", async () => {

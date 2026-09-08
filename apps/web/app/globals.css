@@ -276,6 +276,30 @@ a:focus-visible,
 .onboarding-status { color: var(--muted); }
 .onboarding-error { color: var(--red); }
 
+.onboarding-error-actions {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.onboarding-retry {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: #9ed7b7;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.onboarding-retry:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
 @media (max-width: 840px) {
   .auth-page,
   .onboarding-page {

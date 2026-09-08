@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
+import { useSession } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -13,39 +13,50 @@ import type {
 } from "@/lib/counterq-api";
 
 import { useCounterQApi } from "./useCounterQApi";
+import type { CounterQTokenSession } from "./useCounterQApi";
 
 export function OnboardingExperience() {
-  const { getToken, isLoaded, isSignedIn, sessionId, userId } = useAuth();
+  const { isLoaded, isSignedIn, session } = useSession();
 
   if (!isLoaded) return <AuthLoadingState />;
   if (!isSignedIn) return <SignedOutState />;
   return (
     <AuthenticatedOnboarding
-      key={sessionId ?? userId ?? "authenticated-session"}
-      getToken={getToken}
+      key={session.user.id}
+      session={session}
     />
   );
 }
 
-function AuthenticatedOnboarding({ getToken }: { getToken: () => Promise<string | null> }) {
-  const api = useCounterQApi(getToken);
+function AuthenticatedOnboarding({ session }: { session: CounterQTokenSession }) {
+  const api = useCounterQApi(session);
   const router = useRouter();
   const onComplete = useCallback(() => router.replace("/?profile=ready"), [router]);
-  return <OnboardingForm api={api} onComplete={onComplete} />;
+  return (
+    <OnboardingForm
+      api={api}
+      onComplete={onComplete}
+      profileLoadKey={session}
+    />
+  );
 }
 
 export function OnboardingForm({
   api,
   onComplete,
+  profileLoadKey = api,
 }: {
   api: CounterQApiClient;
   onComplete: () => void;
+  profileLoadKey?: object;
 }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [profileLoadAttempt, setProfileLoadAttempt] = useState(0);
   const profileLoad = useRef<{
-    api: CounterQApiClient;
+    key: object;
+    attempt: number;
     request: Promise<CurrentUserResponse>;
   } | null>(null);
   const [form, setForm] = useState<CandidateProfileUpdate>({
@@ -59,10 +70,20 @@ export function OnboardingForm({
 
   useEffect(() => {
     let active = true;
-    if (profileLoad.current?.api !== api) {
-      profileLoad.current = { api, request: api.getMe() };
+    if (
+      profileLoad.current?.key !== profileLoadKey
+      || profileLoad.current.attempt !== profileLoadAttempt
+    ) {
+      profileLoad.current = {
+        key: profileLoadKey,
+        attempt: profileLoadAttempt,
+        request: api.getMe(),
+      };
     }
-    void profileLoad.current.request
+    const request = profileLoad.current.request;
+    setLoading(true);
+    setError(null);
+    void request
       .then((me) => {
         if (!active) return;
         if (!me.onboarding_required && me.profile) {
@@ -76,10 +97,17 @@ export function OnboardingForm({
         if (active) setError(profileLoadFailureMessage(requestError));
       })
       .finally(() => {
+        if (profileLoad.current?.request === request) {
+          profileLoad.current = null;
+        }
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [api, onComplete]);
+  }, [api, onComplete, profileLoadAttempt, profileLoadKey]);
+
+  function retryProfileLoad() {
+    setProfileLoadAttempt((attempt) => attempt + 1);
+  }
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -164,8 +192,24 @@ export function OnboardingForm({
           </div>
         </fieldset>
         {loading ? <p className="onboarding-status" role="status">Loading your profile…</p> : null}
-        {error ? <p className="onboarding-error" role="alert">{error}</p> : null}
-        <button className="onboarding-submit" type="submit" disabled={loading || saving}>
+        {error ? (
+          <div className="onboarding-error-actions">
+            <p className="onboarding-error" role="alert">{error}</p>
+            <button
+              className="onboarding-retry"
+              type="button"
+              disabled={loading || saving}
+              onClick={retryProfileLoad}
+            >
+              Retry profile load
+            </button>
+          </div>
+        ) : null}
+        <button
+          className="onboarding-submit"
+          type="submit"
+          disabled={loading || saving || error !== null}
+        >
           {saving ? "Saving preferences…" : "Save interview preferences"}
         </button>
       </form>

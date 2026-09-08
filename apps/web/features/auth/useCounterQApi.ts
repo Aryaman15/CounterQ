@@ -1,14 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useRef } from "react";
 
 import { CounterQApiClient } from "@/lib/counterq-api";
 
-type GetToken = () => Promise<string | null>;
+export type CounterQTokenSession = {
+  getToken: () => Promise<string | null>;
+};
 
 export function useCounterQApi(
-  getToken: GetToken,
+  session: CounterQTokenSession,
 ): CounterQApiClient {
-  const [api] = useState(() => new CounterQApiClient(() => getToken()));
-  return api;
+  const currentSession = useRef(session);
+  currentSession.current = session;
+
+  return useMemo(
+    () => new CounterQApiClient(() => currentSession.current.getToken()),
+    [],
+  );
 }

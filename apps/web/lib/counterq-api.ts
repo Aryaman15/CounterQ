@@ -40,7 +40,12 @@ export class CounterQApiClient {
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     assertNoClientSelectedUserId(init.body);
-    const token = await this.getToken();
+    let token: string | null;
+    try {
+      token = await this.getToken();
+    } catch {
+      throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401);
+    }
     if (!token) throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401);
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
