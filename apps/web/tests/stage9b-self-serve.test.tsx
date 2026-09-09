@@ -148,6 +148,11 @@ class FakeControlWebSocket {
     this.emit("message", { data: JSON.stringify(message) } as MessageEvent);
   }
 
+  unexpectedClose() {
+    this.readyState = FakeControlWebSocket.CLOSED;
+    this.emit("close", new Event("close"));
+  }
+
   private emit(type: string, event: Event) {
     for (const listener of this.listeners.get(type) ?? []) listener(event);
   }
@@ -168,9 +173,16 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+async function flushAsyncWork(): Promise<void> {
+  for (let index = 0; index < 8; index += 1) {
+    await Promise.resolve();
+  }
+}
 
 describe("Stage 9B self-serve frontend", () => {
   it("waits for Clerk readiness and hands missing profiles to onboarding", async () => {
@@ -365,6 +377,181 @@ describe("Stage 9B self-serve frontend", () => {
     expect(restore).toHaveBeenCalledOnce();
     expect(restore).toHaveBeenCalledWith("stable-client");
     expect(issueControlTicket).toHaveBeenCalledOnce();
+  });
+
+  it("re-reads production truth and resends the same pending durable message with a fresh ticket", async () => {
+    vi.useFakeTimers();
+    const refreshedBootstrap: DevelopmentBootstrapResponse = {
+      ...bootstrap,
+      state_version: 4,
+      last_server_sequence: 9,
+      time_remaining_seconds: 1600,
+    };
+    const restore = vi.fn(async () => bootstrap)
+      .mockResolvedValueOnce(bootstrap)
+      .mockResolvedValueOnce(refreshedBootstrap);
+    const issueControlTicket = vi.fn(async () => ({
+      ticket: "unused-ticket",
+      control_websocket_path: "/api/realtime/control/session-1",
+    }))
+      .mockResolvedValueOnce({
+        ticket: "first-consumed-ticket",
+        control_websocket_path: "/api/realtime/control/session-1",
+      })
+      .mockResolvedValueOnce({
+        ticket: "second-fresh-ticket",
+        control_websocket_path: "/api/realtime/control/session-1",
+      });
+    const developmentFetch = vi.fn(async () => {
+      throw new Error("Production reconnect must not use a development bootstrap.");
+    });
+    const storage = new Map<string, string>();
+    const storageReads: string[] = [];
+    const connectedBootstraps: DevelopmentBootstrapResponse[] = [];
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      production: { interviewSessionId: "session-1", restore, issueControlTicket },
+      fetchFn: developmentFetch as typeof fetch,
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: {
+        getItem: (key) => {
+          storageReads.push(key);
+          return storage.get(key) ?? null;
+        },
+        setItem: (key, value) => storage.set(key, value),
+      },
+      randomUUID: () => "stable-production-client",
+    });
+    client.on((event) => {
+      if (event.type === "connected") connectedBootstraps.push(event.bootstrap);
+    });
+
+    const firstConnection = client.restoreProductionInterview();
+    await flushAsyncWork();
+    const firstSocket = FakeControlWebSocket.instances[0];
+    expect(firstSocket.url).toContain("ticket=first-consumed-ticket");
+    firstSocket.open();
+    firstSocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "INTRODUCTION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await firstConnection;
+
+    client.sendCandidateTranscriptFinal({
+      providerItemId: "candidate-item-1",
+      contentIndex: 0,
+      transcript: "This durable message must retain its identity.",
+    });
+    const pendingMessage = firstSocket.send.mock.calls
+      .map(([body]) => JSON.parse(String(body)) as Record<string, unknown>)
+      .find((message) => message.type === "candidate_transcript_finalized");
+    expect(pendingMessage).toBeDefined();
+    expect(client.pendingCount).toBe(1);
+
+    firstSocket.unexpectedClose();
+    await vi.advanceTimersByTimeAsync(750);
+    await flushAsyncWork();
+
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(restore).toHaveBeenNthCalledWith(2, "stable-production-client");
+    expect(issueControlTicket).toHaveBeenCalledTimes(2);
+    expect(FakeControlWebSocket.instances).toHaveLength(2);
+    const secondSocket = FakeControlWebSocket.instances[1];
+    expect(secondSocket.url).toBe(
+      "ws://127.0.0.1:8000/api/realtime/control/session-1?ticket=second-fresh-ticket",
+    );
+    expect(secondSocket.url).not.toContain("first-consumed-ticket");
+    secondSocket.open();
+    secondSocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "INTRODUCTION",
+      state_version: 4,
+      last_server_sequence: 9,
+    });
+    await flushAsyncWork();
+
+    const resentMessage = secondSocket.send.mock.calls
+      .map(([body]) => JSON.parse(String(body)) as Record<string, unknown>)
+      .find((message) => message.type === "candidate_transcript_finalized");
+    expect(resentMessage).toMatchObject({
+      client_event_id: pendingMessage?.client_event_id,
+      client_sequence: pendingMessage?.client_sequence,
+      transcript: pendingMessage?.transcript,
+    });
+    expect(connectedBootstraps.at(-1)).toMatchObject({
+      interview_session_id: "session-1",
+      deadline_at: "2026-09-10T10:30:00Z",
+      state_version: 4,
+      last_server_sequence: 9,
+    });
+    expect(developmentFetch).not.toHaveBeenCalled();
+    expect(FakeControlWebSocket.instances.map((socket) => socket.url).join(" "))
+      .not.toContain("development");
+    expect(storageReads).not.toContain("counterq:realtime-control:development-session-id");
+    expect(client.pendingCount).toBe(1);
+  });
+
+  it("surfaces terminal production truth on reconnect without minting another ticket", async () => {
+    vi.useFakeTimers();
+    const completedBootstrap: DevelopmentBootstrapResponse = {
+      ...bootstrap,
+      session_status: "COMPLETED",
+      state_version: 6,
+      last_server_sequence: 12,
+      time_remaining_seconds: 0,
+      completed_at: "2026-09-10T10:20:00Z",
+      terminal_reason: "USER_ENDED",
+    };
+    const restore = vi.fn(async () => bootstrap)
+      .mockResolvedValueOnce(bootstrap)
+      .mockResolvedValueOnce(completedBootstrap);
+    const issueControlTicket = vi.fn(async () => ({
+      ticket: "first-ticket",
+      control_websocket_path: "/api/realtime/control/session-1",
+    }));
+    const connectedBootstraps: DevelopmentBootstrapResponse[] = [];
+    const client = new RealtimeControlClient({
+      apiBaseUrl: "http://127.0.0.1:8000",
+      production: { interviewSessionId: "session-1", restore, issueControlTicket },
+      websocketFactory: (url) => new FakeControlWebSocket(url) as unknown as WebSocket,
+      storage: { getItem: () => null, setItem: vi.fn() },
+      randomUUID: () => "terminal-production-client",
+    });
+    client.on((event) => {
+      if (event.type === "connected") connectedBootstraps.push(event.bootstrap);
+    });
+
+    const firstConnection = client.restoreProductionInterview();
+    await flushAsyncWork();
+    const firstSocket = FakeControlWebSocket.instances[0];
+    firstSocket.open();
+    firstSocket.receive({
+      type: "server_hello",
+      interview_session_id: "session-1",
+      current_stage: "INTRODUCTION",
+      state_version: 0,
+      last_server_sequence: 0,
+    });
+    await firstConnection;
+
+    firstSocket.unexpectedClose();
+    await vi.advanceTimersByTimeAsync(750);
+    await flushAsyncWork();
+
+    expect(restore).toHaveBeenCalledTimes(2);
+    expect(issueControlTicket).toHaveBeenCalledOnce();
+    expect(FakeControlWebSocket.instances).toHaveLength(1);
+    expect(connectedBootstraps.at(-1)).toMatchObject({
+      interview_session_id: "session-1",
+      session_status: "COMPLETED",
+      deadline_at: "2026-09-10T10:30:00Z",
+      completed_at: "2026-09-10T10:20:00Z",
+      terminal_reason: "USER_ENDED",
+    });
   });
 
   it("production room refresh restores the route ID and never creates or bootstraps development state", async () => {

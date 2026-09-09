@@ -8,6 +8,7 @@ const PENDING_STORAGE_PREFIX = "counterq:realtime-control:pending:";
 const MAX_PENDING_MESSAGES = 20;
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 750;
+const PRODUCTION_PARTICIPANT_STATUSES = new Set(["READY", "ACTIVE", "RECONNECTING"]);
 
 type GeneratedDevelopmentBootstrapResponse =
   components["schemas"]["RealtimeDevelopmentBootstrapResponse"];
@@ -275,26 +276,13 @@ export class RealtimeControlClient {
     if (!this.production) {
       throw new Error("Production interview transport is not configured.");
     }
-    if (!this.bootstrap) {
-      this.bootstrap = await this.production.restore(this.clientInstanceId());
-      if (this.bootstrap.interview_session_id !== this.production.interviewSessionId) {
-        this.bootstrap = null;
-        throw new Error("CounterQ restored an unexpected interview session.");
-      }
-      this.developmentLanguage = this.bootstrap.language;
-      this.loadClientState(this.bootstrap);
-      this.patchDebug({
-        sessionId: this.bootstrap.interview_session_id,
-        stateVersion: this.bootstrap.state_version,
-        lastServerSequence: this.bootstrap.last_server_sequence,
-      });
-    }
+    const bootstrap = this.bootstrap ?? await this.refreshProductionBootstrap();
     this.manualDisconnect = false;
-    this.emit({ type: "connected", bootstrap: this.bootstrap });
-    if (this.bootstrap.session_status !== "COMPLETED") {
+    this.emit({ type: "connected", bootstrap });
+    if (isProductionParticipantActive(bootstrap.session_status)) {
       await this.openWebSocket();
     }
-    return this.bootstrap;
+    return bootstrap;
   }
 
   async connectProductionInterview(): Promise<DevelopmentBootstrapResponse> {
@@ -757,7 +745,7 @@ export class RealtimeControlClient {
 
   private async openWebSocket(): Promise<void> {
     if (!this.bootstrap) {
-      throw new Error("Development interview has not been bootstrapped.");
+      throw new Error("Interview has not been restored.");
     }
     if (this.websocket?.readyState === WebSocket.OPEN) {
       if (this.controlReady) {
@@ -1253,10 +1241,16 @@ export class RealtimeControlClient {
     return next;
   }
 
-  private loadClientState(bootstrap: DevelopmentBootstrapResponse): void {
+  private loadClientState(
+    bootstrap: DevelopmentBootstrapResponse,
+    { preservePending = false }: { preservePending?: boolean } = {},
+  ): void {
+    const inMemoryPending = preservePending ? [...this.pending.values()] : [];
+    const inMemoryClientSequence = preservePending ? this.clientSequence : 0;
     const sequenceKey = `${CLIENT_SEQUENCE_STORAGE_PREFIX}${bootstrap.interview_session_id}`;
     const storedSequence = Number.parseInt(this.storage?.getItem(sequenceKey) ?? "0", 10);
     this.clientSequence = Math.max(
+      inMemoryClientSequence,
       Number.isFinite(storedSequence) ? storedSequence : 0,
       bootstrap.highest_client_sequence,
     );
@@ -1275,6 +1269,10 @@ export class RealtimeControlClient {
         this.storage?.removeItem?.(`${PENDING_STORAGE_PREFIX}${bootstrap.interview_session_id}`);
       }
     }
+    for (const envelope of inMemoryPending) {
+      this.pending.set(envelope.clientEventId, envelope);
+    }
+    this.persistPending();
     this.patchDebug({ pendingDurableMessages: this.pending.size });
   }
 
@@ -1306,20 +1304,54 @@ export class RealtimeControlClient {
     this.emit({ type: "reconnecting" });
     this.reconnectTimer = window.setTimeout(() => {
       this.reconnectTimer = null;
-      // Re-read the candidate-safe canonical projection before reopening control.
-      // This reconciles missed server ordering without replaying hidden events.
-      void this.bootstrapDevelopmentInterview({ allowCreate: false })
-        .then((restored) => {
-          if (!restored) {
-            throw new Error("Stored development interview is no longer resumable.");
-          }
-          return this.openWebSocket();
-        })
+      const reconnect = this.production
+        ? this.reconnectProductionControl()
+        : this.reconnectDevelopmentControl();
+      void reconnect
         .then(() => {
           this.reconnectAttempts = 0;
         })
         .catch(() => this.scheduleReconnect());
     }, RECONNECT_DELAY_MS);
+  }
+
+  private async reconnectDevelopmentControl(): Promise<void> {
+    // Re-read the candidate-safe canonical projection before reopening control.
+    // This reconciles missed server ordering without replaying hidden events.
+    const restored = await this.bootstrapDevelopmentInterview({ allowCreate: false });
+    if (!restored) {
+      throw new Error("Stored development interview is no longer resumable.");
+    }
+    await this.openWebSocket();
+  }
+
+  private async reconnectProductionControl(): Promise<void> {
+    const restored = await this.refreshProductionBootstrap();
+    if (!isProductionParticipantActive(restored.session_status)) {
+      // Terminal canonical truth must reach the room without opening another socket.
+      this.emit({ type: "connected", bootstrap: restored });
+      return;
+    }
+    await this.openWebSocket();
+  }
+
+  private async refreshProductionBootstrap(): Promise<DevelopmentBootstrapResponse> {
+    if (!this.production) {
+      throw new Error("Production interview transport is not configured.");
+    }
+    const restored = await this.production.restore(this.clientInstanceId());
+    if (restored.interview_session_id !== this.production.interviewSessionId) {
+      throw new Error("CounterQ restored an unexpected interview session.");
+    }
+    this.bootstrap = restored;
+    this.developmentLanguage = restored.language;
+    this.loadClientState(restored, { preservePending: true });
+    this.patchDebug({
+      sessionId: restored.interview_session_id,
+      stateVersion: restored.state_version,
+      lastServerSequence: restored.last_server_sequence,
+    });
+    return restored;
   }
 
   private patchDebug(patch: Partial<CanonicalControlDebug>): void {
@@ -1372,6 +1404,10 @@ function stringField(value: unknown): string | null {
 
 function numberField(value: unknown): number | null {
   return typeof value === "number" ? value : null;
+}
+
+function isProductionParticipantActive(status: string): boolean {
+  return PRODUCTION_PARTICIPANT_STATUSES.has(status);
 }
 
 function isPendingProviderResponseId(providerResponseId: string): boolean {
