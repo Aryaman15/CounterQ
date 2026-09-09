@@ -10,7 +10,7 @@ import { CounterQApiClient, CounterQApiError } from "@/lib/counterq-api";
 
 const clerkMocks = vi.hoisted(() => ({
   router: { replace: vi.fn() },
-  useSession: vi.fn(),
+  useAuth: vi.fn(),
 }));
 
 vi.mock("@clerk/nextjs", () => ({
@@ -23,7 +23,7 @@ vi.mock("@clerk/nextjs", () => ({
   SignUp: ({ forceRedirectUrl }: { forceRedirectUrl: string }) => (
     <div data-testid="clerk-sign-up" data-redirect={forceRedirectUrl} />
   ),
-  useSession: () => clerkMocks.useSession(),
+  useAuth: () => clerkMocks.useAuth(),
 }));
 
 vi.mock("next/navigation", () => ({
@@ -33,6 +33,7 @@ vi.mock("next/navigation", () => ({
 import SignInPage from "@/app/sign-in/[[...sign-in]]/page";
 import SignUpPage from "@/app/sign-up/[[...sign-up]]/page";
 import { CounterQAuthProvider } from "@/features/auth/CounterQAuthProvider";
+import { DevelopmentAuthCheck } from "@/features/auth/DevelopmentAuthCheck";
 import {
   OnboardingExperience,
   OnboardingForm,
@@ -40,14 +41,16 @@ import {
 
 const userId = "01991b74-927a-7000-8000-000000000001";
 
-function clerkSession(
+function signedInAuth(
   getToken: () => Promise<string | null>,
   sessionId = "sess_test",
 ) {
   return {
-    id: sessionId,
-    user: { id: "clerk_user_test" },
     getToken,
+    isLoaded: true,
+    isSignedIn: true,
+    sessionId,
+    userId: "clerk_user_test",
   };
 }
 
@@ -70,16 +73,16 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 beforeEach(() => {
   clerkMocks.router.replace.mockReset();
-  clerkMocks.useSession.mockReset();
-  clerkMocks.useSession.mockReturnValue({
-    isLoaded: true,
-    isSignedIn: true,
-    session: clerkSession(vi.fn(async () => "test-token")),
-  });
+  clerkMocks.useAuth.mockReset();
+  clerkMocks.useAuth.mockReturnValue(
+    signedInAuth(vi.fn(async () => "test-token")),
+  );
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 describe("Stage 9A authenticated frontend", () => {
@@ -128,10 +131,12 @@ describe("Stage 9A authenticated frontend", () => {
       },
     );
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useSession.mockReturnValue({
+    clerkMocks.useAuth.mockReturnValue({
+      getToken: unreadyGetToken,
       isLoaded: false,
       isSignedIn: undefined,
-      session: undefined,
+      sessionId: undefined,
+      userId: undefined,
     });
 
     const { rerender } = render(
@@ -143,11 +148,7 @@ describe("Stage 9A authenticated frontend", () => {
     expect(fetchFn).not.toHaveBeenCalled();
     expect(unreadyGetToken).not.toHaveBeenCalled();
 
-    clerkMocks.useSession.mockReturnValue({
-      isLoaded: true,
-      isSignedIn: true,
-      session: clerkSession(readyGetToken),
-    });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(readyGetToken));
     rerender(<StrictMode><OnboardingExperience /></StrictMode>);
 
     await waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
@@ -171,10 +172,12 @@ describe("Stage 9A authenticated frontend", () => {
     const getToken = vi.fn(async () => null);
     const fetchFn = vi.fn();
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useSession.mockReturnValue({
+    clerkMocks.useAuth.mockReturnValue({
+      getToken,
       isLoaded: true,
       isSignedIn: false,
-      session: null,
+      sessionId: null,
+      userId: null,
     });
 
     render(<OnboardingExperience />);
@@ -190,11 +193,7 @@ describe("Stage 9A authenticated frontend", () => {
     const getToken = vi.fn(async () => "authenticated-token");
     const fetchFn = vi.fn(async () => new Response(null, { status: 503 }));
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useSession.mockReturnValue({
-      isLoaded: true,
-      isSignedIn: true,
-      session: clerkSession(getToken),
-    });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(getToken));
 
     render(<OnboardingExperience />);
 
@@ -205,7 +204,7 @@ describe("Stage 9A authenticated frontend", () => {
     expect(fetchFn).toHaveBeenCalledOnce();
   });
 
-  it("uses a replacement Clerk session and recovers a poisoned profile load", async () => {
+  it("uses the latest Clerk getToken provider when retrying profile load", async () => {
     const providerDetail = "Clerk provider failed with internal session detail";
     const staleGetToken = vi.fn(async () => {
       throw new Error(providerDetail);
@@ -217,11 +216,7 @@ describe("Stage 9A authenticated frontend", () => {
       return jsonResponse(currentUser());
     });
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useSession.mockReturnValue({
-      isLoaded: true,
-      isSignedIn: true,
-      session: clerkSession(staleGetToken),
-    });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(staleGetToken));
 
     const { rerender } = render(<OnboardingExperience />);
 
@@ -235,12 +230,11 @@ describe("Stage 9A authenticated frontend", () => {
     });
     expect(submitButton).toBeDisabled();
 
-    clerkMocks.useSession.mockReturnValue({
-      isLoaded: true,
-      isSignedIn: true,
-      session: clerkSession(currentGetToken),
-    });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(currentGetToken));
     rerender(<OnboardingExperience />);
+
+    expect(fetchFn).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: /Retry profile load/i }));
 
     await waitFor(() => expect(fetchFn).toHaveBeenCalledOnce());
     expect(staleGetToken).toHaveBeenCalledOnce();
@@ -253,7 +247,8 @@ describe("Stage 9A authenticated frontend", () => {
   });
 
   it("loads then saves a user-id-free profile through the authenticated lifecycle", async () => {
-    const getToken = vi.fn(async () => "authenticated-token");
+    const profileGetToken = vi.fn(async () => "profile-load-token");
+    const saveGetToken = vi.fn(async () => "profile-save-token");
     const responses = [
       jsonResponse(currentUser()),
       jsonResponse(currentUser({ onboarding_required: false })),
@@ -266,17 +261,15 @@ describe("Stage 9A authenticated frontend", () => {
       return response;
     });
     vi.stubGlobal("fetch", fetchFn);
-    clerkMocks.useSession.mockReturnValue({
-      isLoaded: true,
-      isSignedIn: true,
-      session: clerkSession(getToken),
-    });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(profileGetToken));
 
-    render(<OnboardingExperience />);
+    const { rerender } = render(<OnboardingExperience />);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Save interview preferences/i })).toBeEnabled();
     });
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(saveGetToken));
+    rerender(<OnboardingExperience />);
     fireEvent.change(screen.getByLabelText(/Display name/i), {
       target: { value: "Ada" },
     });
@@ -285,13 +278,14 @@ describe("Stage 9A authenticated frontend", () => {
     await waitFor(() => expect(clerkMocks.router.replace).toHaveBeenCalledOnce());
     expect(clerkMocks.router.replace).toHaveBeenCalledWith("/?profile=ready");
     expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(getToken).toHaveBeenCalledTimes(2);
+    expect(profileGetToken).toHaveBeenCalledOnce();
+    expect(saveGetToken).toHaveBeenCalledOnce();
     const [requestUrl, requestInit] = fetchFn.mock.calls[1];
     const requestBody = JSON.parse(String(requestInit?.body));
     expect(requestUrl).toBe("http://127.0.0.1:8000/api/me/profile");
     expect(requestInit?.method).toBe("PUT");
     expect(new Headers(requestInit?.headers).get("Authorization"))
-      .toBe("Bearer authenticated-token");
+      .toBe("Bearer profile-save-token");
     expect(requestBody).toMatchObject({ display_name: "Ada" });
     expect(requestBody).not.toHaveProperty("user_id");
   });
@@ -313,23 +307,23 @@ describe("Stage 9A authenticated frontend", () => {
     expect(alert).not.toHaveTextContent(/Check the selections/i);
   });
 
-  it("retries a rejected profile request without retaining its failed promise", async () => {
-    const getMe = vi.fn()
-      .mockRejectedValueOnce(new CounterQApiError("AUTHENTICATION_REQUIRED", 401))
-      .mockResolvedValueOnce(currentUser());
-    const api = {
-      getMe,
-      saveProfile: vi.fn(),
-    } as unknown as CounterQApiClient;
+  it("retries a failed fetch with a fresh token and clears the error", async () => {
+    const getToken = vi.fn(async () => "retry-session-token");
+    const fetchFn = vi.fn()
+      .mockRejectedValueOnce(new Error("browser fetch detail"))
+      .mockResolvedValueOnce(jsonResponse(currentUser()));
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(getToken));
 
-    render(<OnboardingForm api={api} onComplete={vi.fn()} />);
+    render(<OnboardingExperience />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /could not confirm your sign-in/i,
+      /could not load your profile.*connection/i,
     );
     fireEvent.click(screen.getByRole("button", { name: /Retry profile load/i }));
 
-    await waitFor(() => expect(getMe).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    expect(getToken).toHaveBeenCalledTimes(2);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Save interview preferences/i }))
         .toBeEnabled();
@@ -384,6 +378,28 @@ describe("Stage 9A authenticated frontend", () => {
     })).rejects.toThrow("CounterQ user identity cannot be supplied by the browser");
   });
 
+  it("invokes browser fetch with the global receiver", async () => {
+    const fetchFn = vi.fn(function (
+      this: unknown,
+      _input: RequestInfo | URL,
+      _init?: RequestInit,
+    ) {
+      void _input;
+      void _init;
+      expect(this).toBe(globalThis);
+      return Promise.resolve(jsonResponse(currentUser()));
+    });
+    const api = new CounterQApiClient(
+      async () => "receiver-safe-token",
+      "https://api.counterq.example",
+      fetchFn as typeof fetch,
+    );
+
+    await api.getMe();
+
+    expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
   it("normalizes auth failures without leaking bearer material", async () => {
     const secret = "secret-session-token-that-must-not-leak";
     const providerDetail = "ClerkOfflineError with private provider detail";
@@ -414,6 +430,103 @@ describe("Stage 9A authenticated frontend", () => {
     expect(third).toMatchObject({ category: "AUTHENTICATION_REQUIRED", status: 401 });
     expect(String(third)).not.toContain(providerDetail);
     expect(fetchAfterProviderFailure).not.toHaveBeenCalled();
+  });
+
+  it("normalizes thrown fetch failures and emits only safe development stages", async () => {
+    const token = "diagnostic-token-that-must-not-be-logged";
+    const fetchDetail = "browser network internals that must not be logged";
+    vi.stubEnv("NODE_ENV", "development");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const api = new CounterQApiClient(
+      async () => token,
+      "https://api.counterq.example",
+      (async () => {
+        throw new Error(fetchDetail);
+      }) as typeof fetch,
+    );
+
+    const failure = await api.getMe().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(CounterQApiError);
+    expect(failure).toMatchObject({
+      category: "REQUEST_FAILED",
+      status: 0,
+      stage: "FETCH",
+    });
+    const developmentMessages = info.mock.calls.map(([message]) => String(message));
+    expect(developmentMessages).toEqual([
+      "[CounterQ auth] profile load started",
+      "[CounterQ auth] Clerk token acquired",
+      "[CounterQ auth] API fetch started",
+      "[CounterQ auth] fetch failed",
+    ]);
+    expect(JSON.stringify(info.mock.calls)).not.toContain(token);
+    expect(JSON.stringify(info.mock.calls)).not.toContain(fetchDetail);
+
+    info.mockClear();
+    const successApi = new CounterQApiClient(
+      async () => token,
+      "https://api.counterq.example",
+      (async () => jsonResponse(currentUser())) as typeof fetch,
+    );
+    await successApi.getMe();
+    expect(info.mock.calls.map(([message]) => String(message))).toEqual([
+      "[CounterQ auth] profile load started",
+      "[CounterQ auth] Clerk token acquired",
+      "[CounterQ auth] API fetch started",
+      "[CounterQ auth] API response 200",
+    ]);
+
+    info.mockClear();
+    const providerDetail = "private Clerk provider failure";
+    const tokenFailureApi = new CounterQApiClient(async () => {
+      throw new Error(providerDetail);
+    });
+    await tokenFailureApi.getMe().catch(() => undefined);
+    expect(info.mock.calls.map(([message]) => String(message))).toEqual([
+      "[CounterQ auth] profile load started",
+      "[CounterQ auth] token acquisition failed",
+    ]);
+    expect(JSON.stringify(info.mock.calls)).not.toContain(providerDetail);
+
+    info.mockClear();
+    vi.stubEnv("NODE_ENV", "production");
+    const productionApi = new CounterQApiClient(
+      async () => "production-token",
+      "https://api.counterq.example",
+      (async () => jsonResponse(currentUser())) as typeof fetch,
+    );
+    await productionApi.getMe();
+    expect(info).not.toHaveBeenCalled();
+  });
+
+  it("runs the development auth check through the production API client path", async () => {
+    const diagnosticToken = "safe-surface-token";
+    const getToken = vi.fn(async () => diagnosticToken);
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      void _input;
+      void _init;
+      return jsonResponse(currentUser());
+    });
+    vi.stubGlobal("fetch", fetchFn);
+    clerkMocks.useAuth.mockReturnValue(signedInAuth(getToken));
+
+    render(<DevelopmentAuthCheck />);
+
+    const tokenResult = screen.getByText("Token obtainable").parentElement;
+    const apiResult = screen.getByText("CounterQ /api/me").parentElement;
+    await waitFor(() => expect(tokenResult).toHaveTextContent(/yes/i));
+    await waitFor(() => expect(apiResult).toHaveTextContent(/success.*HTTP 200/i));
+    expect(fetchFn).toHaveBeenCalledOnce();
+    expect(fetchFn.mock.calls[0]?.[0]).toBe("http://127.0.0.1:8000/api/me");
+    expect(new Headers(fetchFn.mock.calls[0]?.[1]?.headers).get("Authorization"))
+      .toBe(`Bearer ${diagnosticToken}`);
+    expect(document.body).not.toHaveTextContent(diagnosticToken);
+    expect(document.body).not.toHaveTextContent(userId);
+
+    fireEvent.click(screen.getByRole("button", { name: /Run auth check again/i }));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(2));
+    expect(getToken).toHaveBeenCalledTimes(2);
   });
 
   it("collects only interview calibration preferences and never a mastery self-rating", async () => {
@@ -485,10 +598,18 @@ describe("Stage 9A authenticated frontend", () => {
 
   it("protects candidate routes in middleware while preserving local demo isolation", () => {
     const middleware = readFileSync("middleware.ts", "utf8");
+    const developmentAuthPage = readFileSync(
+      "app/development/auth-check/page.tsx",
+      "utf8",
+    );
 
     expect(middleware).toContain("await auth.protect()");
     expect(middleware).toContain('process.env.NODE_ENV !== "production"');
     expect(middleware).toContain('pathname === "/interview/demo"');
+    expect(middleware).toContain('pathname === "/development/auth-check"');
     expect(middleware).toContain('pathname.startsWith("/sign-in")');
+    expect(middleware).toContain('new Response("Not Found", { status: 404 })');
+    expect(developmentAuthPage).toContain('process.env.NODE_ENV === "production"');
+    expect(developmentAuthPage).toContain("notFound()");
   });
 });

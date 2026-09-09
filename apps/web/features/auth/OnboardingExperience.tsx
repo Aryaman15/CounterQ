@@ -1,6 +1,6 @@
 "use client";
 
-import { useSession } from "@clerk/nextjs";
+import { useAuth } from "@clerk/nextjs";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -13,52 +13,39 @@ import type {
 } from "@/lib/counterq-api";
 
 import { useCounterQApi } from "./useCounterQApi";
-import type { CounterQTokenSession } from "./useCounterQApi";
 
 export function OnboardingExperience() {
-  const { isLoaded, isSignedIn, session } = useSession();
+  const { getToken, isLoaded, isSignedIn, userId } = useAuth();
 
   if (!isLoaded) return <AuthLoadingState />;
   if (!isSignedIn) return <SignedOutState />;
   return (
     <AuthenticatedOnboarding
-      key={session.user.id}
-      session={session}
+      key={userId}
+      getToken={getToken}
     />
   );
 }
 
-function AuthenticatedOnboarding({ session }: { session: CounterQTokenSession }) {
-  const api = useCounterQApi(session);
+function AuthenticatedOnboarding({ getToken }: { getToken: () => Promise<string | null> }) {
+  const api = useCounterQApi(getToken);
   const router = useRouter();
   const onComplete = useCallback(() => router.replace("/?profile=ready"), [router]);
-  return (
-    <OnboardingForm
-      api={api}
-      onComplete={onComplete}
-      profileLoadKey={session}
-    />
-  );
+  return <OnboardingForm api={api} onComplete={onComplete} />;
 }
 
 export function OnboardingForm({
   api,
   onComplete,
-  profileLoadKey = api,
 }: {
   api: CounterQApiClient;
   onComplete: () => void;
-  profileLoadKey?: object;
 }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [profileLoadAttempt, setProfileLoadAttempt] = useState(0);
-  const profileLoad = useRef<{
-    key: object;
-    attempt: number;
-    request: Promise<CurrentUserResponse>;
-  } | null>(null);
+  const profileLoad = useRef<Promise<CurrentUserResponse> | null>(null);
   const [form, setForm] = useState<CandidateProfileUpdate>({
     display_name: null,
     preferred_language: "python",
@@ -70,17 +57,8 @@ export function OnboardingForm({
 
   useEffect(() => {
     let active = true;
-    if (
-      profileLoad.current?.key !== profileLoadKey
-      || profileLoad.current.attempt !== profileLoadAttempt
-    ) {
-      profileLoad.current = {
-        key: profileLoadKey,
-        attempt: profileLoadAttempt,
-        request: api.getMe(),
-      };
-    }
-    const request = profileLoad.current.request;
+    const request = profileLoad.current ?? api.getMe();
+    profileLoad.current = request;
     setLoading(true);
     setError(null);
     void request
@@ -97,13 +75,13 @@ export function OnboardingForm({
         if (active) setError(profileLoadFailureMessage(requestError));
       })
       .finally(() => {
-        if (profileLoad.current?.request === request) {
+        if (profileLoad.current === request) {
           profileLoad.current = null;
         }
         if (active) setLoading(false);
       });
     return () => { active = false; };
-  }, [api, onComplete, profileLoadAttempt, profileLoadKey]);
+  }, [api, onComplete, profileLoadAttempt]);
 
   function retryProfileLoad() {
     setProfileLoadAttempt((attempt) => attempt + 1);

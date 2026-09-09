@@ -6,10 +6,17 @@ export type CandidateProfileUpdate = components["schemas"]["CandidateProfileUpda
 type GetToken = () => Promise<string | null>;
 type Fetch = typeof fetch;
 
+export type CounterQApiErrorStage =
+  | "TOKEN_ACQUISITION"
+  | "FETCH"
+  | "HTTP_RESPONSE"
+  | "RESPONSE_BODY";
+
 export class CounterQApiError extends Error {
   constructor(
     readonly category: "AUTHENTICATION_REQUIRED" | "ACCESS_DENIED" | "REQUEST_FAILED",
     readonly status: number,
+    readonly stage: CounterQApiErrorStage = "HTTP_RESPONSE",
   ) {
     super(category === "REQUEST_FAILED" ? "CounterQ request failed" : category);
     this.name = "CounterQApiError";
@@ -28,6 +35,7 @@ export class CounterQApiClient {
   }
 
   async getMe(): Promise<CurrentUserResponse> {
+    developmentAuthDiagnostic("profile load started");
     return this.request<CurrentUserResponse>("/api/me");
   }
 
@@ -44,24 +52,52 @@ export class CounterQApiClient {
     try {
       token = await this.getToken();
     } catch {
-      throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401);
+      developmentAuthDiagnostic("token acquisition failed");
+      throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401, "TOKEN_ACQUISITION");
     }
-    if (!token) throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401);
+    if (!token) {
+      developmentAuthDiagnostic("token acquisition failed");
+      throw new CounterQApiError("AUTHENTICATION_REQUIRED", 401, "TOKEN_ACQUISITION");
+    }
+    developmentAuthDiagnostic("Clerk token acquired");
     const headers = new Headers(init.headers);
     headers.set("Authorization", `Bearer ${token}`);
     if (init.body !== undefined && !headers.has("Content-Type")) {
       headers.set("Content-Type", "application/json");
     }
-    const response = await this.fetchFn(`${this.baseUrl}${path}`, { ...init, headers });
+    developmentAuthDiagnostic("API fetch started");
+    let response: Response;
+    try {
+      response = await this.fetchFn.call(
+        globalThis,
+        `${this.baseUrl}${path}`,
+        { ...init, headers },
+      );
+    } catch {
+      developmentAuthDiagnostic("fetch failed");
+      throw new CounterQApiError("REQUEST_FAILED", 0, "FETCH");
+    }
+    developmentAuthDiagnostic(`API response ${response.status}`);
     if (!response.ok) {
       const category = response.status === 401
         ? "AUTHENTICATION_REQUIRED"
         : response.status === 403
           ? "ACCESS_DENIED"
           : "REQUEST_FAILED";
-      throw new CounterQApiError(category, response.status);
+      throw new CounterQApiError(category, response.status, "HTTP_RESPONSE");
     }
-    return response.json() as Promise<T>;
+    try {
+      return await response.json() as T;
+    } catch {
+      developmentAuthDiagnostic("API response body invalid");
+      throw new CounterQApiError("REQUEST_FAILED", response.status, "RESPONSE_BODY");
+    }
+  }
+}
+
+function developmentAuthDiagnostic(stage: string): void {
+  if (process.env.NODE_ENV === "development") {
+    console.info(`[CounterQ auth] ${stage}`);
   }
 }
 

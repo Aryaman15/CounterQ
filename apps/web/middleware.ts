@@ -17,6 +17,12 @@ function isDevelopmentDemo(pathname: string): boolean {
 
 export default clerkMiddleware(async (auth, request) => {
   const pathname = request.nextUrl.pathname;
+  if (pathname === "/development/auth-check") {
+    if (process.env.NODE_ENV === "production") {
+      return new Response("Not Found", { status: 404 });
+    }
+    return;
+  }
   if (!isPublicPath(pathname) && !isDevelopmentDemo(pathname)) {
     await auth.protect();
   }

@@ -300,6 +300,57 @@ a:focus-visible,
   outline-offset: 3px;
 }
 
+.development-auth-page {
+  width: min(720px, calc(100% - 40px));
+  margin: 64px auto;
+}
+
+.development-auth-page h1 {
+  margin: 8px 0 12px;
+}
+
+.development-auth-page > section > p:last-child {
+  color: var(--muted);
+  line-height: 1.65;
+}
+
+.development-auth-results {
+  margin: 32px 0 0;
+  border-top: 1px solid var(--line);
+}
+
+.development-auth-results > div:not(.development-auth-action) {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.development-auth-results dt {
+  color: var(--muted);
+}
+
+.development-auth-results dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.development-auth-action {
+  margin-top: 20px;
+}
+
+.development-auth-action button {
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid #7ac89d;
+  border-radius: 7px;
+  background: #1d392c;
+  color: var(--text);
+  font: inherit;
+  font-weight: 800;
+}
+
 @media (max-width: 840px) {
   .auth-page,
   .onboarding-page {
