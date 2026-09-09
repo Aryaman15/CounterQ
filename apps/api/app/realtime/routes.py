@@ -297,6 +297,57 @@ async def create_realtime_development_interview(
 
 
 @router.post(
+    "/interviews/{interview_session_id}/session",
+    response_model=CreateRealtimeSessionResponse,
+)
+async def create_interview_realtime_session(
+    interview_session_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
+    provider_builder: Annotated[
+        Callable[[Settings], RealtimeVoiceProvider],
+        Depends(get_realtime_voice_provider_builder),
+    ],
+) -> CreateRealtimeSessionResponse:
+    try:
+        await InterviewOwnershipRepository(database_session).get_owned(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+            allowed_statuses=("READY", "ACTIVE", "RECONNECTING"),
+        )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    await database_session.rollback()
+
+    try:
+        provider = provider_builder(settings)
+        provider_session = await provider.create_browser_session()
+    except RealtimeProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"category": exc.category, "message": exc.safe_message},
+        ) from exc
+
+    return CreateRealtimeSessionResponse(
+        provider="openai",
+        client_secret=provider_session.client_secret,
+        webrtc_url=provider_session.webrtc_url,
+        model=provider_session.model,
+        voice=provider_session.voice,
+        transcription_model=provider_session.transcription_model,
+        expires_at=provider_session.expires_at,
+        expires_after_seconds=provider_session.expires_after_seconds,
+        turn_detection=RealtimeTurnDetectionConfig(
+            type="semantic_vad",
+            eagerness="low",
+            create_response=False,
+            interrupt_response=True,
+        ),
+    )
+
+
+@router.post(
     "/interviews/{interview_session_id}/control-ticket",
     response_model=RealtimeControlTicketResponse,
 )

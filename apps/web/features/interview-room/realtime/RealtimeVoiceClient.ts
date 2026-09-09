@@ -20,6 +20,7 @@ type BrowserMediaDevices = Pick<MediaDevices, "getUserMedia">;
 export type RealtimeVoiceClientOptions = {
   apiBaseUrl: string;
   fetchFn?: typeof fetch;
+  sessionFactory?: () => Promise<RealtimeSessionResponse>;
   mediaDevices?: BrowserMediaDevices;
   peerConnectionFactory?: () => RTCPeerConnection;
   audioElementFactory?: () => HTMLAudioElement;
@@ -33,6 +34,7 @@ export class RealtimeVoiceClient {
   private readonly peerConnectionFactory: () => RTCPeerConnection;
   private readonly audioElementFactory: () => HTMLAudioElement;
   private readonly connectionTimeoutMs: number;
+  private readonly sessionFactory: (() => Promise<RealtimeSessionResponse>) | null;
   private readonly listeners = new Set<RealtimeClientListener>();
   private readonly cleanupCallbacks: Array<() => void> = [];
   private localStream: MediaStream | null = null;
@@ -50,6 +52,7 @@ export class RealtimeVoiceClient {
   constructor(options: RealtimeVoiceClientOptions) {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, "");
     this.fetchFn = options.fetchFn ?? fetch.bind(globalThis);
+    this.sessionFactory = options.sessionFactory ?? null;
     this.mediaDevices = options.mediaDevices ?? globalThis.navigator?.mediaDevices;
     this.peerConnectionFactory =
       options.peerConnectionFactory ?? (() => new RTCPeerConnection());
@@ -253,6 +256,9 @@ export class RealtimeVoiceClient {
   }
 
   private async createCounterQRealtimeSession(): Promise<RealtimeSessionResponse> {
+    if (this.sessionFactory) {
+      return this.sessionFactory();
+    }
     const response = await this.fetchFn(`${this.apiBaseUrl}/api/realtime/session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

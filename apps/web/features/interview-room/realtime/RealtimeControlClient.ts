@@ -151,6 +151,14 @@ export type RealtimeControlClientOptions = {
   websocketFactory?: (url: string) => ControlWebSocket;
   storage?: Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>;
   randomUUID?: () => string;
+  production?: {
+    interviewSessionId: string;
+    restore: (clientInstanceId: string) => Promise<DevelopmentBootstrapResponse>;
+    issueControlTicket: () => Promise<{
+      ticket: string;
+      control_websocket_path: string;
+    }>;
+  };
 };
 
 export function storeDevelopmentInterviewSession(interviewSessionId: string): void {
@@ -201,6 +209,7 @@ export class RealtimeControlClient {
     | (Pick<Storage, "getItem" | "setItem"> & Partial<Pick<Storage, "removeItem">>)
     | undefined;
   private readonly randomUUID: () => string;
+  private readonly production: RealtimeControlClientOptions["production"];
   private developmentLanguage: "cpp" | "python" | "java";
   private readonly listeners = new Set<RealtimeControlListener>();
   private readonly pending = new Map<string, PendingEnvelope>();
@@ -220,6 +229,7 @@ export class RealtimeControlClient {
     this.storage = options.storage ?? globalThis.sessionStorage;
     this.developmentLanguage = options.developmentLanguage ?? "cpp";
     this.randomUUID = options.randomUUID ?? (() => globalThis.crypto?.randomUUID?.() ?? fallbackId());
+    this.production = options.production;
     this.websocketFactory = options.websocketFactory ?? ((url) => new WebSocket(url));
   }
 
@@ -234,6 +244,10 @@ export class RealtimeControlClient {
 
   hasStoredDevelopmentSession(): boolean {
     return Boolean(this.storage?.getItem(DEVELOPMENT_SESSION_STORAGE_KEY));
+  }
+
+  hasProductionSession(): boolean {
+    return Boolean(this.production?.interviewSessionId);
   }
 
   setDevelopmentLanguage(language: "cpp" | "python" | "java"): void {
@@ -257,6 +271,36 @@ export class RealtimeControlClient {
     return this.bootstrap;
   }
 
+  async restoreProductionInterview(): Promise<DevelopmentBootstrapResponse> {
+    if (!this.production) {
+      throw new Error("Production interview transport is not configured.");
+    }
+    if (!this.bootstrap) {
+      this.bootstrap = await this.production.restore(this.clientInstanceId());
+      if (this.bootstrap.interview_session_id !== this.production.interviewSessionId) {
+        this.bootstrap = null;
+        throw new Error("CounterQ restored an unexpected interview session.");
+      }
+      this.developmentLanguage = this.bootstrap.language;
+      this.loadClientState(this.bootstrap);
+      this.patchDebug({
+        sessionId: this.bootstrap.interview_session_id,
+        stateVersion: this.bootstrap.state_version,
+        lastServerSequence: this.bootstrap.last_server_sequence,
+      });
+    }
+    this.manualDisconnect = false;
+    this.emit({ type: "connected", bootstrap: this.bootstrap });
+    if (this.bootstrap.session_status !== "COMPLETED") {
+      await this.openWebSocket();
+    }
+    return this.bootstrap;
+  }
+
+  async connectProductionInterview(): Promise<DevelopmentBootstrapResponse> {
+    return this.restoreProductionInterview();
+  }
+
   async connectDevelopmentInterview(): Promise<DevelopmentBootstrapResponse> {
     if (!this.bootstrap) {
       const restored = await this.bootstrapDevelopmentInterview({ allowCreate: false });
@@ -275,6 +319,9 @@ export class RealtimeControlClient {
     language: "cpp" | "python" | "java",
     mode: "COACH" | "SIMULATION" = "SIMULATION",
   ): Promise<DevelopmentBootstrapResponse> {
+    if (this.production) {
+      throw new Error("Production interviews are created before entering the room.");
+    }
     if (this.bootstrap || this.hasStoredDevelopmentSession()) {
       throw new Error("An existing development interview must be restored first.");
     }
@@ -719,7 +766,15 @@ export class RealtimeControlClient {
       await this.waitForControlReady();
       return;
     }
-    const url = websocketUrl(this.apiBaseUrl, this.bootstrap.control_websocket_path);
+    let controlPath = this.bootstrap.control_websocket_path;
+    if (this.production) {
+      const issued = await this.production.issueControlTicket();
+      if (issued.control_websocket_path !== this.bootstrap.control_websocket_path) {
+        throw new Error("CounterQ issued a control ticket for an unexpected session.");
+      }
+      controlPath = `${issued.control_websocket_path}?ticket=${encodeURIComponent(issued.ticket)}`;
+    }
+    const url = websocketUrl(this.apiBaseUrl, controlPath);
     const websocket = this.websocketFactory(url);
     this.websocket = websocket;
     this.controlReady = false;

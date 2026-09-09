@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,10 +24,165 @@ from app.interviews.assistance import (
 )
 from app.interviews.assistance_wording import CoachAssistanceWordingService
 from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
+from app.interviews.contracts import (
+    CreateInterviewRequest,
+    CreateInterviewResponse,
+    InterviewBootstrapResponse,
+    RestoreInterviewRequest,
+)
+from app.interviews.creation import (
+    CandidateProfileRequired,
+    SelfServeInterviewCreationService,
+    SelfServeInterviewSelectionInvalid,
+)
 from app.interviews.mode_policy import ModePolicy
+from app.interviews.restoration import (
+    DevelopmentInterviewNotResumable,
+    SessionRestorationService,
+)
 from app.interviews.runtime import InterviewRuntimeError
+from app.problems.service import CuratedProblemError
+from app.realtime.control_protocol import (
+    RestoredCodeSnapshotMessage,
+    RestoredConversationTurnMessage,
+    RestoredUnresolvedPromptMessage,
+)
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
+
+
+@router.post("", response_model=CreateInterviewResponse, status_code=status.HTTP_201_CREATED)
+async def create_interview(
+    request: CreateInterviewRequest,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
+) -> CreateInterviewResponse:
+    try:
+        created = await SelfServeInterviewCreationService(database_session).create(
+            user_id=current_user.id,
+            problem_version_id=request.problem_version_id,
+            template=request.template,
+            mode=request.mode,
+            language=request.language,
+        )
+    except CandidateProfileRequired as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "category": "onboarding_required",
+                "message": "Complete onboarding before starting an interview",
+            },
+        ) from exc
+    except (CuratedProblemError, SelfServeInterviewSelectionInvalid, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "category": "interview_selection_invalid",
+                "message": "The selected interview configuration is unavailable",
+            },
+        ) from exc
+
+    interview = created.interview_session
+    configuration = created.configuration
+    return CreateInterviewResponse(
+        interview_session_id=interview.id,
+        template=created.template,
+        mode=cast(Literal["COACH", "SIMULATION"], configuration.mode),
+        language=cast(Literal["cpp", "python", "java"], configuration.language),
+        configured_duration_seconds=configuration.configured_duration_seconds,
+        current_stage=interview.current_stage,
+        session_status="ACTIVE",
+        state_version=0,
+        started_at=interview.started_at,
+        deadline_at=interview.deadline_at,
+        interview_path=f"/interview/{interview.id}",
+    )
+
+
+@router.post("/{interview_session_id}/restore", response_model=InterviewBootstrapResponse)
+async def restore_interview(
+    interview_session_id: UUID,
+    request: RestoreInterviewRequest,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
+) -> InterviewBootstrapResponse:
+    try:
+        await InterviewOwnershipRepository(database_session).get_owned(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+        )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+
+    try:
+        restored = await SessionRestorationService(database_session).restore(
+            interview_session_id=interview_session_id,
+            client_instance_id=request.client_instance_id,
+            reconcile_orphaned_deliveries=True,
+        )
+        await database_session.commit()
+    except DevelopmentInterviewNotResumable as exc:
+        await database_session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "category": "interview_not_resumable",
+                "message": "This interview cannot be restored",
+            },
+        ) from exc
+
+    interview = restored.interview
+    return InterviewBootstrapResponse(
+        interview_session_id=interview.id,
+        language=cast(Literal["cpp", "python", "java"], interview.configuration.language),
+        problem=restored.problem,
+        template=restored.template,
+        configured_duration_seconds=interview.configuration.configured_duration_seconds,
+        mode=cast(Literal["COACH", "SIMULATION"], interview.configuration.mode),
+        current_stage=interview.current_stage,
+        session_status=interview.status,
+        state_version=interview.state_version,
+        started_at=interview.started_at,
+        deadline_at=interview.deadline_at,
+        time_remaining_seconds=restored.time_remaining_seconds,
+        time_pressure=restored.time_pressure,
+        control_websocket_path=f"/api/realtime/control/{interview.id}",
+        completed_at=interview.completed_at,
+        terminal_reason=restored.terminal_reason,
+        latest_code_snapshot=(
+            RestoredCodeSnapshotMessage(
+                id=restored.code_snapshot.id,
+                version_number=restored.code_snapshot.version_number,
+                language=restored.code_snapshot.language,
+                source_code=restored.code_snapshot.source_code,
+                content_hash=restored.code_snapshot.content_hash,
+            )
+            if restored.code_snapshot is not None
+            else None
+        ),
+        recent_conversation=[
+            RestoredConversationTurnMessage(
+                id=turn.id,
+                speaker=turn.speaker,
+                text=turn.text,
+                sequence=turn.sequence,
+                occurred_at=turn.occurred_at,
+                delivery_state=turn.delivery_state,
+            )
+            for turn in restored.conversation
+        ],
+        unresolved_prompt=(
+            RestoredUnresolvedPromptMessage(
+                id=restored.unresolved_prompt.id,
+                kind=restored.unresolved_prompt.kind,
+                status="AUTHORIZED",
+            )
+            if restored.unresolved_prompt is not None
+            else None
+        ),
+        highest_client_sequence=restored.highest_client_sequence,
+        last_server_sequence=interview.last_server_sequence,
+    )
 
 
 class CandidateAssistanceRequest(BaseModel):

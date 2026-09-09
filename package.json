@@ -42,6 +42,7 @@
     "eval:stage7": "uv run --directory apps/api pytest tests/evaluation/stage7 tests/test_stage7a_countermap.py tests/test_stage7b_countermap_detail.py -q",
     "eval:stage8": "uv run --directory apps/api pytest tests/evaluation/stage8 tests/evaluation/stage8b tests/test_stage8a_mastery.py tests/test_migrations.py -q && pnpm --filter @counterq/web test -- mastery.test.tsx retest.test.tsx interview-room.test.tsx",
     "eval:stage9a": "uv run --directory apps/api pytest tests/evaluation/stage9a tests/test_migrations.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9a-auth.test.tsx",
+    "eval:stage9b": "uv run --directory apps/api pytest tests/evaluation/stage9b tests/evaluation/stage9a/test_control_tickets.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9b-self-serve.test.tsx",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",

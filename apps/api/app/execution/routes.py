@@ -12,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.auth.dependencies import get_current_user
+from app.auth.principal import CurrentUser
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_session
@@ -20,6 +22,7 @@ from app.execution.models import ExecutionRun, TestResult
 from app.execution.provider import ExecutorProvider, ExecutorProviderError
 from app.execution.sandbox_provider import LocalSandboxExecutorProvider
 from app.execution.service import ExecutionIdempotencyConflict, ExecutionService, RunCommand
+from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.runtime import InterviewRuntimeError
 
 router = APIRouter(prefix="/api/execution", tags=["execution"])
@@ -39,6 +42,26 @@ class DevelopmentRunRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_case_selection(self) -> DevelopmentRunRequest:
+        if self.run_kind == "VISIBLE" and self.custom_arguments is not None:
+            raise ValueError("custom_arguments must be absent for a visible run")
+        if self.run_kind == "CUSTOM" and self.custom_arguments is None:
+            raise ValueError("custom_arguments are required for a custom run")
+        return self
+
+
+class CandidateRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source_code: str = Field(min_length=1, max_length=200_000)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+    client_event_id: str = Field(min_length=1, max_length=128)
+    client_instance_id: str = Field(min_length=1, max_length=128)
+    client_sequence: int = Field(ge=1)
+    run_kind: Literal["VISIBLE", "CUSTOM"] = "VISIBLE"
+    custom_arguments: dict[str, JsonValue] | None = None
+
+    @model_validator(mode="after")
+    def validate_case_selection(self) -> CandidateRunRequest:
         if self.run_kind == "VISIBLE" and self.custom_arguments is not None:
             raise ValueError("custom_arguments must be absent for a visible run")
         if self.run_kind == "CUSTOM" and self.custom_arguments is None:
@@ -105,6 +128,52 @@ async def development_run(
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="Development execution only"
         )
+    return await _execute_run(
+        request=request,
+        interview_session_id=request.interview_session_id,
+        settings=settings,
+        session=session,
+        provider_builder=provider_builder,
+    )
+
+
+@router.post("/interviews/{interview_session_id}/runs", response_model=DevelopmentRunResponse)
+async def candidate_run(
+    interview_session_id: UUID,
+    request: CandidateRunRequest,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+    provider_builder: Annotated[
+        Callable[[Settings], ExecutorProvider], Depends(get_executor_provider_builder)
+    ],
+) -> DevelopmentRunResponse:
+    try:
+        await InterviewOwnershipRepository(session).get_owned(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+            allowed_statuses=("READY", "ACTIVE", "RECONNECTING"),
+        )
+    except OwnedInterviewNotFound as exc:
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    await session.rollback()
+    return await _execute_run(
+        request=request,
+        interview_session_id=interview_session_id,
+        settings=settings,
+        session=session,
+        provider_builder=provider_builder,
+    )
+
+
+async def _execute_run(
+    *,
+    request: DevelopmentRunRequest | CandidateRunRequest,
+    interview_session_id: UUID,
+    settings: Settings,
+    session: AsyncSession,
+    provider_builder: Callable[[Settings], ExecutorProvider],
+) -> DevelopmentRunResponse:
     provider = provider_builder(settings)
     service = ExecutionService(
         session,
@@ -115,7 +184,7 @@ async def development_run(
         output_limit_bytes=settings.execution_output_limit_bytes,
     )
     command = RunCommand(
-        session_id=request.interview_session_id,
+        session_id=interview_session_id,
         source_code=request.source_code,
         idempotency_key=request.idempotency_key,
         client_event_id=request.client_event_id,

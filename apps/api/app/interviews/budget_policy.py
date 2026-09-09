@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.interviews.mode_policy import ModePolicy
 from app.interviews.models import InterviewerPrompt, SessionBudget
+from app.interviews.repository import InterviewRepository
+from app.interviews.template_policy import InterviewTemplatePolicy
+
+SOFT_MONETARY_BUDGET = Decimal("2.5000")
+HARD_MONETARY_BUDGET = Decimal("5.0000")
+REALTIME_RESERVED_BUDGET = Decimal("1.2500")
 
 
 @dataclass(frozen=True)
@@ -205,3 +213,34 @@ async def _outstanding_assistance(
     if guided_retry:
         statement = statement.where(InterviewerPrompt.invites_guided_retry.is_(True))
     return int((await session.execute(statement)).scalar_one())
+
+
+async def add_policy_session_budget(
+    repository: InterviewRepository,
+    *,
+    session_id: UUID,
+    template: InterviewTemplatePolicy,
+    mode: str,
+) -> SessionBudget:
+    """Persist the frozen template and mode budgets for one interview."""
+    if template.configured_duration_seconds is None:
+        raise ValueError("Interview template requires a concrete duration")
+    assistance = ModePolicy().assistance_budget(mode)
+    return await repository.add_budget(
+        session_id=session_id,
+        max_duration_seconds=template.configured_duration_seconds,
+        max_probes=template.max_probes,
+        max_deep_reasoning_calls=template.max_deep_reasoning_calls,
+        reserved_post_interview_deep_reasoning_calls=(
+            template.reserved_post_interview_deep_reasoning_calls
+        ),
+        max_strong_reasoning_calls=template.max_strong_reasoning_calls,
+        max_vision_calls=0,
+        soft_monetary_budget=SOFT_MONETARY_BUDGET,
+        hard_monetary_budget=HARD_MONETARY_BUDGET,
+        realtime_reserved_budget=REALTIME_RESERVED_BUDGET,
+        max_assistance_interventions=assistance.max_assistance_interventions,
+        max_structural_hints=assistance.max_structural_hints,
+        max_direct_teaching_interventions=(assistance.max_direct_teaching_interventions),
+        max_guided_retries=assistance.max_guided_retries,
+    )

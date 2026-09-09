@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth.models import User
 from app.auth.repository import UserRepository
 from app.db.ids import uuid7
-from app.interviews.mode_policy import ModePolicy
+from app.interviews.budget_policy import add_policy_session_budget
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
 from app.interviews.repository import InterviewRepository
 from app.interviews.template_policy import InterviewTemplate, template_policy
@@ -153,24 +152,11 @@ async def create_development_interview(
         started_at=created_at,
         deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
     )
-    assistance_budget = ModePolicy().assistance_budget(mode)
-    budget = await interviews.add_budget(
+    budget = await add_policy_session_budget(
+        interviews,
         session_id=interview_session.id,
-        max_duration_seconds=policy.configured_duration_seconds,
-        max_probes=policy.max_probes,
-        max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
-        reserved_post_interview_deep_reasoning_calls=(
-            policy.reserved_post_interview_deep_reasoning_calls
-        ),
-        max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
-        max_vision_calls=0,
-        soft_monetary_budget=Decimal("2.5000"),
-        hard_monetary_budget=Decimal("5.0000"),
-        realtime_reserved_budget=Decimal("1.2500"),
-        max_assistance_interventions=assistance_budget.max_assistance_interventions,
-        max_structural_hints=assistance_budget.max_structural_hints,
-        max_direct_teaching_interventions=(assistance_budget.max_direct_teaching_interventions),
-        max_guided_retries=assistance_budget.max_guided_retries,
+        template=policy,
+        mode=mode,
     )
     return DevelopmentInterview(
         template=template,
@@ -231,24 +217,11 @@ async def create_curated_development_interview(
         started_at=created_at,
         deadline_at=created_at + timedelta(seconds=policy.configured_duration_seconds),
     )
-    assistance_budget = ModePolicy().assistance_budget(mode)
-    budget = await interviews.add_budget(
+    budget = await add_policy_session_budget(
+        interviews,
         session_id=interview_session.id,
-        max_duration_seconds=policy.configured_duration_seconds,
-        max_probes=policy.max_probes,
-        max_deep_reasoning_calls=policy.max_deep_reasoning_calls,
-        reserved_post_interview_deep_reasoning_calls=(
-            policy.reserved_post_interview_deep_reasoning_calls
-        ),
-        max_strong_reasoning_calls=policy.max_strong_reasoning_calls,
-        max_vision_calls=0,
-        soft_monetary_budget=Decimal("2.5000"),
-        hard_monetary_budget=Decimal("5.0000"),
-        realtime_reserved_budget=Decimal("1.2500"),
-        max_assistance_interventions=assistance_budget.max_assistance_interventions,
-        max_structural_hints=assistance_budget.max_structural_hints,
-        max_direct_teaching_interventions=(assistance_budget.max_direct_teaching_interventions),
-        max_guided_retries=assistance_budget.max_guided_retries,
+        template=policy,
+        mode=mode,
     )
     return DevelopmentInterview(
         template=template,

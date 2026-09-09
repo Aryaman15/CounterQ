@@ -1329,6 +1329,9 @@ pnpm run eval:stage3d:integrity
 Evaluate the Stage 8 deterministic Mastery gate:
 pnpm run eval:stage8
 
+Evaluate the Stage 9B self-serve production interview gate:
+pnpm run eval:stage9b
+
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1486,12 +1489,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 8B — CounterQ Me Again + Quick Drill + Retest Learning Loop
+Stage 9B — Self-Serve Interview Setup + Production Launch / Restore
 
 Current Goal:
-Close the deterministic learning loop from an actionable RetestRecommendation
-through a Simulation Quick Drill, canonical target Evidence, Breakpoint-aware
-outcome finalization, and Mastery recomputation without beginning authentication.
+Allow an authenticated candidate with a CandidateProfile to configure, launch,
+restore and continue one owned curated production interview without beginning
+the Stage 9C dashboard, history or deletion surfaces.
 ```
 
 Update only this small section as implementation progresses.

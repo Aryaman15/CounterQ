@@ -1,7 +1,10 @@
 "use client";
 
 import type { components } from "@counterq/contracts/openapi";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+import type { CounterQApiClient, ExecutionRunResponse } from "@/lib/counterq-api";
 
 import {
   DEMO_SPLITTER_STORAGE_KEY,
@@ -33,6 +36,9 @@ type InterviewRoomProps = {
   fixture: DemoInterviewRoomFixture;
   allowFixturePreview?: boolean;
   realtimeVoiceOverride?: RealtimeVoiceControls;
+  runtime?:
+    | { kind: "development" }
+    | { kind: "production"; interviewSessionId: string; api: CounterQApiClient };
 };
 
 type DevelopmentRunResponse = components["schemas"]["DevelopmentRunResponse"];
@@ -41,6 +47,7 @@ export function InterviewRoom({
   fixture,
   allowFixturePreview = true,
   realtimeVoiceOverride,
+  runtime = { kind: "development" },
 }: InterviewRoomProps) {
   const [selectedLanguage, setSelectedLanguage] = useState<"cpp" | "python" | "java">(
     fixture.language,
@@ -60,7 +67,26 @@ export function InterviewRoom({
   const previousSelectedLanguageRef = useRef(selectedLanguage);
   const previousSessionIdRef = useRef<string | null>(null);
   const prefersReducedMotion = usePrefersReducedMotion();
-  const liveRealtimeVoice = useRealtimeVoice({ developmentLanguage: selectedLanguage });
+  const productionApi = runtime.kind === "production" ? runtime.api : null;
+  const productionSessionId = runtime.kind === "production" ? runtime.interviewSessionId : null;
+  const productionTransport = useMemo(
+    () => productionApi && productionSessionId
+      ? {
+          interviewSessionId: productionSessionId,
+          restore: (clientInstanceId: string) =>
+            productionApi.restoreInterview(productionSessionId, clientInstanceId),
+          issueControlTicket: () =>
+            productionApi.createRealtimeControlTicket(productionSessionId),
+          createVoiceSession: () =>
+            productionApi.createRealtimeSession(productionSessionId),
+        }
+      : undefined,
+    [productionApi, productionSessionId],
+  );
+  const liveRealtimeVoice = useRealtimeVoice({
+    developmentLanguage: selectedLanguage,
+    production: productionTransport,
+  });
   const realtimeVoice = realtimeVoiceOverride ?? liveRealtimeVoice;
   const configuredLanguage = realtimeVoice.restoredBootstrap?.language ?? selectedLanguage;
   const candidateProblem = realtimeVoice.restoredBootstrap?.problem ?? null;
@@ -256,13 +282,7 @@ export function InterviewRoom({
     try {
       const bootstrap = await realtimeVoice.ensureControlSession();
       const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `run-${Date.now()}`;
-      const response = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/execution/development-runs`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            interview_session_id: bootstrap.interview_session_id,
+      const runRequest = {
             source_code: editorCode,
             idempotency_key: idempotencyKey,
             client_event_id: `run-${idempotencyKey}`,
@@ -270,11 +290,25 @@ export function InterviewRoom({
             client_sequence: Date.now(),
             run_kind: runKind,
             ...(runKind === "CUSTOM" ? { custom_arguments: customArguments } : {}),
-          }),
-        },
-      );
-      if (!response.ok) throw new Error(await executionErrorMessage(response));
-      const result = await response.json() as DevelopmentRunResponse;
+      };
+      let result: DevelopmentRunResponse | ExecutionRunResponse;
+      if (runtime.kind === "production") {
+        result = await runtime.api.runInterviewCode(bootstrap.interview_session_id, runRequest);
+      } else {
+        const response = await fetch(
+          `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/execution/development-runs`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              interview_session_id: bootstrap.interview_session_id,
+              ...runRequest,
+            }),
+          },
+        );
+        if (!response.ok) throw new Error(await executionErrorMessage(response));
+        result = await response.json() as DevelopmentRunResponse;
+      }
       setExecutionResult({
         runKind: result.run_kind,
         status: result.status,
@@ -299,7 +333,7 @@ export function InterviewRoom({
     } finally {
       setExecutionRunning(false);
     }
-  }, [editorCode, executionRunning, realtimeVoice, terminal]);
+  }, [editorCode, executionRunning, realtimeVoice, runtime, terminal]);
 
   const startInterview = useCallback(async (
     problemVersionId: string,
@@ -368,7 +402,22 @@ export function InterviewRoom({
     [problemWidth],
   );
 
-  if (!allowFixturePreview && !realtimeVoice.restoredBootstrap) {
+  if (runtime.kind === "production" && !realtimeVoice.restoredBootstrap) {
+    return (
+      <main className="interview-setup">
+        <p className="launcher-kicker">Authenticated interview</p>
+        <h1>{realtimeVoice.isRestoring ? "Restoring your workspace…" : "Interview unavailable"}</h1>
+        <p role={realtimeVoice.errorMessage ? "alert" : "status"}>
+          {realtimeVoice.errorMessage ?? "Loading the persisted session and its original deadline."}
+        </p>
+        {realtimeVoice.errorMessage ? (
+          <Link className="launcher-link" href="/interview/setup">Return to interview setup</Link>
+        ) : null}
+      </main>
+    );
+  }
+
+  if (runtime.kind === "development" && !allowFixturePreview && !realtimeVoice.restoredBootstrap) {
     if (realtimeVoice.isRestoring) {
       return <main className="interview-setup"><p role="status">Restoring interview…</p></main>;
     }
@@ -381,7 +430,11 @@ export function InterviewRoom({
     );
   }
 
-  if (terminal && realtimeVoice.restoredBootstrap?.interview_session_id) {
+  if (
+    runtime.kind === "development" &&
+    terminal &&
+    realtimeVoice.restoredBootstrap?.interview_session_id
+  ) {
     return (
       <SessionReportExperience
         interviewSessionId={realtimeVoice.restoredBootstrap.interview_session_id}
@@ -492,6 +545,10 @@ export function InterviewRoom({
         onOpenConversation={() => setConversationOpen(true)}
         terminal={Boolean(terminal) || realtimeVoice.completionPending}
         evaluationReady={Boolean(terminal)}
+        developmentControls={runtime.kind === "development"}
+        requestAssistance={runtime.kind === "production"
+          ? (interviewSessionId) => runtime.api.requestAssistance(interviewSessionId)
+          : undefined}
       />
       <RecentConversationDrawer
         open={conversationOpen}

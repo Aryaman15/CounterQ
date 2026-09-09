@@ -16,6 +16,12 @@ type UseRealtimeVoiceOptions = {
   clientFactory?: () => RealtimeVoiceClient;
   controlClientFactory?: () => RealtimeControlClient;
   developmentLanguage?: "cpp" | "python" | "java";
+  production?: {
+    interviewSessionId: string;
+    restore: (clientInstanceId: string) => Promise<DevelopmentBootstrapResponse>;
+    issueControlTicket: () => Promise<{ ticket: string; control_websocket_path: string }>;
+    createVoiceSession: () => Promise<import("./RealtimeVoiceClient").RealtimeSessionResponse>;
+  };
 };
 
 type RealtimeActivityState = Exclude<VoicePresenceState, "Muted">;
@@ -72,7 +78,12 @@ export type RealtimeSessionDebug = {
 export function useRealtimeVoice(
   options: UseRealtimeVoiceOptions = {},
 ): RealtimeVoiceControls {
-  const { clientFactory, controlClientFactory, developmentLanguage = "cpp" } = options;
+  const {
+    clientFactory,
+    controlClientFactory,
+    developmentLanguage = "cpp",
+    production,
+  } = options;
   const [activityState, setActivityState] = useState<RealtimeActivityState>("Ready");
   const [isMuted, setIsMuted] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -138,6 +149,7 @@ export function useRealtimeVoice(
       clientFactory?.() ??
       new RealtimeVoiceClient({
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
+        sessionFactory: production?.createVoiceSession,
       });
     unsubscribeRef.current = client.on((event) => {
       applyRealtimeEvent(event, {
@@ -156,7 +168,7 @@ export function useRealtimeVoice(
     });
     clientRef.current = client;
     return client;
-  }, [clientFactory]);
+  }, [clientFactory, production]);
 
   const ensureControlClient = useCallback(() => {
     if (controlClientRef.current) {
@@ -170,6 +182,7 @@ export function useRealtimeVoice(
       new RealtimeControlClient({
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
         developmentLanguage,
+        production,
       });
     unsubscribeControlRef.current = controlClient.on((event) => {
       if (event.type === "connected") {
@@ -231,7 +244,7 @@ export function useRealtimeVoice(
     });
     controlClientRef.current = controlClient;
     return controlClient;
-  }, [controlClientFactory, developmentLanguage, disconnectVoice, terminalSession]);
+  }, [controlClientFactory, developmentLanguage, disconnectVoice, production, terminalSession]);
 
   const enableMicrophone = useCallback(async () => {
     if (terminalSession || completionPending) {
@@ -245,7 +258,11 @@ export function useRealtimeVoice(
       if (!restoredBootstrap) {
         setIsRestoring(true);
       }
-      await controlClient.connectDevelopmentInterview();
+      if (production) {
+        await controlClient.connectProductionInterview();
+      } else {
+        await controlClient.connectDevelopmentInterview();
+      }
       await client.connect();
     } catch (error) {
       setActivityState("Error");
@@ -253,16 +270,19 @@ export function useRealtimeVoice(
       setIsMuted(false);
       setErrorMessage(error instanceof Error ? error.message : "Realtime voice connection failed.");
     }
-  }, [completionPending, ensureClient, ensureControlClient, restoredBootstrap, terminalSession]);
+  }, [completionPending, ensureClient, ensureControlClient, production, restoredBootstrap, terminalSession]);
 
   const ensureControlSession = useCallback(async () => {
     if (terminalSession || completionPending) {
       throw new Error("Interview is no longer active.");
     }
     setErrorMessage(null);
-    const bootstrap = await ensureControlClient().connectDevelopmentInterview();
+    const controlClient = ensureControlClient();
+    const bootstrap = production
+      ? await controlClient.connectProductionInterview()
+      : await controlClient.connectDevelopmentInterview();
     return bootstrap;
-  }, [completionPending, ensureControlClient, terminalSession]);
+  }, [completionPending, ensureControlClient, production, terminalSession]);
 
   const startInterview = useCallback(async (
     problemVersionId: string,
@@ -375,6 +395,17 @@ export function useRealtimeVoice(
     }
     autoRestoreAttemptedRef.current = true;
     const controlClient = ensureControlClient();
+    if (production) {
+      setIsRestoring(true);
+      void controlClient.restoreProductionInterview()
+        .catch((error) => {
+          setIsRestoring(false);
+          setErrorMessage(
+            error instanceof Error ? error.message : "CounterQ could not restore this interview.",
+          );
+        });
+      return;
+    }
     if (!controlClient.hasStoredDevelopmentSession()) {
       setIsRestoring(false);
       return;
@@ -390,7 +421,7 @@ export function useRealtimeVoice(
           error instanceof Error ? error.message : "CounterQ could not restore this interview.",
         );
       });
-  }, [ensureControlClient]);
+  }, [ensureControlClient, production]);
 
   useEffect(() => dispose, [dispose]);
 

@@ -259,6 +259,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/execution/interviews/{interview_session_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Candidate Run */
+        post: operations["candidate_run_api_execution_interviews__interview_session_id__runs_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/interviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Interview */
+        post: operations["create_interview_api_interviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/interviews/{interview_session_id}/assistance-requests": {
         parameters: {
             query?: never;
@@ -270,6 +304,23 @@ export interface paths {
         put?: never;
         /** Request Candidate Assistance */
         post: operations["request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/interviews/{interview_session_id}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Interview */
+        post: operations["restore_interview_api_interviews__interview_session_id__restore_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -440,6 +491,23 @@ export interface paths {
         put?: never;
         /** Create Realtime Control Ticket */
         post: operations["create_realtime_control_ticket_api_realtime_interviews__interview_session_id__control_ticket_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/realtime/interviews/{interview_session_id}/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Interview Realtime Session */
+        post: operations["create_interview_realtime_session_api_realtime_interviews__interview_session_id__session_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1130,6 +1198,29 @@ export interface components {
              */
             target_type: "CONCEPT" | "SKILL";
         };
+        /** CandidateRunRequest */
+        CandidateRunRequest: {
+            /** Client Event Id */
+            client_event_id: string;
+            /** Client Instance Id */
+            client_instance_id: string;
+            /** Client Sequence */
+            client_sequence: number;
+            /** Custom Arguments */
+            custom_arguments?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+            /**
+             * Run Kind
+             * @default VISIBLE
+             * @enum {string}
+             */
+            run_kind: "VISIBLE" | "CUSTOM";
+            /** Source Code */
+            source_code: string;
+        };
         /** CandidateSessionReportResponse */
         CandidateSessionReportResponse: {
             /** Generated At */
@@ -1427,6 +1518,78 @@ export interface components {
             };
             /** Title */
             title: string;
+        };
+        /** CreateInterviewRequest */
+        CreateInterviewRequest: {
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /**
+             * Problem Version Id
+             * Format: uuid
+             */
+            problem_version_id: string;
+            /**
+             * Template
+             * @enum {string}
+             */
+            template: "QUICK_DRILL" | "STANDARD_CODING_INTERVIEW";
+        };
+        /** CreateInterviewResponse */
+        CreateInterviewResponse: {
+            /** Configured Duration Seconds */
+            configured_duration_seconds: number;
+            /** Current Stage */
+            current_stage: string;
+            /**
+             * Deadline At
+             * Format: date-time
+             */
+            deadline_at: string;
+            /** Interview Path */
+            interview_path: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /**
+             * Session Status
+             * @constant
+             */
+            session_status: "ACTIVE";
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /**
+             * State Version
+             * @constant
+             */
+            state_version: 0;
+            /**
+             * Template
+             * @enum {string}
+             */
+            template: "QUICK_DRILL" | "STANDARD_CODING_INTERVIEW";
         };
         /** CreateRealtimeSessionRequest */
         CreateRealtimeSessionRequest: {
@@ -2117,6 +2280,81 @@ export interface components {
              */
             status: "ok";
         };
+        /** InterviewBootstrapResponse */
+        InterviewBootstrapResponse: {
+            /** Completed At */
+            completed_at?: string | null;
+            /** Configured Duration Seconds */
+            configured_duration_seconds: number;
+            /** Control Websocket Path */
+            control_websocket_path: string;
+            /** Current Stage */
+            current_stage: string;
+            /**
+             * Deadline At
+             * Format: date-time
+             */
+            deadline_at: string;
+            /** Highest Client Sequence */
+            highest_client_sequence: number;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
+            /** Last Server Sequence */
+            last_server_sequence: number;
+            latest_code_snapshot?: components["schemas"]["RestoredCodeSnapshotMessage"] | null;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            problem: components["schemas"]["CandidateProblemDetail"];
+            /**
+             * Protocol Version
+             * @default counterq.realtime.control.v1
+             * @constant
+             */
+            protocol_version: "counterq.realtime.control.v1";
+            /** Recent Conversation */
+            recent_conversation: components["schemas"]["RestoredConversationTurnMessage"][];
+            /**
+             * Restoration
+             * @default RESTORED
+             * @constant
+             */
+            restoration: "RESTORED";
+            /**
+             * Restore Protocol Version
+             * @default session.restore.v1
+             * @constant
+             */
+            restore_protocol_version: "session.restore.v1";
+            /** Session Status */
+            session_status: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** State Version */
+            state_version: number;
+            /** Template */
+            template: string;
+            /** Terminal Reason */
+            terminal_reason?: ("USER_ENDED" | "TIME_EXPIRED") | null;
+            /** Time Pressure */
+            time_pressure: string;
+            /** Time Remaining Seconds */
+            time_remaining_seconds: number;
+            unresolved_prompt?: components["schemas"]["RestoredUnresolvedPromptMessage"] | null;
+        };
         JsonValue: unknown;
         /** RealtimeControlTicketResponse */
         RealtimeControlTicketResponse: {
@@ -2368,6 +2606,11 @@ export interface components {
             mode: "COACH" | "SIMULATION";
             /** Problem Title */
             problem_title: string;
+        };
+        /** RestoreInterviewRequest */
+        RestoreInterviewRequest: {
+            /** Client Instance Id */
+            client_instance_id: string;
         };
         /** RestoredCodeSnapshotMessage */
         RestoredCodeSnapshotMessage: {
@@ -2997,6 +3240,74 @@ export interface operations {
             };
         };
     };
+    candidate_run_api_execution_interviews__interview_session_id__runs_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CandidateRunRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DevelopmentRunResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_interview_api_interviews_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInterviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateInterviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post: {
         parameters: {
             query?: never;
@@ -3019,6 +3330,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidateAssistanceResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    restore_interview_api_interviews__interview_session_id__restore_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreInterviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InterviewBootstrapResponse"];
                 };
             };
             /** @description Validation Error */
@@ -3306,6 +3652,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RealtimeControlTicketResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_interview_realtime_session_api_realtime_interviews__interview_session_id__session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreateRealtimeSessionResponse"];
                 };
             };
             /** @description Validation Error */

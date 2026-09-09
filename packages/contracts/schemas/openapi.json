@@ -1525,6 +1525,72 @@
         "title": "CandidateRetestRecommendation",
         "type": "object"
       },
+      "CandidateRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_event_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Event Id",
+            "type": "string"
+          },
+          "client_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Instance Id",
+            "type": "string"
+          },
+          "client_sequence": {
+            "minimum": 1.0,
+            "title": "Client Sequence",
+            "type": "integer"
+          },
+          "custom_arguments": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/JsonValue"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Custom Arguments"
+          },
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "run_kind": {
+            "default": "VISIBLE",
+            "enum": [
+              "VISIBLE",
+              "CUSTOM"
+            ],
+            "title": "Run Kind",
+            "type": "string"
+          },
+          "source_code": {
+            "maxLength": 200000,
+            "minLength": 1,
+            "title": "Source Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_code",
+          "idempotency_key",
+          "client_event_id",
+          "client_instance_id",
+          "client_sequence"
+        ],
+        "title": "CandidateRunRequest",
+        "type": "object"
+      },
       "CandidateSessionReportResponse": {
         "properties": {
           "generated_at": {
@@ -2528,6 +2594,130 @@
           "relationship_counts"
         ],
         "title": "CounterMapSummary",
+        "type": "object"
+      },
+      "CreateInterviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_version_id": {
+            "format": "uuid",
+            "title": "Problem Version Id",
+            "type": "string"
+          },
+          "template": {
+            "enum": [
+              "QUICK_DRILL",
+              "STANDARD_CODING_INTERVIEW"
+            ],
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_version_id",
+          "template",
+          "mode",
+          "language"
+        ],
+        "title": "CreateInterviewRequest",
+        "type": "object"
+      },
+      "CreateInterviewResponse": {
+        "properties": {
+          "configured_duration_seconds": {
+            "title": "Configured Duration Seconds",
+            "type": "integer"
+          },
+          "current_stage": {
+            "title": "Current Stage",
+            "type": "string"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "interview_path": {
+            "title": "Interview Path",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "session_status": {
+            "const": "ACTIVE",
+            "title": "Session Status",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "state_version": {
+            "const": 0,
+            "title": "State Version",
+            "type": "integer"
+          },
+          "template": {
+            "enum": [
+              "QUICK_DRILL",
+              "STANDARD_CODING_INTERVIEW"
+            ],
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "template",
+          "mode",
+          "language",
+          "configured_duration_seconds",
+          "current_stage",
+          "session_status",
+          "state_version",
+          "started_at",
+          "deadline_at",
+          "interview_path"
+        ],
+        "title": "CreateInterviewResponse",
         "type": "object"
       },
       "CreateRealtimeSessionRequest": {
@@ -4628,6 +4818,178 @@
         "title": "HealthResponse",
         "type": "object"
       },
+      "InterviewBootstrapResponse": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "configured_duration_seconds": {
+            "title": "Configured Duration Seconds",
+            "type": "integer"
+          },
+          "control_websocket_path": {
+            "title": "Control Websocket Path",
+            "type": "string"
+          },
+          "current_stage": {
+            "title": "Current Stage",
+            "type": "string"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "highest_client_sequence": {
+            "title": "Highest Client Sequence",
+            "type": "integer"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "last_server_sequence": {
+            "title": "Last Server Sequence",
+            "type": "integer"
+          },
+          "latest_code_snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoredCodeSnapshotMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem": {
+            "$ref": "#/components/schemas/CandidateProblemDetail"
+          },
+          "protocol_version": {
+            "const": "counterq.realtime.control.v1",
+            "default": "counterq.realtime.control.v1",
+            "title": "Protocol Version",
+            "type": "string"
+          },
+          "recent_conversation": {
+            "items": {
+              "$ref": "#/components/schemas/RestoredConversationTurnMessage"
+            },
+            "title": "Recent Conversation",
+            "type": "array"
+          },
+          "restoration": {
+            "const": "RESTORED",
+            "default": "RESTORED",
+            "title": "Restoration",
+            "type": "string"
+          },
+          "restore_protocol_version": {
+            "const": "session.restore.v1",
+            "default": "session.restore.v1",
+            "title": "Restore Protocol Version",
+            "type": "string"
+          },
+          "session_status": {
+            "title": "Session Status",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "state_version": {
+            "title": "State Version",
+            "type": "integer"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          },
+          "terminal_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "USER_ENDED",
+                  "TIME_EXPIRED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Terminal Reason"
+          },
+          "time_pressure": {
+            "title": "Time Pressure",
+            "type": "string"
+          },
+          "time_remaining_seconds": {
+            "title": "Time Remaining Seconds",
+            "type": "integer"
+          },
+          "unresolved_prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RestoredUnresolvedPromptMessage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "language",
+          "problem",
+          "template",
+          "configured_duration_seconds",
+          "mode",
+          "current_stage",
+          "session_status",
+          "state_version",
+          "started_at",
+          "deadline_at",
+          "time_remaining_seconds",
+          "time_pressure",
+          "control_websocket_path",
+          "recent_conversation",
+          "highest_client_sequence",
+          "last_server_sequence"
+        ],
+        "title": "InterviewBootstrapResponse",
+        "type": "object"
+      },
       "JsonValue": {},
       "RealtimeControlTicketResponse": {
         "properties": {
@@ -5284,6 +5646,22 @@
           "duration_seconds"
         ],
         "title": "ReportSessionMetadata",
+        "type": "object"
+      },
+      "RestoreInterviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_instance_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Client Instance Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "client_instance_id"
+        ],
+        "title": "RestoreInterviewRequest",
         "type": "object"
       },
       "RestoredCodeSnapshotMessage": {
@@ -6278,6 +6656,110 @@
         ]
       }
     },
+    "/api/execution/interviews/{interview_session_id}/runs": {
+      "post": {
+        "operationId": "candidate_run_api_execution_interviews__interview_session_id__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CandidateRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevelopmentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Candidate Run",
+        "tags": [
+          "execution"
+        ]
+      }
+    },
+    "/api/interviews": {
+      "post": {
+        "operationId": "create_interview_api_interviews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInterviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateInterviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Interview",
+        "tags": [
+          "interviews"
+        ]
+      }
+    },
     "/api/interviews/{interview_session_id}/assistance-requests": {
       "post": {
         "operationId": "request_candidate_assistance_api_interviews__interview_session_id__assistance_requests_post",
@@ -6331,6 +6813,64 @@
           }
         ],
         "summary": "Request Candidate Assistance",
+        "tags": [
+          "interviews"
+        ]
+      }
+    },
+    "/api/interviews/{interview_session_id}/restore": {
+      "post": {
+        "operationId": "restore_interview_api_interviews__interview_session_id__restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreInterviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterviewBootstrapResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Interview",
         "tags": [
           "interviews"
         ]
@@ -6738,6 +7278,54 @@
           }
         ],
         "summary": "Create Realtime Control Ticket",
+        "tags": [
+          "realtime"
+        ]
+      }
+    },
+    "/api/realtime/interviews/{interview_session_id}/session": {
+      "post": {
+        "operationId": "create_interview_realtime_session_api_realtime_interviews__interview_session_id__session_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateRealtimeSessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Interview Realtime Session",
         "tags": [
           "realtime"
         ]

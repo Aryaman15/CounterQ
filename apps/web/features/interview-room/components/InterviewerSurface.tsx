@@ -53,6 +53,8 @@ type InterviewerSurfaceProps = {
   onOpenConversation: () => void;
   terminal?: boolean;
   evaluationReady?: boolean;
+  developmentControls?: boolean;
+  requestAssistance?: (interviewSessionId: string) => Promise<CandidateAssistanceResponse>;
 };
 
 export function InterviewerSurface({
@@ -75,12 +77,16 @@ export function InterviewerSurface({
   onOpenConversation,
   terminal = false,
   evaluationReady = false,
+  developmentControls = true,
+  requestAssistance = requestCoachAssistance,
 }: InterviewerSurfaceProps) {
   const connected = voiceState === "Listening" || voiceState === "Speaking" || voiceState === "Muted";
   const showTranscriptInspector =
     process.env.NODE_ENV !== "production" &&
     (connected || partialTranscript.length > 0 || lastFinalTranscript.length > 0 || evaluationReady);
-  const showDevelopmentControls = process.env.NODE_ENV !== "production" && (connected || showTranscriptInspector);
+  const showDevelopmentControls = developmentControls &&
+    process.env.NODE_ENV !== "production" &&
+    (connected || showTranscriptInspector);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [reasoningSmokePending, setReasoningSmokePending] = useState(false);
   const [reasoningSmokeResult, setReasoningSmokeResult] =
@@ -212,7 +218,7 @@ export function InterviewerSurface({
     setAssistancePending(true);
     setAssistanceError(null);
     try {
-      const result = await requestCoachAssistance(canonicalDebug.sessionId);
+      const result = await requestAssistance(canonicalDebug.sessionId);
       setAssistanceResult(result);
       if (result.interviewer_prompt_id) {
         onDeliverAuthorizedPrompt(result.interviewer_prompt_id);
