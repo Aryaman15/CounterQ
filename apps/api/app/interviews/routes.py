@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Annotated, Literal, cast
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,9 +25,11 @@ from app.interviews.assistance import (
 from app.interviews.assistance_wording import CoachAssistanceWordingService
 from app.interviews.authorization import InterviewOwnershipRepository, OwnedInterviewNotFound
 from app.interviews.contracts import (
+    CandidateInterviewHistoryResponse,
     CreateInterviewRequest,
     CreateInterviewResponse,
     InterviewBootstrapResponse,
+    InterviewHistoryQuery,
     RestoreInterviewRequest,
 )
 from app.interviews.creation import (
@@ -35,6 +37,7 @@ from app.interviews.creation import (
     SelfServeInterviewCreationService,
     SelfServeInterviewSelectionInvalid,
 )
+from app.interviews.history import CandidateInterviewHistoryReader
 from app.interviews.mode_policy import ModePolicy
 from app.interviews.restoration import (
     DevelopmentInterviewNotResumable,
@@ -49,6 +52,20 @@ from app.realtime.control_protocol import (
 )
 
 router = APIRouter(prefix="/api/interviews", tags=["interviews"])
+
+
+@router.get("", response_model=CandidateInterviewHistoryResponse)
+async def list_interviews(
+    query: Annotated[InterviewHistoryQuery, Query()],
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateInterviewHistoryResponse:
+    return await CandidateInterviewHistoryReader(database_session).read(
+        user_id=current_user.id,
+        state=query.state,
+        limit=query.limit,
+        offset=query.offset,
+    )
 
 
 @router.post("", response_model=CreateInterviewResponse, status_code=status.HTTP_201_CREATED)

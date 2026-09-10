@@ -44,9 +44,14 @@ function renderSurface(graph = counterMapUiSamples[0]) {
   return render(
     <CounterMapSurface
       graph={graph}
-      detailUrlForNode={(nodeId) => `/candidate-detail/${nodeId}`}
+      loadNodeDetail={loadCandidateDetail}
     />,
   );
+}
+
+async function loadCandidateDetail(nodeId: string, signal?: AbortSignal): Promise<Detail> {
+  const result = await fetch(`/candidate-detail/${nodeId}`, { cache: "no-store", signal });
+  return result.json() as Promise<Detail>;
 }
 
 function openTimelineNode(name: RegExp | string) {
@@ -95,7 +100,7 @@ describe("Stage 7B interactive CounterMap", () => {
     rerender(
       <CounterMapSurface
         graph={counterMapUiSamples[1]}
-        detailUrlForNode={(nodeId) => `/candidate-detail/${nodeId}`}
+        loadNodeDetail={loadCandidateDetail}
       />,
     );
 

@@ -1,4 +1,4 @@
-"""Development adapter for the production Stage 8B retest service."""
+"""Current-candidate and development adapters for the Stage 8B retest service."""
 
 from __future__ import annotations
 
@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
+from app.auth.dependencies import get_current_user
 from app.auth.models import User
+from app.auth.principal import CurrentUser
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_sessionmaker
@@ -47,7 +49,36 @@ class RetestLaunchResponse(RetestContractModel):
     template: Literal["QUICK_DRILL"]
     configured_duration_seconds: Literal[600]
     resumed: bool
-    interview_path: str = "/interview/demo"
+    interview_path: str
+
+
+@router.post(
+    "/recommendations/{recommendation_id}/start",
+    response_model=RetestLaunchResponse,
+)
+async def start_retest(
+    recommendation_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> RetestLaunchResponse:
+    try:
+        launch = await RetestService(sessionmaker=get_sessionmaker()).start(
+            principal_user_id=current_user.id,
+            recommendation_id=recommendation_id,
+        )
+    except RetestStartError as error:
+        response_status = (
+            status.HTTP_404_NOT_FOUND
+            if error.category == "RECOMMENDATION_NOT_FOUND"
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(
+            status_code=response_status,
+            detail={"category": error.category, "message": error.safe_message},
+        ) from error
+    return _launch_response(
+        launch,
+        interview_path=f"/interview/{launch.interview_session_id}",
+    )
 
 
 @router.post(
@@ -117,10 +148,10 @@ async def development_start_retest(
             status_code=response_status,
             detail={"category": error.category, "message": error.safe_message},
         ) from error
-    return _launch_response(launch)
+    return _launch_response(launch, interview_path="/interview/demo")
 
 
-def _launch_response(launch: RetestLaunch) -> RetestLaunchResponse:
+def _launch_response(launch: RetestLaunch, *, interview_path: str) -> RetestLaunchResponse:
     return RetestLaunchResponse(
         recommendation_id=launch.recommendation_id,
         retest_attempt_id=launch.retest_attempt_id,
@@ -134,6 +165,7 @@ def _launch_response(launch: RetestLaunch) -> RetestLaunchResponse:
         template="QUICK_DRILL",
         configured_duration_seconds=600,
         resumed=launch.resumed,
+        interview_path=interview_path,
     )
 
 

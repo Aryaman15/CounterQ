@@ -283,7 +283,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List Interviews */
+        get: operations["list_interviews_api_interviews_get"];
         put?: never;
         /** Create Interview */
         post: operations["create_interview_api_interviews_post"];
@@ -389,6 +390,23 @@ export interface paths {
         put?: never;
         /** Development Recalculate Mastery */
         post: operations["development_recalculate_mastery_api_mastery_development_users__user_id__recalculate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/mastery/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current User Mastery */
+        get: operations["current_user_mastery_api_mastery_me_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -633,6 +651,23 @@ export interface paths {
          * @description Use the fixed development principal at the future authenticated boundary.
          */
         post: operations["development_start_retest_api_retests_development_recommendations__recommendation_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/retests/recommendations/{recommendation_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Retest */
+        post: operations["start_retest_api_retests_recommendations__recommendation_id__start_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -923,6 +958,70 @@ export interface components {
             visible_passed: number;
             /** Visible Tests */
             visible_tests: components["schemas"]["CandidateVisibleTestDetail"][];
+        };
+        /** CandidateInterviewHistoryItem */
+        CandidateInterviewHistoryItem: {
+            /** Can Resume */
+            can_resume: boolean;
+            /** Candidate Level */
+            candidate_level: string;
+            /** Completed At */
+            completed_at: string | null;
+            /** Configured Duration Seconds */
+            configured_duration_seconds: number;
+            /** Countermap Path */
+            countermap_path: string;
+            /**
+             * Deadline At
+             * Format: date-time
+             */
+            deadline_at: string;
+            /**
+             * Display Status
+             * @enum {string}
+             */
+            display_status: "IN_PROGRESS" | "COMPLETED" | "ENDED";
+            /** Interview Path */
+            interview_path: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Language
+             * @enum {string}
+             */
+            language: "cpp" | "python" | "java";
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "COACH" | "SIMULATION";
+            /** Problem Title */
+            problem_title: string;
+            /** Report Path */
+            report_path: string;
+            /**
+             * Started At
+             * Format: date-time
+             */
+            started_at: string;
+            /** Status */
+            status: string;
+            /** Template */
+            template: string;
+        };
+        /** CandidateInterviewHistoryResponse */
+        CandidateInterviewHistoryResponse: {
+            /** Has More */
+            has_more: boolean;
+            /** Items */
+            items: components["schemas"]["CandidateInterviewHistoryItem"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
         };
         /** CandidateMasteryEvidenceItem */
         CandidateMasteryEvidenceItem: {
@@ -2674,10 +2773,7 @@ export interface components {
              * @constant
              */
             configured_duration_seconds: 600;
-            /**
-             * Interview Path
-             * @default /interview/demo
-             */
+            /** Interview Path */
             interview_path: string;
             /**
              * Interview Session Id
@@ -3275,6 +3371,39 @@ export interface operations {
             };
         };
     };
+    list_interviews_api_interviews_get: {
+        parameters: {
+            query?: {
+                state?: "all" | "in_progress" | "completed";
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateInterviewHistoryResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     create_interview_api_interviews_post: {
         parameters: {
             query?: never;
@@ -3491,6 +3620,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    current_user_mastery_api_mastery_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CandidateMasteryOverviewResponse"];
                 };
             };
         };
@@ -3878,6 +4027,37 @@ export interface operations {
         };
     };
     development_start_retest_api_retests_development_recommendations__recommendation_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recommendation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetestLaunchResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_retest_api_retests_recommendations__recommendation_id__start_post: {
         parameters: {
             query?: never;
             header?: never;

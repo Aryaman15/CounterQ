@@ -848,6 +848,150 @@
         "title": "CandidateExecutionDetail",
         "type": "object"
       },
+      "CandidateInterviewHistoryItem": {
+        "properties": {
+          "can_resume": {
+            "title": "Can Resume",
+            "type": "boolean"
+          },
+          "candidate_level": {
+            "title": "Candidate Level",
+            "type": "string"
+          },
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "configured_duration_seconds": {
+            "title": "Configured Duration Seconds",
+            "type": "integer"
+          },
+          "countermap_path": {
+            "title": "Countermap Path",
+            "type": "string"
+          },
+          "deadline_at": {
+            "format": "date-time",
+            "title": "Deadline At",
+            "type": "string"
+          },
+          "display_status": {
+            "enum": [
+              "IN_PROGRESS",
+              "COMPLETED",
+              "ENDED"
+            ],
+            "title": "Display Status",
+            "type": "string"
+          },
+          "interview_path": {
+            "title": "Interview Path",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "language": {
+            "enum": [
+              "cpp",
+              "python",
+              "java"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "mode": {
+            "enum": [
+              "COACH",
+              "SIMULATION"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "problem_title": {
+            "title": "Problem Title",
+            "type": "string"
+          },
+          "report_path": {
+            "title": "Report Path",
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "template": {
+            "title": "Template",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "problem_title",
+          "template",
+          "mode",
+          "language",
+          "candidate_level",
+          "status",
+          "display_status",
+          "started_at",
+          "completed_at",
+          "deadline_at",
+          "configured_duration_seconds",
+          "can_resume",
+          "interview_path",
+          "report_path",
+          "countermap_path"
+        ],
+        "title": "CandidateInterviewHistoryItem",
+        "type": "object"
+      },
+      "CandidateInterviewHistoryResponse": {
+        "properties": {
+          "has_more": {
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateInterviewHistoryItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "limit",
+          "offset",
+          "has_more"
+        ],
+        "title": "CandidateInterviewHistoryResponse",
+        "type": "object"
+      },
       "CandidateMasteryEvidenceItem": {
         "additionalProperties": false,
         "properties": {
@@ -5782,7 +5926,6 @@
             "type": "integer"
           },
           "interview_path": {
-            "default": "/interview/demo",
             "title": "Interview Path",
             "type": "string"
           },
@@ -5860,7 +6003,8 @@
           "mode",
           "template",
           "configured_duration_seconds",
-          "resumed"
+          "resumed",
+          "interview_path"
         ],
         "title": "RetestLaunchResponse",
         "type": "object"
@@ -6715,6 +6859,80 @@
       }
     },
     "/api/interviews": {
+      "get": {
+        "operationId": "list_interviews_api_interviews_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "default": "all",
+              "enum": [
+                "all",
+                "in_progress",
+                "completed"
+              ],
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateInterviewHistoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Interviews",
+        "tags": [
+          "interviews"
+        ]
+      },
       "post": {
         "operationId": "create_interview_api_interviews_post",
         "requestBody": {
@@ -7035,6 +7253,32 @@
           }
         },
         "summary": "Development Recalculate Mastery",
+        "tags": [
+          "mastery"
+        ]
+      }
+    },
+    "/api/mastery/me": {
+      "get": {
+        "operationId": "current_user_mastery_api_mastery_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidateMasteryOverviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Current User Mastery",
         "tags": [
           "mastery"
         ]
@@ -7620,6 +7864,54 @@
           }
         },
         "summary": "Development Start Retest",
+        "tags": [
+          "retests"
+        ]
+      }
+    },
+    "/api/retests/recommendations/{recommendation_id}/start": {
+      "post": {
+        "operationId": "start_retest_api_retests_recommendations__recommendation_id__start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recommendation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Recommendation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetestLaunchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Start Retest",
         "tags": [
           "retests"
         ]

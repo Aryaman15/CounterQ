@@ -15,6 +15,12 @@ export type RealtimeControlTicketResponse = components["schemas"]["RealtimeContr
 export type CandidateRunRequest = components["schemas"]["CandidateRunRequest"];
 export type ExecutionRunResponse = components["schemas"]["DevelopmentRunResponse"];
 export type CandidateAssistanceResponse = components["schemas"]["CandidateAssistanceResponse"];
+export type CandidateInterviewHistoryResponse = components["schemas"]["CandidateInterviewHistoryResponse"];
+export type CandidateSessionReportResponse = components["schemas"]["CandidateSessionReportResponse"];
+export type CandidateCounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
+export type CandidateCounterMapNodeDetailResponse = components["schemas"]["CandidateCounterMapNodeDetailResponse"];
+export type CandidateMasteryOverviewResponse = components["schemas"]["CandidateMasteryOverviewResponse"];
+export type RetestLaunchResponse = components["schemas"]["RetestLaunchResponse"];
 
 type GetToken = () => Promise<string | null>;
 type Fetch = typeof fetch;
@@ -68,6 +74,69 @@ export class CounterQApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  async listInterviews(
+    state: "all" | "in_progress" | "completed" = "all",
+    limit = 20,
+    offset = 0,
+    signal?: AbortSignal,
+  ): Promise<CandidateInterviewHistoryResponse> {
+    const query = new URLSearchParams({
+      state,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    return this.request<CandidateInterviewHistoryResponse>(
+      `/api/interviews?${query.toString()}`,
+      { signal, cache: "no-store" },
+    );
+  }
+
+  async getSessionReport(
+    interviewSessionId: string,
+    signal?: AbortSignal,
+  ): Promise<CandidateSessionReportResponse> {
+    return this.request<CandidateSessionReportResponse>(
+      `/api/reports/sessions/${encodeURIComponent(interviewSessionId)}`,
+      { signal, cache: "no-store" },
+    );
+  }
+
+  async getCounterMap(
+    interviewSessionId: string,
+    signal?: AbortSignal,
+  ): Promise<CandidateCounterMapResponse> {
+    return this.request<CandidateCounterMapResponse>(
+      `/api/countermap/sessions/${encodeURIComponent(interviewSessionId)}`,
+      { signal, cache: "no-store" },
+    );
+  }
+
+  async getCounterMapNodeDetail(
+    interviewSessionId: string,
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<CandidateCounterMapNodeDetailResponse> {
+    return this.request<CandidateCounterMapNodeDetailResponse>(
+      `/api/countermap/sessions/${encodeURIComponent(interviewSessionId)}`
+      + `/nodes/${encodeURIComponent(nodeId)}`,
+      { signal, cache: "no-store" },
+    );
+  }
+
+  async getMastery(signal?: AbortSignal): Promise<CandidateMasteryOverviewResponse> {
+    return this.request<CandidateMasteryOverviewResponse>(
+      "/api/mastery/me",
+      { signal, cache: "no-store" },
+    );
+  }
+
+  async startRetest(recommendationId: string): Promise<RetestLaunchResponse> {
+    return this.request<RetestLaunchResponse>(
+      `/api/retests/recommendations/${encodeURIComponent(recommendationId)}/start`,
+      { method: "POST" },
+    );
   }
 
   async restoreInterview(

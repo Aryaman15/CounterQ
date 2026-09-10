@@ -4,6 +4,8 @@ import type { components } from "@counterq/contracts/openapi";
 import { Network, RotateCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import type { CounterMapDetail } from "./counterMapPresentation";
+
 import { CounterMapSurface } from "./CounterMapSurface";
 
 type DemoFixture = components["schemas"]["DevelopmentCounterMapFixtureResponse"];
@@ -34,6 +36,21 @@ export function CounterMapDemo() {
     void load(controller.signal);
     return () => controller.abort();
   }, [load]);
+
+  const loadNodeDetail = useCallback(async (
+    nodeId: string,
+    signal?: AbortSignal,
+  ): Promise<CounterMapDetail> => {
+    if (!selectedId) throw new Error("CounterMap fixture is unavailable");
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
+      + `/api/countermap/development/fixtures/${selectedId}`
+      + `/nodes/${encodeURIComponent(nodeId)}`,
+      { signal, cache: "no-store" },
+    );
+    if (!response.ok) throw new Error("CounterMap source detail unavailable");
+    return response.json() as Promise<CounterMapDetail>;
+  }, [selectedId]);
 
   const selected = fixtures.find((fixture) => fixture.fixture_id === selectedId) ?? fixtures[0];
   return (
@@ -73,11 +90,7 @@ export function CounterMapDemo() {
             </div>
             <CounterMapSurface
               graph={selected.graph}
-              detailUrlForNode={(nodeId) => (
-                `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
-                + `/api/countermap/development/fixtures/${selected.fixture_id}`
-                + `/nodes/${encodeURIComponent(nodeId)}`
-              )}
+              loadNodeDetail={loadNodeDetail}
             />
           </>
         ) : requestFailed ? (

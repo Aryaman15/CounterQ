@@ -2,9 +2,8 @@
 
 import type { components } from "@counterq/contracts/openapi";
 import { ChevronDown, FileCheck2, RotateCw, ShieldCheck } from "lucide-react";
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-
-import { CounterMapExperience } from "@/features/countermap/CounterMapExperience";
 
 type ReportResponse = components["schemas"]["CandidateSessionReportResponse"];
 type ReportDocument = components["schemas"]["SessionReportDocument"];
@@ -15,7 +14,11 @@ type DevelopmentInspection = components["schemas"]["DevelopmentReportInspection"
 
 type SessionReportExperienceProps = {
   interviewSessionId: string;
+  loadReport: (signal?: AbortSignal) => Promise<ReportResponse>;
+  loadInspection?: (signal?: AbortSignal) => Promise<DevelopmentInspection>;
   pollIntervalMs?: number;
+  productNavigation?: boolean;
+  relatedCounterMap?: React.ReactNode;
 };
 
 const reasoningSections: Array<{
@@ -35,22 +38,17 @@ const reasoningSections: Array<{
 
 export function SessionReportExperience({
   interviewSessionId,
+  loadReport,
+  loadInspection,
   pollIntervalMs = 1600,
+  productNavigation = false,
+  relatedCounterMap,
 }: SessionReportExperienceProps) {
   const [response, setResponse] = useState<ReportResponse | null>(null);
   const [requestFailed, setRequestFailed] = useState(false);
-  const reportPath = process.env.NODE_ENV === "development"
-    ? `/api/reports/development/sessions/${interviewSessionId}`
-    : `/api/reports/sessions/${interviewSessionId}`;
-
   const load = useCallback(async (signal?: AbortSignal): Promise<ReportResponse["status"] | null> => {
     try {
-      const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}${reportPath}`,
-        { signal, cache: "no-store" },
-      );
-      if (!result.ok) throw new Error("Report status unavailable");
-      const next = await result.json() as ReportResponse;
+      const next = await loadReport(signal);
       setResponse(next);
       setRequestFailed(false);
       return next.status;
@@ -59,7 +57,7 @@ export function SessionReportExperience({
       setRequestFailed(true);
       return null;
     }
-  }, [reportPath]);
+  }, [loadReport]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -82,7 +80,7 @@ export function SessionReportExperience({
 
   if (requestFailed && response === null) {
     return (
-      <ReportShell interviewSessionId={interviewSessionId}>
+      <ReportShell loadInspection={loadInspection} productNavigation={productNavigation}>
         <section className="report-state report-state-failed" aria-labelledby="report-failed-title">
           <p className="report-eyebrow">Interview complete</p>
           <h1 id="report-failed-title">Your report is temporarily out of reach.</h1>
@@ -97,7 +95,7 @@ export function SessionReportExperience({
 
   if (response?.status === "FAILED") {
     return (
-      <ReportShell interviewSessionId={interviewSessionId}>
+      <ReportShell loadInspection={loadInspection} productNavigation={productNavigation}>
         <section className="report-state report-state-failed" aria-labelledby="report-failed-title">
           <p className="report-eyebrow">Interview complete</p>
           <h1 id="report-failed-title">Your detailed report isn’t ready yet.</h1>
@@ -110,7 +108,7 @@ export function SessionReportExperience({
 
   if (response?.status !== "READY" || !response.report) {
     return (
-      <ReportShell interviewSessionId={interviewSessionId}>
+      <ReportShell loadInspection={loadInspection} productNavigation={productNavigation}>
         <section className="report-state report-state-preparing" aria-labelledby="report-preparing-title">
           <div className="report-review-mark" aria-hidden="true"><span /></div>
           <p className="report-eyebrow">Interview complete</p>
@@ -128,6 +126,9 @@ export function SessionReportExperience({
       response={response}
       report={response.report}
       interviewSessionId={interviewSessionId}
+      loadInspection={loadInspection}
+      productNavigation={productNavigation}
+      relatedCounterMap={relatedCounterMap}
     />
   );
 }
@@ -136,17 +137,23 @@ function ReadyReport({
   response,
   report,
   interviewSessionId,
+  loadInspection,
+  productNavigation,
+  relatedCounterMap,
 }: {
   response: ReportResponse;
   report: ReportDocument;
   interviewSessionId: string;
+  loadInspection?: (signal?: AbortSignal) => Promise<DevelopmentInspection>;
+  productNavigation: boolean;
+  relatedCounterMap?: React.ReactNode;
 }) {
   const sources = useMemo(
     () => new Map(report.source_details.map((source) => [source.evidence_id, source])),
     [report.source_details],
   );
   return (
-    <ReportShell ready interviewSessionId={interviewSessionId}>
+    <ReportShell ready loadInspection={loadInspection} productNavigation={productNavigation}>
       <header className="session-report-header">
         <div>
           <p className="report-eyebrow">Session Report · Complete</p>
@@ -161,7 +168,7 @@ function ReadyReport({
         </dl>
       </header>
 
-      <main className="session-report-body">
+      <div className="session-report-body">
         <section className="report-summary" aria-labelledby="report-summary-title">
           <div className="report-section-heading">
             <FileCheck2 size={20} aria-hidden="true" />
@@ -250,8 +257,15 @@ function ReadyReport({
             <ol>{report.next_actions.map((item, index) => <li key={`${item.action}-${index}`}>{item.action}</li>)}</ol>
           ) : <InsufficientEvidence />}
         </section>
-        <CounterMapExperience interviewSessionId={interviewSessionId} />
-      </main>
+        {relatedCounterMap}
+        {productNavigation ? (
+          <nav className="report-next-navigation" aria-label="Session follow-up">
+            <Link href={`/interview/${interviewSessionId}/countermap`}>Open CounterMap</Link>
+            <Link href="/mastery">View Mastery</Link>
+            <Link href="/history">Interview history</Link>
+          </nav>
+        ) : null}
+      </div>
     </ReportShell>
   );
 }
@@ -313,37 +327,41 @@ function InsufficientEvidence() {
 function ReportShell({
   children,
   ready = false,
-  interviewSessionId,
+  loadInspection,
+  productNavigation,
 }: {
   children: React.ReactNode;
   ready?: boolean;
-  interviewSessionId: string;
+  loadInspection?: (signal?: AbortSignal) => Promise<DevelopmentInspection>;
+  productNavigation: boolean;
 }) {
   return (
     <div className={`session-report-shell${ready ? " session-report-shell-ready" : ""}`}>
-      <div className="report-wordmark"><span aria-hidden="true">CQ</span> CounterQ</div>
+      {!productNavigation ? (
+        <div className="report-wordmark"><span aria-hidden="true">CQ</span> CounterQ</div>
+      ) : null}
       {children}
-      {process.env.NODE_ENV === "development" ? (
-        <DevelopmentReportInspector interviewSessionId={interviewSessionId} />
+      {loadInspection ? (
+        <DevelopmentReportInspector loadInspection={loadInspection} />
       ) : null}
     </div>
   );
 }
 
-function DevelopmentReportInspector({ interviewSessionId }: { interviewSessionId: string }) {
+function DevelopmentReportInspector({
+  loadInspection,
+}: {
+  loadInspection: (signal?: AbortSignal) => Promise<DevelopmentInspection>;
+}) {
   const [inspection, setInspection] = useState<DevelopmentInspection | null>(null);
   useEffect(() => {
     const controller = new AbortController();
-    const loadInspection = async () => {
-      const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/reports/development/sessions/${interviewSessionId}/inspection`,
-        { signal: controller.signal, cache: "no-store" },
-      );
-      if (result.ok) setInspection(await result.json() as DevelopmentInspection);
+    const runInspectionLoad = async () => {
+      setInspection(await loadInspection(controller.signal));
     };
-    void loadInspection().catch(() => undefined);
+    void runInspectionLoad().catch(() => undefined);
     return () => controller.abort();
-  }, [interviewSessionId]);
+  }, [loadInspection]);
   if (!inspection) return null;
   return (
     <details className="development-report-inspector">

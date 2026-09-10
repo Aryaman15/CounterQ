@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CounterMapDemo } from "@/features/countermap/CounterMapDemo";
 import { CounterMapExperience } from "@/features/countermap/CounterMapExperience";
+import type { CounterMapTransport } from "@/features/countermap/CounterMapExperience";
 import { ReasoningTimeline } from "@/features/countermap/ReasoningTimeline";
 import { counterMapUiSamples } from "./counterMapUiSamples";
 
@@ -55,6 +56,19 @@ function developmentFixtures(): DevelopmentFixture[] {
       graph: counterMapUiSamples[2],
     },
   ];
+}
+
+function counterMapTransport(interviewSessionId: string): CounterMapTransport {
+  return {
+    loadCounterMap: async (signal) => {
+      const result = await fetch(`/api/countermap/sessions/${interviewSessionId}`, {
+        cache: "no-store",
+        signal,
+      });
+      return result.json() as Promise<CounterMapResponse>;
+    },
+    loadNodeDetail: async () => { throw new Error("Node detail is not used in this test"); },
+  };
 }
 
 describe("CounterMap Reasoning Timeline", () => {
@@ -140,7 +154,7 @@ describe("CounterMap Reasoning Timeline", () => {
 
   it("loads a persisted READY projection through the candidate API", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(apiResponse(readyResponse())));
-    render(<CounterMapExperience interviewSessionId="session-7" />);
+    render(<CounterMapExperience interviewSessionId="session-7" transport={counterMapTransport("session-7")} />);
     expect(await screen.findByRole("heading", { name: /how your interview unfolded/i })).toBeInTheDocument();
     expect(await screen.findByRole("region", { name: /interactive countermap graph/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
@@ -159,7 +173,7 @@ describe("CounterMap Reasoning Timeline", () => {
       generated_at: null,
       message: "CounterMap is unavailable for this interview. Your report and interview evidence are still safe.",
     })));
-    render(<CounterMapExperience interviewSessionId="session-8" />);
+    render(<CounterMapExperience interviewSessionId="session-8" transport={counterMapTransport("session-8")} />);
     expect(await screen.findByRole("heading", { name: /CounterMap is unavailable/i })).toBeInTheDocument();
     expect(screen.getByText(/report and interview evidence are still safe/i)).toBeInTheDocument();
   });
@@ -175,7 +189,7 @@ describe("CounterMap Reasoning Timeline", () => {
       generated_at: null,
       message: "CounterQ is tracing the evidence-backed story of your interview.",
     })));
-    render(<CounterMapExperience interviewSessionId="session-building" pollIntervalMs={60_000} />);
+    render(<CounterMapExperience interviewSessionId="session-building" transport={counterMapTransport("session-building")} pollIntervalMs={60_000} />);
 
     expect(await screen.findByRole("heading", { name: /tracing the evidence-backed story/i })).toBeInTheDocument();
     expect(screen.getByText(/tracing the evidence-backed story of your interview/i)).toBeInTheDocument();
@@ -189,7 +203,7 @@ describe("CounterMap Reasoning Timeline", () => {
       generated_at: null,
       message: "Your reasoning map is being rebuilt from updated interview evidence.",
     })));
-    render(<CounterMapExperience interviewSessionId="session-stale" pollIntervalMs={60_000} />);
+    render(<CounterMapExperience interviewSessionId="session-stale" transport={counterMapTransport("session-stale")} pollIntervalMs={60_000} />);
 
     expect(await screen.findByRole("heading", { name: /updating your reasoning map/i })).toBeInTheDocument();
     expect(screen.getByText(/rebuilt from updated interview evidence/i)).toBeInTheDocument();
@@ -206,7 +220,7 @@ describe("CounterMap Reasoning Timeline", () => {
       generated_at: null,
       message: "A reasoning map has not been prepared for this interview yet.",
     })));
-    render(<CounterMapExperience interviewSessionId="session-9" />);
+    render(<CounterMapExperience interviewSessionId="session-9" transport={counterMapTransport("session-9")} />);
     expect(await screen.findByRole("heading", { name: /no reasoning map was prepared/i })).toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
   });

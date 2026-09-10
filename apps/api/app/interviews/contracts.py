@@ -39,6 +39,40 @@ class CreateInterviewResponse(BaseModel):
     interview_path: str
 
 
+class InterviewHistoryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    state: Literal["all", "in_progress", "completed"] = "all"
+    limit: int = Field(default=20, ge=1, le=50)
+    offset: int = Field(default=0, ge=0)
+
+
+class CandidateInterviewHistoryItem(BaseModel):
+    interview_session_id: UUID
+    problem_title: str
+    template: str
+    mode: Literal["COACH", "SIMULATION"]
+    language: CandidateLanguage
+    candidate_level: str
+    status: str
+    display_status: Literal["IN_PROGRESS", "COMPLETED", "ENDED"]
+    started_at: datetime
+    completed_at: datetime | None
+    deadline_at: datetime
+    configured_duration_seconds: int
+    can_resume: bool
+    interview_path: str
+    report_path: str
+    countermap_path: str
+
+
+class CandidateInterviewHistoryResponse(BaseModel):
+    items: list[CandidateInterviewHistoryItem]
+    limit: int
+    offset: int
+    has_more: bool
+
+
 class RestoreInterviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

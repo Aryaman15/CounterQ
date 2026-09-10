@@ -8,28 +8,28 @@ import { CounterMapSurface } from "./CounterMapSurface";
 
 type CounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
 type CounterMapInspection = components["schemas"]["DevelopmentCounterMapInspection"];
+type CounterMapDetail = components["schemas"]["CandidateCounterMapNodeDetailResponse"];
+
+export type CounterMapTransport = {
+  loadCounterMap: (signal?: AbortSignal) => Promise<CounterMapResponse>;
+  loadNodeDetail: (nodeId: string, signal?: AbortSignal) => Promise<CounterMapDetail>;
+  loadInspection?: (signal?: AbortSignal) => Promise<CounterMapInspection>;
+};
 
 export function CounterMapExperience({
   interviewSessionId,
+  transport,
   pollIntervalMs = 1600,
 }: {
   interviewSessionId: string;
+  transport: CounterMapTransport;
   pollIntervalMs?: number;
 }) {
   const [response, setResponse] = useState<CounterMapResponse | null>(null);
   const [requestFailed, setRequestFailed] = useState(false);
-  const sessionPath = process.env.NODE_ENV === "development"
-    ? `/api/countermap/development/sessions/${interviewSessionId}`
-    : `/api/countermap/sessions/${interviewSessionId}`;
-
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
-      const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}${sessionPath}`,
-        { signal, cache: "no-store" },
-      );
-      if (!result.ok) throw new Error("CounterMap status unavailable");
-      const next = await result.json() as CounterMapResponse;
+      const next = await transport.loadCounterMap(signal);
       setResponse(next);
       setRequestFailed(false);
       return next.status;
@@ -38,7 +38,7 @@ export function CounterMapExperience({
       setRequestFailed(true);
       return null;
     }
-  }, [sessionPath]);
+  }, [transport]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -58,7 +58,11 @@ export function CounterMapExperience({
 
   const state = requestFailed ? "FAILED" : response?.status;
   return (
-    <section className="countermap-experience" aria-labelledby="countermap-title">
+    <section
+      className="countermap-experience"
+      aria-labelledby="countermap-title"
+      data-interview-session-id={interviewSessionId}
+    >
       <header className="countermap-header">
         <div>
           <p className="countermap-kicker">CounterMap · Session causality</p>
@@ -79,10 +83,7 @@ export function CounterMapExperience({
       ) : response?.status === "READY" && response.graph ? (
         <CounterMapSurface
           graph={response.graph}
-          detailUrlForNode={(nodeId) => (
-            `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}`
-            + `${sessionPath}/nodes/${encodeURIComponent(nodeId)}`
-          )}
+          loadNodeDetail={transport.loadNodeDetail}
         />
       ) : response?.status === "NOT_AVAILABLE" ? (
         <div className="countermap-state countermap-state-empty" role="status">
@@ -97,27 +98,27 @@ export function CounterMapExperience({
           <p>{response?.message ?? "CounterQ is connecting what you said, built, tested, and demonstrated."}</p>
         </div>
       )}
-      {process.env.NODE_ENV === "development" ? (
-        <DevelopmentCounterMapInspector interviewSessionId={interviewSessionId} />
+      {transport.loadInspection ? (
+        <DevelopmentCounterMapInspector loadInspection={transport.loadInspection} />
       ) : null}
     </section>
   );
 }
 
-function DevelopmentCounterMapInspector({ interviewSessionId }: { interviewSessionId: string }) {
+function DevelopmentCounterMapInspector({
+  loadInspection,
+}: {
+  loadInspection: (signal?: AbortSignal) => Promise<CounterMapInspection>;
+}) {
   const [inspection, setInspection] = useState<CounterMapInspection | null>(null);
   useEffect(() => {
     const controller = new AbortController();
     const load = async () => {
-      const result = await fetch(
-        `${process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000"}/api/countermap/development/sessions/${interviewSessionId}/inspection`,
-        { signal: controller.signal, cache: "no-store" },
-      );
-      if (result.ok) setInspection(await result.json() as CounterMapInspection);
+      setInspection(await loadInspection(controller.signal));
     };
     void load().catch(() => undefined);
     return () => controller.abort();
-  }, [interviewSessionId]);
+  }, [loadInspection]);
   if (!inspection) return null;
   return (
     <details className="development-countermap-inspector">

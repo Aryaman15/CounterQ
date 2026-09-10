@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth.dependencies import get_current_user
 from app.auth.models import User
+from app.auth.principal import CurrentUser
 from app.config.environment import development_spike_enabled
 from app.config.settings import Settings, get_settings
 from app.db.session import get_session, get_sessionmaker
@@ -22,24 +24,19 @@ from app.mastery.models import (
     ConceptMastery,
     ConceptMasteryEvidence,
     MasteryTransition,
-    RetestAttempt,
     RetestRecommendation,
     SkillMastery,
     SkillMasteryEvidence,
 )
-from app.mastery.policy import MASTERY_POLICY_VERSION, ContributionClassification, MasteryState
+from app.mastery.policy import MASTERY_POLICY_VERSION
+from app.mastery.read import read_candidate_mastery_overview
 from app.mastery.schema import (
     CandidateMasteryOverviewResponse,
     DevelopmentMasteryFixtureResponse,
     DevelopmentMasteryInspection,
 )
 from app.mastery.service import initial_mastery_recalculation_key
-from app.mastery.source import MasterySourceBuilder
-from app.mastery.view import (
-    PersistedMasteryProjection,
-    build_candidate_mastery_overview,
-    build_persisted_candidate_mastery_overview,
-)
+from app.mastery.view import build_candidate_mastery_overview
 from app.outbox.models import OutboxEvent
 from app.outbox.repository import OutboxRepository
 
@@ -56,6 +53,14 @@ class DevelopmentMasteryRecalculationResponse(BaseModel):
     outbox_event_id: UUID
     created: bool
     status: str
+
+
+@router.get("/me", response_model=CandidateMasteryOverviewResponse)
+async def current_user_mastery(
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> CandidateMasteryOverviewResponse:
+    return await read_candidate_mastery_overview(session, user_id=current_user.id)
 
 
 @router.get(
@@ -89,96 +94,7 @@ async def development_user_mastery(
     _require_development(settings)
     if await session.get(User, user_id) is None:
         raise HTTPException(status_code=404, detail="Mastery user was not found")
-    bundle = await MasterySourceBuilder(session).build(user_id, admitted_only=True)
-    concept_projections = list(
-        await session.scalars(select(ConceptMastery).where(ConceptMastery.user_id == user_id))
-    )
-    skill_projections = list(
-        await session.scalars(select(SkillMastery).where(SkillMastery.user_id == user_id))
-    )
-    concept_associations = list(
-        await session.scalars(
-            select(ConceptMasteryEvidence).where(ConceptMasteryEvidence.user_id == user_id)
-        )
-    )
-    skill_associations = list(
-        await session.scalars(
-            select(SkillMasteryEvidence).where(SkillMasteryEvidence.user_id == user_id)
-        )
-    )
-    recommendation_ids: dict[tuple[str, UUID], UUID] = {}
-    recommendation_statuses: dict[UUID, Literal["PENDING", "SCHEDULED"]] = {}
-    resumable_scheduled_attempt = (
-        select(RetestAttempt.id)
-        .join(InterviewSession, InterviewSession.id == RetestAttempt.interview_session_id)
-        .where(
-            RetestAttempt.retest_recommendation_id == RetestRecommendation.id,
-            RetestAttempt.outcome.is_(None),
-            RetestAttempt.completed_at.is_(None),
-            InterviewSession.status.in_(("READY", "ACTIVE", "RECONNECTING")),
-        )
-        .exists()
-    )
-    for row in await session.scalars(
-        select(RetestRecommendation)
-        .where(
-            RetestRecommendation.user_id == user_id,
-            or_(
-                RetestRecommendation.status == "PENDING",
-                and_(
-                    RetestRecommendation.status == "SCHEDULED",
-                    resumable_scheduled_attempt,
-                ),
-            ),
-        )
-        .order_by(
-            RetestRecommendation.priority.desc(),
-            RetestRecommendation.recommended_after,
-            RetestRecommendation.created_at,
-            RetestRecommendation.id,
-        )
-    ):
-        target_id = row.concept_id or row.skill_dimension_id
-        if target_id is not None:
-            target_type = "CONCEPT" if row.concept_id is not None else "SKILL"
-            recommendation_statuses[row.id] = cast(
-                Literal["PENDING", "SCHEDULED"], row.status
-            )
-            target_key = (target_type, target_id)
-            selected_id = recommendation_ids.get(target_key)
-            if selected_id is None or (
-                row.status == "SCHEDULED"
-                and recommendation_statuses[selected_id] == "PENDING"
-            ):
-                recommendation_ids[target_key] = row.id
-    latest_job = await session.scalar(
-        select(OutboxEvent)
-        .where(
-            OutboxEvent.aggregate_type == "User",
-            OutboxEvent.aggregate_id == user_id,
-            OutboxEvent.event_type == "RECALCULATE_MASTERY",
-        )
-        .order_by(OutboxEvent.created_at.desc(), OutboxEvent.id.desc())
-        .limit(1)
-    )
-    response_status = None
-    if latest_job and latest_job.status in {"PENDING", "PUBLISHED", "PROCESSING", "RETRY"}:
-        response_status = "UPDATING"
-    elif latest_job and latest_job.status == "FAILED":
-        response_status = "FAILED"
-    projections = _persisted_projections(
-        concept_projections,
-        skill_projections,
-        concept_associations,
-        skill_associations,
-    )
-    return build_persisted_candidate_mastery_overview(
-        bundle,
-        projections,
-        recommendation_ids=recommendation_ids,
-        recommendation_statuses=recommendation_statuses,
-        status=response_status,
-    )
+    return await read_candidate_mastery_overview(session, user_id=user_id)
 
 
 @router.post(
@@ -315,82 +231,6 @@ def _projection_policy_version(
     if not versions:
         return MASTERY_POLICY_VERSION
     return next(iter(versions)) if len(versions) == 1 else "mixed_projection_versions"
-
-
-def _persisted_projections(
-    concept_rows: list[ConceptMastery],
-    skill_rows: list[SkillMastery],
-    concept_links: list[ConceptMasteryEvidence],
-    skill_links: list[SkillMasteryEvidence],
-) -> tuple[PersistedMasteryProjection, ...]:
-    concept_contributions: dict[
-        UUID, list[tuple[UUID, ContributionClassification, str]]
-    ] = {}
-    for concept_link in concept_links:
-        concept_contributions.setdefault(concept_link.concept_id, []).append(
-            (
-                concept_link.evidence_id,
-                cast(
-                    ContributionClassification,
-                    concept_link.contribution_classification,
-                ),
-                concept_link.context_key,
-            )
-        )
-    skill_contributions: dict[
-        UUID, list[tuple[UUID, ContributionClassification, str]]
-    ] = {}
-    for skill_link in skill_links:
-        skill_contributions.setdefault(skill_link.skill_dimension_id, []).append(
-            (
-                skill_link.evidence_id,
-                cast(
-                    ContributionClassification,
-                    skill_link.contribution_classification,
-                ),
-                skill_link.context_key,
-            )
-        )
-    projections = [
-        PersistedMasteryProjection(
-            family="CONCEPT",
-            target_id=row.concept_id,
-            state=cast(MasteryState, row.state),
-            mastery_policy_version=row.mastery_policy_version,
-            projection_version=row.projection_version,
-            last_evaluated_at=row.last_evaluated_at,
-            last_evidence_at=row.last_evidence_at,
-            supporting_evidence_count=row.supporting_evidence_count,
-            context_diversity=row.context_diversity,
-            updated_at=row.updated_at,
-            contributions=tuple(
-                sorted(concept_contributions.get(row.concept_id, []), key=lambda item: str(item[0]))
-            ),
-        )
-        for row in concept_rows
-    ]
-    projections.extend(
-        PersistedMasteryProjection(
-            family="SKILL",
-            target_id=row.skill_dimension_id,
-            state=cast(MasteryState, row.state),
-            mastery_policy_version=row.mastery_policy_version,
-            projection_version=row.projection_version,
-            last_evaluated_at=row.last_evaluated_at,
-            last_evidence_at=row.last_evidence_at,
-            supporting_evidence_count=row.supporting_evidence_count,
-            context_diversity=row.context_diversity,
-            updated_at=row.updated_at,
-            contributions=tuple(
-                sorted(
-                    skill_contributions.get(row.skill_dimension_id, []),
-                    key=lambda item: str(item[0]),
-                )
-            ),
-        )
-        for row in skill_rows
-    )
-    return tuple(sorted(projections, key=lambda item: (item.family, str(item.target_id))))
 
 
 def _require_development(settings: Settings) -> None:

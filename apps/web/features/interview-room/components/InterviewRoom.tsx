@@ -1,6 +1,7 @@
 "use client";
 
 import type { components } from "@counterq/contracts/openapi";
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -22,6 +23,7 @@ import { developmentStarterCode } from "../fixtures/demoInterview";
 import { useCodeObservationCollector } from "../realtime/useCodeObservationCollector";
 import { useRealtimeVoice } from "../realtime/useRealtimeVoice";
 import type { RealtimeVoiceControls } from "../realtime/useRealtimeVoice";
+import { createDevelopmentReportTransport } from "../transports/developmentReport";
 import { EndInterviewDialog } from "./EndInterviewDialog";
 import { ExecutionPanel, type ExecutionViewResult } from "./ExecutionPanel";
 import { InterviewSetup } from "./InterviewSetup";
@@ -30,7 +32,14 @@ import { InterviewerSurface } from "./InterviewerSurface";
 import { MonacoInterviewEditor } from "./MonacoInterviewEditor";
 import { ProblemPanel } from "./ProblemPanel";
 import { RecentConversationDrawer } from "./RecentConversationDrawer";
+import { createDevelopmentCounterMapTransport } from "@/features/countermap/developmentCounterMapTransport";
 import { SessionReportExperience } from "./SessionReportExperience";
+
+const DevelopmentCounterMapExperience = dynamic(
+  () => import("@/features/countermap/CounterMapExperience").then(
+    (module) => module.CounterMapExperience,
+  ),
+);
 
 type InterviewRoomProps = {
   fixture: DemoInterviewRoomFixture;
@@ -435,9 +444,36 @@ export function InterviewRoom({
     terminal &&
     realtimeVoice.restoredBootstrap?.interview_session_id
   ) {
+    const reportTransport = createDevelopmentReportTransport(
+      realtimeVoice.restoredBootstrap.interview_session_id,
+    );
+    const counterMapTransport = createDevelopmentCounterMapTransport(
+      realtimeVoice.restoredBootstrap.interview_session_id,
+    );
     return (
       <SessionReportExperience
         interviewSessionId={realtimeVoice.restoredBootstrap.interview_session_id}
+        loadReport={reportTransport.loadReport}
+        loadInspection={reportTransport.loadInspection}
+        relatedCounterMap={(
+          <DevelopmentCounterMapExperience
+            interviewSessionId={realtimeVoice.restoredBootstrap.interview_session_id}
+            transport={counterMapTransport}
+          />
+        )}
+      />
+    );
+  }
+
+  if (
+    runtime.kind === "production" &&
+    terminal &&
+    realtimeVoice.restoredBootstrap?.interview_session_id
+  ) {
+    return (
+      <InterviewCompletionHandoff
+        interviewSessionId={realtimeVoice.restoredBootstrap.interview_session_id}
+        reason={terminal.reason}
       />
     );
   }
@@ -572,6 +608,30 @@ export function InterviewRoom({
         }}
       />
       <span className="storage-key-marker" data-storage-key={DEMO_SPLITTER_STORAGE_KEY} aria-hidden="true" />
+    </main>
+  );
+}
+
+export function InterviewCompletionHandoff({
+  interviewSessionId,
+  reason,
+}: {
+  interviewSessionId: string;
+  reason: string;
+}) {
+  return (
+    <main className="interview-completion-handoff">
+      <div className="product-wordmark"><span aria-hidden="true">CQ</span><strong>CounterQ</strong></div>
+      <p className="product-kicker">Interview complete</p>
+      <h1>{reason === "TIME_EXPIRED" ? "Time. Your evidence is being assembled." : "Your interview is complete."}</h1>
+      <p>
+        CounterQ is turning the delivered conversation, code, and validated evidence into a report.
+        You can open it now while projection work finishes safely in the background.
+      </p>
+      <div className="interview-completion-actions">
+        <Link href={`/interview/${interviewSessionId}/report`}>Open Report</Link>
+        <Link href="/">Return home</Link>
+      </div>
     </main>
   );
 }

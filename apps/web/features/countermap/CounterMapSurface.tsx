@@ -7,15 +7,16 @@ import { CounterMapDetailDrawer } from "./CounterMapDetailDrawer";
 import { CounterMapGraph } from "./CounterMapGraph";
 import { ReasoningTimeline } from "./ReasoningTimeline";
 import type { CounterMapGraph as CounterMapGraphContract, CounterMapNode } from "./counterMapPresentation";
+import type { CounterMapDetail } from "./counterMapPresentation";
 
 type CounterMapView = "GRAPH" | "TIMELINE";
 
 export function CounterMapSurface({
   graph,
-  detailUrlForNode,
+  loadNodeDetail,
 }: {
   graph: CounterMapGraphContract;
-  detailUrlForNode: (nodeId: string) => string;
+  loadNodeDetail: (nodeId: string, signal?: AbortSignal) => Promise<CounterMapDetail>;
 }) {
   const [view, setView] = useState<CounterMapView>("GRAPH");
   const [selectedNode, setSelectedNode] = useState<CounterMapNode | null>(null);
@@ -80,7 +81,7 @@ export function CounterMapSurface({
         <CounterMapDetailDrawer
           graph={graph}
           node={selectedNode}
-          detailUrlForNode={detailUrlForNode}
+          loadNodeDetail={loadNodeDetail}
           onNavigateNode={selectNode}
           onClose={closeDrawer}
         />

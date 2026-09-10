@@ -1,6 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@clerk/nextjs", () => ({
+  UserButton: () => null,
+  useAuth: () => ({
+    getToken: vi.fn(async () => null),
+    isLoaded: true,
+    isSignedIn: false,
+    userId: undefined,
+  }),
+}));
+
 import Home from "../app/page";
 import InterviewDemoPage from "../app/interview/demo/page";
 import {
@@ -168,8 +178,8 @@ describe("Interview Room demo", () => {
   it("renders a development launcher to the preview route", () => {
     render(<Home />);
 
-    expect(screen.getByRole("heading", { name: "CounterQ Interview Room" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Open Interview Room Preview" })).toHaveAttribute(
+    expect(screen.getByRole("heading", { name: "Practice the part after your answer." })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Development Interview Room preview" })).toHaveAttribute(
       "href",
       "/interview/demo",
     );

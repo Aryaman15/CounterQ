@@ -1332,6 +1332,9 @@ pnpm run eval:stage8
 Evaluate the Stage 9B self-serve production interview gate:
 pnpm run eval:stage9b
 
+Evaluate the Stage 9C product shell and current-user learning surfaces gate:
+pnpm run eval:stage9c
+
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1489,12 +1492,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 9B — Self-Serve Interview Setup + Production Launch / Restore
+Stage 9C — Product Shell + Current-User Learning Surfaces + History
 
 Current Goal:
-Allow an authenticated candidate with a CandidateProfile to configure, launch,
-restore and continue one owned curated production interview without beginning
-the Stage 9C dashboard, history or deletion surfaces.
+Allow an authenticated candidate to navigate the current-user product shell,
+history, Report, CounterMap, Mastery, production retests and account preferences
+without beginning Stage 9D deletion or Stage 9E custom-problem intake.
 ```
 
 Update only this small section as implementation progresses.

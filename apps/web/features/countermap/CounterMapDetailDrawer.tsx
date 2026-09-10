@@ -25,13 +25,13 @@ import {
 export function CounterMapDetailDrawer({
   graph,
   node,
-  detailUrlForNode,
+  loadNodeDetail,
   onNavigateNode,
   onClose,
 }: {
   graph: CounterMapGraph;
   node: CounterMapNode;
-  detailUrlForNode: (nodeId: string) => string;
+  loadNodeDetail: (nodeId: string, signal?: AbortSignal) => Promise<CounterMapDetail>;
   onNavigateNode: (node: CounterMapNode) => void;
   onClose: () => void;
 }) {
@@ -41,7 +41,6 @@ export function CounterMapDetailDrawer({
   const [detail, setDetail] = useState<CounterMapDetail | null>(null);
   const [failed, setFailed] = useState(false);
   const connections = useMemo(() => connectionDetails(graph, node), [graph, node]);
-  const detailUrl = detailUrlForNode(node.node_id);
 
   useEffect(() => {
     previousFocus.current = document.activeElement instanceof HTMLElement
@@ -87,17 +86,13 @@ export function CounterMapDetailDrawer({
     const controller = new AbortController();
     setDetail(null);
     setFailed(false);
-    void fetch(detailUrl, { signal: controller.signal, cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("CounterMap source detail unavailable");
-        return response.json() as Promise<CounterMapDetail>;
-      })
+    void loadNodeDetail(node.node_id, controller.signal)
       .then(setDetail)
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
       });
     return () => controller.abort();
-  }, [detailUrl]);
+  }, [loadNodeDetail, node.node_id]);
 
   return (
     <div className="countermap-drawer-layer">

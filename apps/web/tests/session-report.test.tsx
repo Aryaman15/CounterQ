@@ -115,6 +115,16 @@ function response(value: ReportResponse) {
   return { ok: true, json: async () => value } as Response;
 }
 
+function reportLoader(interviewSessionId: string) {
+  return async (signal?: AbortSignal): Promise<ReportResponse> => {
+    const result = await fetch(`/api/reports/sessions/${interviewSessionId}`, {
+      cache: "no-store",
+      signal,
+    });
+    return result.json() as Promise<ReportResponse>;
+  };
+}
+
 describe("post-interview Session Report", () => {
   beforeEach(() => vi.unstubAllGlobals());
 
@@ -123,7 +133,7 @@ describe("post-interview Session Report", () => {
       ...reportResponse(), status: "PREPARING", report: null, report_id: null,
       report_version: null, generated_at: null,
     })));
-    render(<SessionReportExperience interviewSessionId="session-1" pollIntervalMs={60_000} />);
+    render(<SessionReportExperience interviewSessionId="session-1" loadReport={reportLoader("session-1")} pollIntervalMs={60_000} />);
 
     expect(screen.getByRole("heading", { name: /reviewing what you demonstrated/i })).toBeInTheDocument();
     await waitFor(() => expect(fetch).toHaveBeenCalledWith(
@@ -139,7 +149,7 @@ describe("post-interview Session Report", () => {
         report_version: null, generated_at: null,
       }))
       .mockResolvedValueOnce(response(reportResponse())));
-    render(<SessionReportExperience interviewSessionId="session-2" pollIntervalMs={1} />);
+    render(<SessionReportExperience interviewSessionId="session-2" loadReport={reportLoader("session-2")} pollIntervalMs={1} />);
 
     expect(screen.getByRole("heading", { name: /reviewing what you demonstrated/i })).toBeInTheDocument();
     expect(await screen.findByRole("heading", { name: "Two Sum" })).toBeInTheDocument();
@@ -150,7 +160,7 @@ describe("post-interview Session Report", () => {
 
   it("keeps Simulation free of a fabricated Coach section", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(reportResponse("SIMULATION"))));
-    render(<SessionReportExperience interviewSessionId="session-3" />);
+    render(<SessionReportExperience interviewSessionId="session-3" loadReport={reportLoader("session-3")} />);
 
     await screen.findByRole("heading", { name: "Two Sum" });
     expect(screen.queryByRole("heading", { name: /Before help/i })).not.toBeInTheDocument();
@@ -158,7 +168,7 @@ describe("post-interview Session Report", () => {
 
   it("separates Coach before-help and assisted outcomes", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(reportResponse("COACH"))));
-    render(<SessionReportExperience interviewSessionId="session-4" />);
+    render(<SessionReportExperience interviewSessionId="session-4" loadReport={reportLoader("session-4")} />);
 
     expect(await screen.findByRole("heading", { name: "Before help → after help" })).toBeInTheDocument();
     expect(screen.getByText("Before help")).toBeInTheDocument();
@@ -168,7 +178,7 @@ describe("post-interview Session Report", () => {
 
   it("reveals candidate-safe source context without exposing internal IDs", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(reportResponse())));
-    render(<SessionReportExperience interviewSessionId="session-5" />);
+    render(<SessionReportExperience interviewSessionId="session-5" loadReport={reportLoader("session-5")} />);
 
     const disclosure = (await screen.findAllByText("Why this?"))[0];
     fireEvent.click(disclosure);
@@ -182,7 +192,7 @@ describe("post-interview Session Report", () => {
       ...reportResponse(), status: "FAILED", report: null, generated_at: null,
       message: "Your interview is saved, but the detailed report could not be generated yet.",
     })));
-    render(<SessionReportExperience interviewSessionId="session-6" />);
+    render(<SessionReportExperience interviewSessionId="session-6" loadReport={reportLoader("session-6")} />);
 
     expect(await screen.findByRole("heading", { name: /isn’t ready yet/i })).toBeInTheDocument();
     expect(screen.getByText("Your completed interview is preserved.")).toBeInTheDocument();
