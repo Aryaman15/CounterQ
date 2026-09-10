@@ -42,6 +42,14 @@ export class CounterQApiError extends Error {
   }
 }
 
+export function isAbortError(error: unknown): boolean {
+  return (
+    typeof DOMException !== "undefined"
+    && error instanceof DOMException
+    && error.name === "AbortError"
+  );
+}
+
 export class CounterQApiClient {
   private readonly baseUrl: string;
 
@@ -221,7 +229,8 @@ export class CounterQApiClient {
         `${this.baseUrl}${path}`,
         { ...init, headers },
       );
-    } catch {
+    } catch (error) {
+      if (init.signal?.aborted || isAbortError(error)) throw error;
       developmentAuthDiagnostic("fetch failed");
       throw new CounterQApiError("REQUEST_FAILED", 0, "FETCH");
     }
@@ -236,7 +245,8 @@ export class CounterQApiClient {
     }
     try {
       return await response.json() as T;
-    } catch {
+    } catch (error) {
+      if (init.signal?.aborted || isAbortError(error)) throw error;
       developmentAuthDiagnostic("API response body invalid");
       throw new CounterQApiError("REQUEST_FAILED", response.status, "RESPONSE_BODY");
     }

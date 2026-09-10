@@ -176,6 +176,15 @@ function pathname(input: RequestInfo | URL): string {
   return new URL(String(input), "http://counterq.test").pathname;
 }
 
+function rejectOnAbort(signal: AbortSignal | null | undefined): Promise<Response> {
+  if (!signal) return Promise.reject(new Error("Expected an AbortSignal"));
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(new DOMException("Request cancelled", "AbortError"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 function productFetch({
   historyResponse = history(),
   masteryResponse = mastery(),
@@ -361,6 +370,40 @@ describe("Stage 9C authenticated candidate product", () => {
     rendered.unmount();
   });
 
+  it("recovers the production Report request after Strict Mode cancels the first effect", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    productMocks.pathname = `/interview/${completedId}/report`;
+    let reportRequests = 0;
+    const reportPaths: string[] = [];
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = pathname(input);
+      if (path === "/api/me") return Promise.resolve(json(me()));
+      if (path === `/api/reports/sessions/${completedId}`) {
+        reportPaths.push(path);
+        reportRequests += 1;
+        if (reportRequests === 1) return rejectOnAbort(init?.signal);
+        return Promise.resolve(json(preparingReport()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${String(input)}`));
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    const rendered = render(
+      <StrictMode>
+        <ProductionSessionReportPage interviewSessionId={completedId} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("heading", {
+      name: /reviewing what you demonstrated/i,
+    })).toBeInTheDocument();
+    await waitFor(() => expect(reportRequests).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText(/temporarily out of reach/i)).not.toBeInTheDocument();
+    expect(reportPaths.every((path) => path === `/api/reports/sessions/${completedId}`)).toBe(true);
+    expect(reportPaths.some((path) => path.includes("/development/"))).toBe(false);
+    rendered.unmount();
+  });
+
   it("loads production CounterMap and node detail through the authenticated client", async () => {
     vi.stubEnv("NODE_ENV", "development");
     productMocks.pathname = `/interview/${completedId}/countermap`;
@@ -389,6 +432,105 @@ describe("Stage 9C authenticated candidate product", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     expect(fetch.mock.calls.some(([input]) => String(input).includes(`/nodes/${question.node_id}`))).toBe(true);
     expect(fetch.mock.calls.some(([input]) => String(input).includes("/api/countermap/development/"))).toBe(false);
+  });
+
+  it("recovers the production CounterMap request after Strict Mode cancels the first effect", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    productMocks.pathname = `/interview/${completedId}/countermap`;
+    let mapRequests = 0;
+    const mapPaths: string[] = [];
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = pathname(input);
+      if (path === "/api/me") return Promise.resolve(json(me()));
+      if (path === `/api/countermap/sessions/${completedId}`) {
+        mapPaths.push(path);
+        mapRequests += 1;
+        if (mapRequests === 1) return rejectOnAbort(init?.signal);
+        return Promise.resolve(json(counterMap()));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${String(input)}`));
+    });
+    vi.stubGlobal("fetch", fetch);
+
+    render(
+      <StrictMode>
+        <ProductionCounterMapPage interviewSessionId={completedId} />
+      </StrictMode>,
+    );
+
+    expect(await screen.findByRole("button", { name: "Timeline" })).toBeInTheDocument();
+    await waitFor(() => expect(mapRequests).toBeGreaterThanOrEqual(2));
+    expect(screen.queryByText(/unavailable for this interview/i)).not.toBeInTheDocument();
+    expect(mapPaths.every((path) => path === `/api/countermap/sessions/${completedId}`)).toBe(true);
+    expect(mapPaths.some((path) => path.includes("/development/"))).toBe(false);
+  });
+
+  it("does not let an aborted node A request fail or overwrite successful node B detail", async () => {
+    productMocks.pathname = `/interview/${completedId}/countermap`;
+    const graph = counterMapUiSamples[0];
+    const nodeA = graph.nodes[0];
+    const nodeB = graph.nodes.find((node) => node.node_type === "QUESTION");
+    if (!nodeB) throw new Error("CounterMap sample must have a question");
+    let nodeARequests = 0;
+    let nodeAAborted = false;
+    const fetch = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const path = pathname(input);
+      if (path === "/api/me") return Promise.resolve(json(me()));
+      if (path === `/api/countermap/sessions/${completedId}`) {
+        return Promise.resolve(json(counterMap()));
+      }
+      if (path.endsWith(`/nodes/${nodeA.node_id}`)) {
+        nodeARequests += 1;
+        init?.signal?.addEventListener("abort", () => { nodeAAborted = true; }, { once: true });
+        return rejectOnAbort(init?.signal);
+      }
+      if (path.endsWith(`/nodes/${nodeB.node_id}`)) {
+        return Promise.resolve(json({
+          node_id: nodeB.node_id,
+          node_type: nodeB.node_type,
+          title: nodeB.title,
+          summary: nodeB.summary,
+          stage: nodeB.stage ?? null,
+          source_status: "AVAILABLE",
+          statement: { text: "Node B detail loaded", exact_quote: true },
+        }));
+      }
+      return Promise.reject(new Error(`Unexpected request: ${String(input)}`));
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<ProductionCounterMapPage interviewSessionId={completedId} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Timeline" }));
+    fireEvent.click(screen.getAllByRole("button", { name: /Inspect this moment: You said/i })[0]);
+    await waitFor(() => expect(nodeARequests).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: /View the question: CounterQ asked/i }));
+
+    expect(await screen.findByText("Node B detail loaded")).toBeInTheDocument();
+    expect(nodeAAborted).toBe(true);
+    expect(screen.getByRole("dialog")).toHaveTextContent("CounterQ asked");
+    expect(screen.queryByText(/This source could not be loaded/i)).not.toBeInTheDocument();
+  });
+
+  it("preserves native AbortError cancellation in the authenticated API client", async () => {
+    const controller = new AbortController();
+    const fetch = vi.fn(function (
+      this: typeof globalThis,
+      _input: RequestInfo | URL,
+      init?: RequestInit,
+    ) {
+      expect(this).toBe(globalThis);
+      return rejectOnAbort(init?.signal);
+    });
+    const api = new CounterQApiClient(
+      async () => "fresh-token",
+      "http://api.test",
+      fetch as typeof globalThis.fetch,
+    );
+    const request = api.getSessionReport(completedId, controller.signal);
+    await waitFor(() => expect(fetch).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("keeps every production client method on current-user candidate routes", async () => {

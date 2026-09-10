@@ -147,6 +147,40 @@ async def _history_fixture() -> tuple[UUID, UUID, UUID, UUID, UUID, UUID]:
         await engine.dispose()
 
 
+async def _history_deadline_fixture() -> tuple[UUID, UUID, UUID]:
+    engine = build_engine()
+    now = datetime.now(UTC)
+    try:
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session, session.begin():
+            live = await create_development_interview(
+                session,
+                now=now - timedelta(minutes=20),
+                template="STANDARD_CODING_INTERVIEW",
+            )
+            repository = InterviewRepository(session)
+            expired_configuration = await repository.add_configuration(
+                mode="SIMULATION",
+                level="NEW_GRAD",
+                language="cpp",
+                configured_duration_seconds=600,
+                problem_source="DEVELOPMENT_FIXTURE",
+            )
+            expired = await repository.add_session(
+                user_id=live.user.id,
+                configuration_id=expired_configuration.id,
+                problem_version_id=live.problem_version.id,
+                interview_pack_version_id=live.pack_version.id,
+                current_stage="IMPLEMENTATION",
+                state_version=2,
+                status="ACTIVE",
+                started_at=now - timedelta(minutes=11),
+                deadline_at=now - timedelta(minutes=1),
+            )
+            return live.user.id, live.interview_session.id, expired.id
+    finally:
+        await engine.dispose()
+
+
 async def test_history_is_current_user_scoped_filtered_bounded_and_newest_first() -> None:
     owner_id, foreign_id, active_id, completed_id, deletion_id, _ = await _history_fixture()
     app, engine = _app_for_user(owner_id)
@@ -193,6 +227,50 @@ async def test_history_is_current_user_scoped_filtered_bounded_and_newest_first(
     assert selected_user.status_code == 422
     assert unbounded.status_code == 422
     assert {row["interview_session_id"] for row in foreign_rows.json()["items"]}.isdisjoint(ids)
+
+
+async def test_in_progress_history_skips_newer_expired_active_session() -> None:
+    owner_id, live_id, expired_id = await _history_deadline_fixture()
+    app, engine = _app_for_user(owner_id)
+    try:
+        async with AsyncClient(
+            transport=ASGITransport(app=app),
+            base_url="http://test",
+        ) as client:
+            in_progress = await client.get(
+                "/api/interviews?state=in_progress&limit=1&offset=0"
+            )
+            all_rows = await client.get("/api/interviews?state=all&limit=50&offset=0")
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            status_rows = (
+                await session.execute(
+                    select(InterviewSession.id, InterviewSession.status).where(
+                        InterviewSession.id.in_((live_id, expired_id))
+                    )
+                )
+            ).tuples()
+            canonical_statuses: dict[UUID, str] = {
+                interview_id: status for interview_id, status in status_rows
+            }
+    finally:
+        await engine.dispose()
+
+    assert in_progress.status_code == 200, in_progress.text
+    in_progress_items = in_progress.json()["items"]
+    assert len(in_progress_items) == 1
+    assert in_progress_items[0]["interview_session_id"] == str(live_id)
+    assert in_progress_items[0]["display_status"] == "IN_PROGRESS"
+    assert in_progress_items[0]["can_resume"] is True
+
+    assert all_rows.status_code == 200, all_rows.text
+    by_id = {
+        item["interview_session_id"]: item for item in all_rows.json()["items"]
+    }
+    assert by_id[str(expired_id)]["display_status"] == "ENDED"
+    assert by_id[str(expired_id)]["can_resume"] is False
+    assert by_id[str(live_id)]["display_status"] == "IN_PROGRESS"
+    assert by_id[str(live_id)]["can_resume"] is True
+    assert canonical_statuses == {live_id: "ACTIVE", expired_id: "ACTIVE"}
 
 
 async def test_profile_update_persists_without_mutating_existing_configuration() -> None:

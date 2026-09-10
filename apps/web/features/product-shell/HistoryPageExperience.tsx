@@ -38,7 +38,8 @@ function InterviewHistory({ api }: { api: CounterQApiClient }) {
     setResponse(null);
     setFailed(false);
     try {
-      setResponse(await api.listInterviews(filter, 50, 0, signal));
+      const next = await api.listInterviews(filter, 50, 0, signal);
+      if (!signal.aborted) setResponse(next);
     } catch {
       if (!signal.aborted) setFailed(true);
     }

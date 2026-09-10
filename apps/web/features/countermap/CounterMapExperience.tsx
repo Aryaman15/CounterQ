@@ -4,6 +4,8 @@ import type { components } from "@counterq/contracts/openapi";
 import { Network, RotateCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { isAbortError } from "@/lib/counterq-api";
+
 import { CounterMapSurface } from "./CounterMapSurface";
 
 type CounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
@@ -30,11 +32,12 @@ export function CounterMapExperience({
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
       const next = await transport.loadCounterMap(signal);
+      if (signal?.aborted) return null;
       setResponse(next);
       setRequestFailed(false);
       return next.status;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return null;
+      if (signal?.aborted || isAbortError(error)) return null;
       setRequestFailed(true);
       return null;
     }

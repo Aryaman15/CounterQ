@@ -30,7 +30,8 @@ function CurrentUserMastery({ api }: { api: CounterQApiClient }) {
   const load = useCallback(async (signal: AbortSignal) => {
     setFailed(false);
     try {
-      setOverview(await api.getMastery(signal));
+      const next = await api.getMastery(signal);
+      if (!signal.aborted) setOverview(next);
     } catch {
       if (!signal.aborted) setFailed(true);
     }

@@ -5,6 +5,8 @@ import { ChevronDown, FileCheck2, RotateCw, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { isAbortError } from "@/lib/counterq-api";
+
 type ReportResponse = components["schemas"]["CandidateSessionReportResponse"];
 type ReportDocument = components["schemas"]["SessionReportDocument"];
 type ReportFinding = components["schemas"]["ReportFinding"];
@@ -49,11 +51,12 @@ export function SessionReportExperience({
   const load = useCallback(async (signal?: AbortSignal): Promise<ReportResponse["status"] | null> => {
     try {
       const next = await loadReport(signal);
+      if (signal?.aborted) return null;
       setResponse(next);
       setRequestFailed(false);
       return next.status;
     } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return null;
+      if (signal?.aborted || isAbortError(error)) return null;
       setRequestFailed(true);
       return null;
     }

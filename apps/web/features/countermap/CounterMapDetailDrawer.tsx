@@ -11,6 +11,8 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isAbortError } from "@/lib/counterq-api";
+
 import {
   eyebrowForNode,
   independenceLabel,
@@ -38,6 +40,7 @@ export function CounterMapDetailDrawer({
   const drawerRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const detailRequestGeneration = useRef(0);
   const [detail, setDetail] = useState<CounterMapDetail | null>(null);
   const [failed, setFailed] = useState(false);
   const connections = useMemo(() => connectionDetails(graph, node), [graph, node]);
@@ -84,12 +87,22 @@ export function CounterMapDetailDrawer({
 
   useEffect(() => {
     const controller = new AbortController();
+    const generation = ++detailRequestGeneration.current;
     setDetail(null);
     setFailed(false);
     void loadNodeDetail(node.node_id, controller.signal)
-      .then(setDetail)
+      .then((next) => {
+        if (
+          !controller.signal.aborted
+          && detailRequestGeneration.current === generation
+        ) setDetail(next);
+      })
       .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === "AbortError")) setFailed(true);
+        if (
+          !controller.signal.aborted
+          && detailRequestGeneration.current === generation
+          && !isAbortError(error)
+        ) setFailed(true);
       });
     return () => controller.abort();
   }, [loadNodeDetail, node.node_id]);

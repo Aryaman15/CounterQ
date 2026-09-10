@@ -49,7 +49,10 @@ class CandidateInterviewHistoryReader:
             )
         )
         if state == "in_progress":
-            statement = statement.where(InterviewSession.status.in_(_IN_PROGRESS_STATUSES))
+            statement = statement.where(
+                InterviewSession.status.in_(_IN_PROGRESS_STATUSES),
+                InterviewSession.deadline_at > current_time,
+            )
         elif state == "completed":
             statement = statement.where(InterviewSession.status == "COMPLETED")
         rows = (
@@ -77,7 +80,11 @@ class CandidateInterviewHistoryReader:
         *,
         now: datetime,
     ) -> CandidateInterviewHistoryItem:
-        if interview.status in _IN_PROGRESS_STATUSES:
+        can_resume = (
+            interview.status in _IN_PROGRESS_STATUSES
+            and interview.deadline_at > now
+        )
+        if can_resume:
             display_status: Literal["IN_PROGRESS", "COMPLETED", "ENDED"] = "IN_PROGRESS"
         elif interview.status == "COMPLETED":
             display_status = "COMPLETED"
@@ -97,10 +104,7 @@ class CandidateInterviewHistoryReader:
             completed_at=interview.completed_at,
             deadline_at=interview.deadline_at,
             configured_duration_seconds=configuration.configured_duration_seconds,
-            can_resume=(
-                interview.status in _IN_PROGRESS_STATUSES
-                and interview.deadline_at > now
-            ),
+            can_resume=can_resume,
             interview_path=f"/interview/{interview.id}",
             report_path=f"/interview/{interview.id}/report",
             countermap_path=f"/interview/{interview.id}/countermap",
