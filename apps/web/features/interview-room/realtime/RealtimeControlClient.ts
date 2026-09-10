@@ -221,6 +221,7 @@ export class RealtimeControlClient {
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private manualDisconnect = false;
+  private lifecycleGeneration = 0;
   private activeDelivery: ActivePromptDelivery | null = null;
   private debug: CanonicalControlDebug = emptyDebug();
 
@@ -276,12 +277,16 @@ export class RealtimeControlClient {
     if (!this.production) {
       throw new Error("Production interview transport is not configured.");
     }
-    const bootstrap = this.bootstrap ?? await this.refreshProductionBootstrap();
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const bootstrap = this.bootstrap
+      ?? await this.refreshProductionBootstrap(lifecycleGeneration);
+    this.assertCurrentLifecycle(lifecycleGeneration);
     this.manualDisconnect = false;
     this.emit({ type: "connected", bootstrap });
     if (isProductionParticipantActive(bootstrap.session_status)) {
-      await this.openWebSocket();
+      await this.openWebSocket(lifecycleGeneration);
     }
+    this.assertCurrentLifecycle(lifecycleGeneration);
     return bootstrap;
   }
 
@@ -381,6 +386,7 @@ export class RealtimeControlClient {
   }
 
   disconnect(): void {
+    this.lifecycleGeneration += 1;
     this.manualDisconnect = true;
     if (this.reconnectTimer !== null) {
       window.clearTimeout(this.reconnectTimer);
@@ -743,7 +749,10 @@ export class RealtimeControlClient {
     });
   }
 
-  private async openWebSocket(): Promise<void> {
+  private async openWebSocket(
+    lifecycleGeneration = this.lifecycleGeneration,
+  ): Promise<void> {
+    this.assertCurrentLifecycle(lifecycleGeneration);
     if (!this.bootstrap) {
       throw new Error("Interview has not been restored.");
     }
@@ -752,11 +761,13 @@ export class RealtimeControlClient {
         return;
       }
       await this.waitForControlReady();
+      this.assertCurrentLifecycle(lifecycleGeneration);
       return;
     }
     let controlPath = this.bootstrap.control_websocket_path;
     if (this.production) {
       const issued = await this.production.issueControlTicket();
+      this.assertCurrentLifecycle(lifecycleGeneration);
       if (issued.control_websocket_path !== this.bootstrap.control_websocket_path) {
         throw new Error("CounterQ issued a control ticket for an unexpected session.");
       }
@@ -794,7 +805,9 @@ export class RealtimeControlClient {
       websocket.addEventListener("open", handleOpen);
       websocket.addEventListener("error", handleError);
     });
+    this.assertCurrentLifecycle(lifecycleGeneration);
     await this.waitForControlReady();
+    this.assertCurrentLifecycle(lifecycleGeneration);
     this.sendBestEffort({
       type: "client_hello",
       last_acknowledged_server_sequence: this.debug.lastServerSequence,
@@ -1297,7 +1310,11 @@ export class RealtimeControlClient {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null || this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    if (
+      this.manualDisconnect
+      || this.reconnectTimer !== null
+      || this.reconnectAttempts >= MAX_RECONNECT_ATTEMPTS
+    ) {
       return;
     }
     this.reconnectAttempts += 1;
@@ -1326,20 +1343,25 @@ export class RealtimeControlClient {
   }
 
   private async reconnectProductionControl(): Promise<void> {
-    const restored = await this.refreshProductionBootstrap();
+    const lifecycleGeneration = this.lifecycleGeneration;
+    const restored = await this.refreshProductionBootstrap(lifecycleGeneration);
+    this.assertCurrentLifecycle(lifecycleGeneration);
     if (!isProductionParticipantActive(restored.session_status)) {
       // Terminal canonical truth must reach the room without opening another socket.
       this.emit({ type: "connected", bootstrap: restored });
       return;
     }
-    await this.openWebSocket();
+    await this.openWebSocket(lifecycleGeneration);
   }
 
-  private async refreshProductionBootstrap(): Promise<DevelopmentBootstrapResponse> {
+  private async refreshProductionBootstrap(
+    lifecycleGeneration: number,
+  ): Promise<DevelopmentBootstrapResponse> {
     if (!this.production) {
       throw new Error("Production interview transport is not configured.");
     }
     const restored = await this.production.restore(this.clientInstanceId());
+    this.assertCurrentLifecycle(lifecycleGeneration);
     if (restored.interview_session_id !== this.production.interviewSessionId) {
       throw new Error("CounterQ restored an unexpected interview session.");
     }
@@ -1352,6 +1374,12 @@ export class RealtimeControlClient {
       lastServerSequence: restored.last_server_sequence,
     });
     return restored;
+  }
+
+  private assertCurrentLifecycle(lifecycleGeneration: number): void {
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      throw new Error("Realtime control lifecycle is no longer current.");
+    }
   }
 
   private patchDebug(patch: Partial<CanonicalControlDebug>): void {

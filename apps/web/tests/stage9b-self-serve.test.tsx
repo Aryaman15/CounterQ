@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DevelopmentBootstrapResponse } from "@/features/interview-room/realtime/RealtimeControlClient";
@@ -552,6 +553,63 @@ describe("Stage 9B self-serve frontend", () => {
       completed_at: "2026-09-10T10:20:00Z",
       terminal_reason: "USER_ENDED",
     });
+  });
+
+  it("survives Strict Mode restore replay without leaving an obsolete production client", async () => {
+    FakeControlWebSocket.autoOpen = true;
+    vi.stubGlobal("WebSocket", FakeControlWebSocket);
+    let resolveObsoleteRestore!: (response: Response) => void;
+    const obsoleteRestore = new Promise<Response>((resolve) => {
+      resolveObsoleteRestore = resolve;
+    });
+    let restoreRequests = 0;
+    let ticketRequests = 0;
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/interviews/session-1/restore")) {
+        restoreRequests += 1;
+        if (restoreRequests === 1) return obsoleteRestore;
+        return jsonResponse({ ...bootstrap, deadline_at: "2099-09-10T10:30:00Z" });
+      }
+      if (url.endsWith("/api/realtime/interviews/session-1/control-ticket")) {
+        ticketRequests += 1;
+        return jsonResponse({
+          ticket: `strict-ticket-${ticketRequests}`,
+          expires_after_seconds: 60,
+          control_websocket_path: "/api/realtime/control/session-1",
+        });
+      }
+      throw new Error(`Unexpected Strict Mode production request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchFn);
+
+    const mounted = render(
+      <StrictMode>
+        <ProductionInterviewRoom interviewSessionId="session-1" />
+      </StrictMode>,
+    );
+
+    await waitFor(() => expect(restoreRequests).toBe(2));
+    await screen.findByRole("heading", { name: "First Problem" });
+    expect(screen.queryByRole("heading", { name: "Interview unavailable" })).toBeNull();
+    expect(FakeControlWebSocket.instances).toHaveLength(1);
+    expect(FakeControlWebSocket.instances[0].url).toContain("ticket=strict-ticket-1");
+
+    resolveObsoleteRestore(jsonResponse({ ...bootstrap, deadline_at: "2099-09-10T10:30:00Z" }));
+    await flushAsyncWork();
+
+    const urls = fetchFn.mock.calls.map(([url]) => String(url));
+    expect(urls.filter((url) => url.endsWith("/api/interviews/session-1/restore")))
+      .toHaveLength(2);
+    expect(urls.filter((url) => url.endsWith("/api/interviews"))).toHaveLength(0);
+    expect(urls.filter((url) => url.includes("/development"))).toHaveLength(0);
+    expect(urls.filter((url) => url.endsWith("/control-ticket"))).toHaveLength(1);
+    expect(FakeControlWebSocket.instances).toHaveLength(1);
+
+    const activeSocket = FakeControlWebSocket.instances[0];
+    expect(activeSocket.close).not.toHaveBeenCalled();
+    mounted.unmount();
+    expect(activeSocket.close).toHaveBeenCalledOnce();
   });
 
   it("production room refresh restores the route ID and never creates or bootstraps development state", async () => {

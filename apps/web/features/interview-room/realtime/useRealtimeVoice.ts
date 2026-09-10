@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, MutableRefObject, SetStateAction } from "react";
 
 import type { VoicePresenceState } from "../models/candidate-visible";
@@ -117,7 +117,17 @@ export function useRealtimeVoice(
   const transcriptDraftsRef = useRef(new Map<string, string>());
   const activeTranscriptKeyRef = useRef<string | null>(null);
   const pendingCodeSourceRef = useRef<string | null>(null);
-  const autoRestoreAttemptedRef = useRef(false);
+  const restoreLifecycleGenerationRef = useRef(0);
+  const clientFactoryRef = useRef(clientFactory);
+  const controlClientFactoryRef = useRef(controlClientFactory);
+  const productionRef = useRef(production);
+  const developmentLanguageRef = useRef(developmentLanguage);
+  const terminalSessionRef = useRef(terminalSession);
+  clientFactoryRef.current = clientFactory;
+  controlClientFactoryRef.current = controlClientFactory;
+  productionRef.current = production;
+  developmentLanguageRef.current = developmentLanguage;
+  terminalSessionRef.current = terminalSession;
 
   const disconnectVoice = useCallback(() => {
     unsubscribeRef.current?.();
@@ -146,10 +156,10 @@ export function useRealtimeVoice(
       return clientRef.current;
     }
     const client =
-      clientFactory?.() ??
+      clientFactoryRef.current?.() ??
       new RealtimeVoiceClient({
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
-        sessionFactory: production?.createVoiceSession,
+        sessionFactory: productionRef.current?.createVoiceSession,
       });
     unsubscribeRef.current = client.on((event) => {
       applyRealtimeEvent(event, {
@@ -168,23 +178,26 @@ export function useRealtimeVoice(
     });
     clientRef.current = client;
     return client;
-  }, [clientFactory, production]);
+  }, []);
 
   const ensureControlClient = useCallback(() => {
     if (controlClientRef.current) {
       (controlClientRef.current as RealtimeControlClient & {
         setDevelopmentLanguage?: (language: "cpp" | "python" | "java") => void;
-      }).setDevelopmentLanguage?.(developmentLanguage);
+      }).setDevelopmentLanguage?.(developmentLanguageRef.current);
       return controlClientRef.current;
     }
     const controlClient =
-      controlClientFactory?.() ??
+      controlClientFactoryRef.current?.() ??
       new RealtimeControlClient({
         apiBaseUrl: process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000",
-        developmentLanguage,
-        production,
+        developmentLanguage: developmentLanguageRef.current,
+        production: productionRef.current,
       });
     unsubscribeControlRef.current = controlClient.on((event) => {
+      if (controlClientRef.current !== controlClient) {
+        return;
+      }
       if (event.type === "connected") {
         setServerDeadlineAt(event.bootstrap.deadline_at);
         setRestoredBootstrap(event.bootstrap);
@@ -221,7 +234,7 @@ export function useRealtimeVoice(
         return;
       }
       if (event.type === "authorized_prompt") {
-        if (terminalSession) {
+        if (terminalSessionRef.current) {
           return;
         }
         clientRef.current?.speakAuthorizedPrompt(event.prompt.text, {
@@ -244,7 +257,7 @@ export function useRealtimeVoice(
     });
     controlClientRef.current = controlClient;
     return controlClient;
-  }, [controlClientFactory, developmentLanguage, disconnectVoice, production, terminalSession]);
+  }, [disconnectVoice]);
 
   const enableMicrophone = useCallback(async () => {
     if (terminalSession || completionPending) {
@@ -390,40 +403,47 @@ export function useRealtimeVoice(
   }, []);
 
   useLayoutEffect(() => {
-    if (autoRestoreAttemptedRef.current) {
-      return;
-    }
-    autoRestoreAttemptedRef.current = true;
+    const lifecycleGeneration = restoreLifecycleGenerationRef.current + 1;
+    restoreLifecycleGenerationRef.current = lifecycleGeneration;
     const controlClient = ensureControlClient();
-    if (production) {
+    const productionRuntime = productionRef.current;
+    const lifecycleIsCurrent = () => (
+      restoreLifecycleGenerationRef.current === lifecycleGeneration
+      && controlClientRef.current === controlClient
+    );
+    if (productionRuntime) {
       setIsRestoring(true);
       void controlClient.restoreProductionInterview()
         .catch((error) => {
+          if (!lifecycleIsCurrent()) return;
           setIsRestoring(false);
           setErrorMessage(
             error instanceof Error ? error.message : "CounterQ could not restore this interview.",
           );
         });
-      return;
-    }
-    if (!controlClient.hasStoredDevelopmentSession()) {
+    } else if (!controlClient.hasStoredDevelopmentSession()) {
       setIsRestoring(false);
-      return;
+    } else {
+      setIsRestoring(true);
+      void controlClient.restoreExistingDevelopmentInterview()
+        .then((bootstrap) => {
+          if (lifecycleIsCurrent() && !bootstrap) setIsRestoring(false);
+        })
+        .catch((error) => {
+          if (!lifecycleIsCurrent()) return;
+          setIsRestoring(false);
+          setErrorMessage(
+            error instanceof Error ? error.message : "CounterQ could not restore this interview.",
+          );
+        });
     }
-    setIsRestoring(true);
-    void controlClient.restoreExistingDevelopmentInterview()
-      .then((bootstrap) => {
-        if (!bootstrap) setIsRestoring(false);
-      })
-      .catch((error) => {
-        setIsRestoring(false);
-        setErrorMessage(
-          error instanceof Error ? error.message : "CounterQ could not restore this interview.",
-        );
-      });
-  }, [ensureControlClient, production]);
-
-  useEffect(() => dispose, [dispose]);
+    return () => {
+      if (restoreLifecycleGenerationRef.current === lifecycleGeneration) {
+        restoreLifecycleGenerationRef.current += 1;
+      }
+      dispose();
+    };
+  }, [dispose, ensureControlClient, production?.interviewSessionId]);
 
   return {
     voiceState,
