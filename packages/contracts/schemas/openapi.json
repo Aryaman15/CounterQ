@@ -3105,6 +3105,32 @@
         "title": "CurrentUserResponse",
         "type": "object"
       },
+      "DeleteInterviewResponse": {
+        "properties": {
+          "deletion_request_id": {
+            "format": "uuid",
+            "title": "Deletion Request Id",
+            "type": "string"
+          },
+          "interview_session_id": {
+            "format": "uuid",
+            "title": "Interview Session Id",
+            "type": "string"
+          },
+          "status": {
+            "const": "DELETION_PENDING",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "interview_session_id",
+          "status",
+          "deletion_request_id"
+        ],
+        "title": "DeleteInterviewResponse",
+        "type": "object"
+      },
       "DevelopmentAnalyzeAndAuthorizeResponse": {
         "properties": {
           "analysis": {
@@ -6973,6 +6999,54 @@
           }
         ],
         "summary": "Create Interview",
+        "tags": [
+          "interviews"
+        ]
+      }
+    },
+    "/api/interviews/{interview_session_id}": {
+      "delete": {
+        "operationId": "delete_interview_api_interviews__interview_session_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "interview_session_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Interview Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteInterviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete Interview",
         "tags": [
           "interviews"
         ]

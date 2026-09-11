@@ -44,6 +44,7 @@
     "eval:stage9a": "uv run --directory apps/api pytest tests/evaluation/stage9a tests/test_migrations.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9a-auth.test.tsx",
     "eval:stage9b": "uv run --directory apps/api pytest tests/evaluation/stage9b tests/evaluation/stage9a/test_control_tickets.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9b-self-serve.test.tsx",
     "eval:stage9c": "uv run --directory apps/api pytest tests/evaluation/stage9c tests/evaluation/stage9a/test_resource_ownership.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9c-product-shell.test.tsx tests/session-report.test.tsx tests/countermap.test.tsx tests/countermap-stage7b.test.tsx tests/mastery.test.tsx tests/retest.test.tsx",
+    "eval:stage9d": "uv run --directory apps/api pytest tests/evaluation/stage9d tests/test_migrations.py -q && pnpm --filter @counterq/web exec vitest run tests/stage9d-interview-deletion.test.tsx tests/stage9c-product-shell.test.tsx",
     "validate:problems": "uv run --directory apps/api python -m app.problems.validate",
     "seed:problems": "uv run --directory apps/api python -m app.problems.seed",
     "lint": "pnpm run lint:frontend && pnpm run lint:backend",

@@ -73,6 +73,12 @@ class CandidateInterviewHistoryResponse(BaseModel):
     has_more: bool
 
 
+class DeleteInterviewResponse(BaseModel):
+    interview_session_id: UUID
+    status: Literal["DELETION_PENDING"]
+    deletion_request_id: UUID
+
+
 class RestoreInterviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

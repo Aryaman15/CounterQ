@@ -452,6 +452,7 @@ class Breakpoint(Base):
             ["first_detected_session_id", "user_id"],
             ["interview_sessions.id", "interview_sessions.user_id"],
             name="fk_breakpoints_session_user",
+            ondelete="SET NULL (first_detected_session_id)",
         ),
         Index(
             "uq_breakpoints_active_identity",
@@ -483,8 +484,8 @@ class Breakpoint(Base):
         nullable=False,
     )
     breakpoint_key: Mapped[str] = mapped_column(String(256), nullable=False)
-    first_detected_session_id: Mapped[UUID] = mapped_column(
-        PgUUID(as_uuid=True), ForeignKey("interview_sessions.id"), nullable=False
+    first_detected_session_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), nullable=True
     )
     first_detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     severity: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -499,7 +500,7 @@ class Breakpoint(Base):
     user: Mapped[User] = relationship(foreign_keys=[user_id])
     concept: Mapped[Concept] = relationship(foreign_keys=[concept_id])
     skill_dimension: Mapped[SkillDimension] = relationship(foreign_keys=[skill_dimension_id])
-    first_detected_session: Mapped[InterviewSession] = relationship(
+    first_detected_session: Mapped[InterviewSession | None] = relationship(
         foreign_keys=[first_detected_session_id]
     )
     evidence_links: Mapped[list[BreakpointEvidence]] = relationship(

@@ -514,9 +514,18 @@ async def _session_facts(
             interview = await InterviewOwnershipRepository(session).get_owned(
                 principal_user_id=principal_user_id,
                 interview_session_id=session_id,
+                allowed_statuses=(
+                    "READY",
+                    "ACTIVE",
+                    "RECONNECTING",
+                    "COMPLETED",
+                    "ABANDONED",
+                ),
             )
         except OwnedInterviewNotFound as exc:
             raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    if interview.status == "DELETION_PENDING":
+        raise HTTPException(status_code=404, detail="Interview session was not found")
     configuration = await session.get(InterviewConfiguration, interview.interview_configuration_id)
     problem = await session.get(ProblemVersion, interview.problem_version_id)
     if configuration is None or problem is None:

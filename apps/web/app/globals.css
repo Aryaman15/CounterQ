@@ -3710,6 +3710,18 @@ a:focus-visible,
 .history-actions { display: flex; flex-wrap: wrap; justify-content: end; gap: 12px; }
 .history-actions a { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; color: #9eaaa2; padding: 0 10px; font-size: 10px; font-weight: 700; text-decoration: none; }
 .history-actions .history-primary-action { border: 1px solid #4c6153; border-radius: 4px; background: #18221c; color: #dce6df; }
+.history-delete-action { display: inline-flex; min-height: 36px; align-items: center; gap: 6px; border: 0; background: transparent; color: #9b817d; padding: 0 8px; font-size: 10px; font-weight: 700; cursor: pointer; }
+.history-delete-action:hover { color: #d5aaa3; }
+.history-dialog-backdrop { position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 24px; background: rgb(5 8 6 / 72%); backdrop-filter: blur(3px); }
+.history-delete-dialog { position: relative; width: min(100%, 500px); border: 1px solid #414b44; border-radius: 8px; background: #111713; box-shadow: 0 24px 80px rgb(0 0 0 / 45%); padding: 30px; }
+.history-delete-dialog h2 { margin: 8px 40px 0 0; color: #edf1ee; font-size: 23px; font-weight: 560; }
+.history-delete-dialog > p:not(.product-kicker, .history-delete-error) { margin: 14px 0 0; color: #98a29b; font-size: 13px; line-height: 1.65; }
+.history-dialog-close { position: absolute; top: 20px; right: 20px; display: grid; place-items: center; width: 32px; height: 32px; border: 0; border-radius: 4px; background: transparent; color: #89948d; cursor: pointer; }
+.history-dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 26px; }
+.history-dialog-actions button { min-height: 40px; border: 1px solid #414b44; border-radius: 4px; background: transparent; color: #c8d0ca; padding: 0 15px; font-size: 11px; font-weight: 700; cursor: pointer; }
+.history-dialog-actions button:last-child { border-color: #704a45; background: #2b1c1a; color: #efc3bc; }
+.history-dialog-actions button:disabled, .history-dialog-close:disabled { cursor: wait; opacity: .55; }
+.history-delete-error { margin: 16px 0 0; border-left: 2px solid #a96459; background: #211715; color: #e0aaa2; padding: 10px 12px; font-size: 11px; line-height: 1.5; }
 .history-empty > a,
 .mastery-empty-action { display: inline-flex; margin-top: 12px; align-items: center; gap: 7px; color: #b8c7bd; font-size: 12px; text-decoration: none; }
 

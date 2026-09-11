@@ -19,7 +19,12 @@ from app.interviews.models import (
     InterviewSession,
     InterviewStageTransition,
 )
-from app.interviews.runtime import InterviewRuntime, SessionNotFound, TransitionCommand
+from app.interviews.runtime import (
+    InterviewRuntime,
+    SessionClosed,
+    SessionNotFound,
+    TransitionCommand,
+)
 from app.interviews.state_machine import TransitionContext
 from app.observation.models import InterviewEvent
 from app.outbox.repository import OutboxRepository
@@ -61,6 +66,8 @@ class InterviewCompletionService:
         idempotency_key: str,
     ) -> CompletionResult:
         interview = await self._lock_session(session_id)
+        if interview.status == "DELETION_PENDING":
+            raise SessionClosed("Interview session is pending deletion")
         if interview.status == "COMPLETED" or interview.current_stage == "COMPLETED":
             terminal_reason = await self._terminal_reason(interview.id)
             completion_event = await self._ensure_post_session_work(interview, terminal_reason)
@@ -128,6 +135,8 @@ class InterviewCompletionService:
 
     async def reconcile_expired(self, session_id: UUID) -> CompletionResult | None:
         interview = await self._lock_session(session_id)
+        if interview.status == "DELETION_PENDING":
+            raise SessionClosed("Interview session is pending deletion")
         if interview.status == "COMPLETED" or interview.current_stage == "COMPLETED":
             return None
         if self._clock() < interview.deadline_at:

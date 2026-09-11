@@ -16,6 +16,7 @@ export type CandidateRunRequest = components["schemas"]["CandidateRunRequest"];
 export type ExecutionRunResponse = components["schemas"]["DevelopmentRunResponse"];
 export type CandidateAssistanceResponse = components["schemas"]["CandidateAssistanceResponse"];
 export type CandidateInterviewHistoryResponse = components["schemas"]["CandidateInterviewHistoryResponse"];
+export type DeleteInterviewResponse = components["schemas"]["DeleteInterviewResponse"];
 export type CandidateSessionReportResponse = components["schemas"]["CandidateSessionReportResponse"];
 export type CandidateCounterMapResponse = components["schemas"]["CandidateCounterMapResponse"];
 export type CandidateCounterMapNodeDetailResponse = components["schemas"]["CandidateCounterMapNodeDetailResponse"];
@@ -98,6 +99,13 @@ export class CounterQApiClient {
     return this.request<CandidateInterviewHistoryResponse>(
       `/api/interviews?${query.toString()}`,
       { signal, cache: "no-store" },
+    );
+  }
+
+  async deleteInterview(interviewSessionId: string): Promise<DeleteInterviewResponse> {
+    return this.request<DeleteInterviewResponse>(
+      `/api/interviews/${encodeURIComponent(interviewSessionId)}`,
+      { method: "DELETE" },
     );
   }
 

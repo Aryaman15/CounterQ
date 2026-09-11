@@ -252,7 +252,10 @@ class MasterySourceBuilder:
                 InterviewerPrompt,
                 InterviewerPrompt.id == CandidateResponse.interviewer_prompt_id,
             )
-            .where(InterviewSession.user_id == user_id)
+            .where(
+                InterviewSession.user_id == user_id,
+                InterviewSession.status != "DELETION_PENDING",
+            )
             .where(Evidence.validation_status == "VALID", Evidence.invalidated_at.is_(None))
             .order_by(Evidence.created_at, Evidence.id)
         )
@@ -441,8 +444,15 @@ class MasterySourceBuilder:
     async def _breakpoints(self, user_id: UUID) -> tuple[tuple[Breakpoint, frozenset[UUID]], ...]:
         rows = await self._session.execute(
             select(Breakpoint, BreakpointEvidence.evidence_id)
-            .outerjoin(BreakpointEvidence, BreakpointEvidence.breakpoint_id == Breakpoint.id)
-            .where(Breakpoint.user_id == user_id)
+            .join(BreakpointEvidence, BreakpointEvidence.breakpoint_id == Breakpoint.id)
+            .join(Evidence, Evidence.id == BreakpointEvidence.evidence_id)
+            .join(InterviewSession, InterviewSession.id == Evidence.interview_session_id)
+            .where(
+                Breakpoint.user_id == user_id,
+                Evidence.validation_status == "VALID",
+                Evidence.invalidated_at.is_(None),
+                InterviewSession.status != "DELETION_PENDING",
+            )
         )
         grouped: dict[UUID, tuple[Breakpoint, set[UUID]]] = {}
         for breakpoint, evidence_id in rows.all():

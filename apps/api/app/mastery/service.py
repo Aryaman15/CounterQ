@@ -103,74 +103,92 @@ class MasteryRecalculationService:
         | None = None,
     ) -> MasteryRecalculationResult:
         async with self._sessionmaker() as session, session.begin():
-            if work_claim is not None:
-                await _assert_work_claim(session, work_claim)
-            user = await session.scalar(select(User).where(User.id == user_id).with_for_update())
-            if user is None:
-                raise MasteryRecalculationError("USER_NOT_FOUND", "Mastery user was not found")
-            requested_now = self._clock()
-            if requested_now.tzinfo is None:
-                raise MasteryRecalculationError(
-                    "INVALID_CLOCK", "Mastery clock must be timezone-aware"
-                )
-            now = await _monotonic_projection_time(session, user_id, requested_now)
-            retest_finalizer = RetestAttemptFinalizer(session)
-            prepared_retests = await retest_finalizer.prepare(user_id=user_id, now=now)
-            bundle = await MasterySourceBuilder(session).build(
-                user_id,
-                target_level=development_target_level,
+            return await self.recalculate_in_transaction(
+                session,
+                user_id=user_id,
+                work_claim=work_claim,
+                development_target_level=development_target_level,
             )
-            transition_count = 0
-            association_count = 0
-            for target in bundle.targets:
-                decision = self._policy.evaluate(target.facts, now=now)
-                changed, transition_created = await _persist_projection(
-                    session,
-                    user_id=user_id,
-                    target=target,
-                    decision=decision,
-                    policy_version=self._policy.version,
-                    now=now,
-                )
-                association_count += len(decision.contributions)
-                transition_count += int(transition_created)
-                await retest_finalizer.finalize_target(
-                    prepared_retests,
-                    target=target,
-                    decision=decision,
-                    now=now,
-                )
-                await _sync_recommendation(
-                    session,
-                    user_id=user_id,
-                    target=target,
-                    decision=decision,
-                    policy_version=self._policy.version,
-                    now=now,
-                    projection_changed=changed,
-                )
-            await retest_finalizer.finalize_unmatched(prepared_retests, now=now)
-            concept_count = sum(item.family == "CONCEPT" for item in bundle.targets)
-            skill_count = sum(item.family == "SKILL" for item in bundle.targets)
-            pending_count = len(
-                list(
-                    await session.scalars(
-                        select(RetestRecommendation.id).where(
-                            RetestRecommendation.user_id == user_id,
-                            RetestRecommendation.status == "PENDING",
-                        )
+
+    async def recalculate_in_transaction(
+        self,
+        session: AsyncSession,
+        *,
+        user_id: UUID,
+        work_claim: OutboxWorkClaim | None = None,
+        development_target_level: Literal["INTERN", "NEW_GRAD", "EARLY_CAREER"]
+        | None = None,
+    ) -> MasteryRecalculationResult:
+        """Rebuild through the canonical policy inside a caller-owned transaction."""
+
+        if work_claim is not None:
+            await _assert_work_claim(session, work_claim)
+        user = await session.scalar(select(User).where(User.id == user_id).with_for_update())
+        if user is None:
+            raise MasteryRecalculationError("USER_NOT_FOUND", "Mastery user was not found")
+        requested_now = self._clock()
+        if requested_now.tzinfo is None:
+            raise MasteryRecalculationError(
+                "INVALID_CLOCK", "Mastery clock must be timezone-aware"
+            )
+        now = await _monotonic_projection_time(session, user_id, requested_now)
+        retest_finalizer = RetestAttemptFinalizer(session)
+        prepared_retests = await retest_finalizer.prepare(user_id=user_id, now=now)
+        bundle = await MasterySourceBuilder(session).build(
+            user_id,
+            target_level=development_target_level,
+        )
+        transition_count = 0
+        association_count = 0
+        for target in bundle.targets:
+            decision = self._policy.evaluate(target.facts, now=now)
+            changed, transition_created = await _persist_projection(
+                session,
+                user_id=user_id,
+                target=target,
+                decision=decision,
+                policy_version=self._policy.version,
+                now=now,
+            )
+            association_count += len(decision.contributions)
+            transition_count += int(transition_created)
+            await retest_finalizer.finalize_target(
+                prepared_retests,
+                target=target,
+                decision=decision,
+                now=now,
+            )
+            await _sync_recommendation(
+                session,
+                user_id=user_id,
+                target=target,
+                decision=decision,
+                policy_version=self._policy.version,
+                now=now,
+                projection_changed=changed,
+            )
+        await retest_finalizer.finalize_unmatched(prepared_retests, now=now)
+        concept_count = sum(item.family == "CONCEPT" for item in bundle.targets)
+        skill_count = sum(item.family == "SKILL" for item in bundle.targets)
+        pending_count = len(
+            list(
+                await session.scalars(
+                    select(RetestRecommendation.id).where(
+                        RetestRecommendation.user_id == user_id,
+                        RetestRecommendation.status == "PENDING",
                     )
                 )
             )
-            return MasteryRecalculationResult(
-                user_id=user_id,
-                target_level=bundle.target_level,
-                concept_projection_count=concept_count,
-                skill_projection_count=skill_count,
-                association_count=association_count,
-                transition_count=transition_count,
-                pending_recommendation_count=pending_count,
-            )
+        )
+        return MasteryRecalculationResult(
+            user_id=user_id,
+            target_level=bundle.target_level,
+            concept_projection_count=concept_count,
+            skill_projection_count=skill_count,
+            association_count=association_count,
+            transition_count=transition_count,
+            pending_recommendation_count=pending_count,
+        )
 
 
 async def _persist_projection(

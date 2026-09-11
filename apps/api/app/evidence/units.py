@@ -123,6 +123,8 @@ class AssessmentInputBuilder:
         interview = await self._session.get(InterviewSession, session_id)
         if interview is None:
             raise ValueError("InterviewSession was not found")
+        if interview.status == "DELETION_PENDING":
+            raise ValueError("InterviewSession is pending deletion")
         configuration = await self._session.get(
             InterviewConfiguration, interview.interview_configuration_id
         )

@@ -12,11 +12,11 @@ from sqlalchemy.engine import make_url
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage9a_candidate_profile_head() -> None:
+def test_alembic_configuration_has_stage9d_interview_deletion_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609080121"
+    assert script.get_current_head() == "202609110122"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:

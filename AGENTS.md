@@ -1335,6 +1335,9 @@ pnpm run eval:stage9b
 Evaluate the Stage 9C product shell and current-user learning surfaces gate:
 pnpm run eval:stage9c
 
+Evaluate the Stage 9D interview deletion and learning-integrity gate:
+pnpm run eval:stage9d
+
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1492,12 +1495,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 9C — Product Shell + Current-User Learning Surfaces + History
+Stage 9D — Interview Deletion + Learning-Model Integrity
 
 Current Goal:
-Allow an authenticated candidate to navigate the current-user product shell,
-history, Report, CounterMap, Mastery, production retests and account preferences
-without beginning Stage 9D deletion or Stage 9E custom-problem intake.
+Allow an authenticated candidate to delete one interview while removing its
+candidate content and deterministically rebuilding Breakpoints, Mastery and
+Retest recommendations from surviving Evidence, without beginning Stage 9E.
 ```
 
 Update only this small section as implementation progresses.

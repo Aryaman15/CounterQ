@@ -154,7 +154,11 @@ async def canonical_evaluation_snapshot(
                 "skill_dimension_key": skill.canonical_key if skill else None,
                 "status": breakpoint.status,
                 "severity": breakpoint.severity,
-                "first_detected_session_id": str(breakpoint.first_detected_session_id),
+                "first_detected_session_id": (
+                    str(breakpoint.first_detected_session_id)
+                    if breakpoint.first_detected_session_id is not None
+                    else None
+                ),
                 "first_detected_at": breakpoint.first_detected_at.isoformat(),
                 "resolved_at": (
                     breakpoint.resolved_at.isoformat() if breakpoint.resolved_at else None

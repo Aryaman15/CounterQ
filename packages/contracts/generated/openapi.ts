@@ -294,6 +294,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/interviews/{interview_session_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Interview */
+        delete: operations["delete_interview_api_interviews__interview_session_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/interviews/{interview_session_id}/assistance-requests": {
         parameters: {
             query?: never;
@@ -1789,6 +1806,24 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+        };
+        /** DeleteInterviewResponse */
+        DeleteInterviewResponse: {
+            /**
+             * Deletion Request Id
+             * Format: uuid
+             */
+            deletion_request_id: string;
+            /**
+             * Interview Session Id
+             * Format: uuid
+             */
+            interview_session_id: string;
+            /**
+             * Status
+             * @constant
+             */
+            status: "DELETION_PENDING";
         };
         /** DevelopmentAnalyzeAndAuthorizeResponse */
         DevelopmentAnalyzeAndAuthorizeResponse: {
@@ -3424,6 +3459,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CreateInterviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_interview_api_interviews__interview_session_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                interview_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DeleteInterviewResponse"];
                 };
             };
             /** @description Validation Error */

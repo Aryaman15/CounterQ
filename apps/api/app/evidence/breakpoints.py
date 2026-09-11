@@ -501,7 +501,11 @@ class BreakpointService:
         return int(value or 0)
 
     async def recalculate_support_for_evidence(
-        self, evidence_id: UUID, *, recalculated_at: datetime | None = None
+        self,
+        evidence_id: UUID,
+        *,
+        recalculated_at: datetime | None = None,
+        invalidation_reason: str = "SUPPORT_INVALIDATED",
     ) -> tuple[UUID, ...]:
         """Recalculate diagnoses affected by invalidated support or resolution proof."""
 
@@ -528,7 +532,7 @@ class BreakpointService:
                 if negative_support == 0:
                     breakpoint.status = "DISMISSED"
                     breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
-                    breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+                    breakpoint.resolution_reason = invalidation_reason
                 elif resolution_support == 0:
                     breakpoint.status = "RETEST_PENDING"
                     breakpoint.resolved_at = None
@@ -541,7 +545,7 @@ class BreakpointService:
                 continue
             breakpoint.status = "DISMISSED"
             breakpoint.resolved_at = recalculated_at or datetime.now(UTC)
-            breakpoint.resolution_reason = "SUPPORT_INVALIDATED"
+            breakpoint.resolution_reason = invalidation_reason
             recalculated.append(breakpoint.id)
         await self._session.flush()
         return tuple(recalculated)

@@ -20,6 +20,7 @@ from app.countermap.service import (
     initial_countermap_generation_key,
 )
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
+from app.interviews.deletion import InterviewDeletionCleanupService
 from app.interviews.models import InterviewConfiguration, InterviewSession
 from app.mastery.policy import MASTERY_POLICY_VERSION
 from app.mastery.service import (
@@ -57,6 +58,7 @@ class PostSessionOutboxConsumer:
         report_service: SessionReportGenerationService,
         countermap_service: CounterMapGenerationService | None = None,
         mastery_service: MasteryRecalculationService | None = None,
+        deletion_service: InterviewDeletionCleanupService | None = None,
         max_attempts: int = 5,
         processing_lease_seconds: int = 120,
         clock: Callable[[], datetime] | None = None,
@@ -66,6 +68,7 @@ class PostSessionOutboxConsumer:
         self._report_service = report_service
         self._countermap_service = countermap_service
         self._mastery_service = mastery_service
+        self._deletion_service = deletion_service
         self._max_attempts = max_attempts
         self._processing_lease_seconds = processing_lease_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
@@ -91,6 +94,8 @@ class PostSessionOutboxConsumer:
                 return await self._generate_countermap(event, attempt)
             if event.event_type == "RECALCULATE_MASTERY":
                 return await self._recalculate_mastery(event, attempt)
+            if event.event_type == "DELETE_INTERVIEW":
+                return await self._delete_interview(event, attempt)
             return await self._record_failure(
                 event.id,
                 attempt,
@@ -122,6 +127,26 @@ class PostSessionOutboxConsumer:
                 # Receipt of the exact reserved attempt is durable proof of publication.
                 publication_reserved = event.status == "PROCESSING" and event.published_at is None
                 if not publication_acknowledged and not publication_reserved:
+                    return None
+                interview = await session.get(InterviewSession, event.interview_session_id)
+                deletion_eligible = (
+                    event.event_type == "DELETE_INTERVIEW"
+                    and interview is not None
+                    and interview.status == "DELETION_PENDING"
+                )
+                ordinary_eligible = (
+                    event.event_type != "DELETE_INTERVIEW"
+                    and interview is not None
+                    and interview.status != "DELETION_PENDING"
+                )
+                if not deletion_eligible and not ordinary_eligible:
+                    event.status = "FAILED"
+                    event.last_error = (
+                        "SESSION_DELETION_PENDING"
+                        if interview is not None and interview.status == "DELETION_PENDING"
+                        else "SESSION_NOT_FOUND"
+                    )
+                    event.next_retry_at = None
                     return None
                 event.status = "PROCESSING"
                 event.published_at = event.published_at or now
@@ -197,6 +222,11 @@ class PostSessionOutboxConsumer:
                     current.last_error = "SESSION_NOT_FOUND"
                     current.next_retry_at = None
                     return ConsumerResult(event.id, "FAILED", "SESSION_NOT_FOUND")
+                if interview.status == "DELETION_PENDING":
+                    current.status = "FAILED"
+                    current.last_error = "SESSION_DELETION_PENDING"
+                    current.next_retry_at = None
+                    return ConsumerResult(event.id, "FAILED", "SESSION_DELETION_PENDING")
                 request_key = initial_report_generation_key(event.interview_session_id)
                 await OutboxRepository(session).enqueue(
                     aggregate_type="InterviewSession",
@@ -254,6 +284,33 @@ class PostSessionOutboxConsumer:
                     source_watermark=interview.last_server_sequence,
                 )
                 _mark_completed(current, now)
+        return ConsumerResult(event.id, "COMPLETED")
+
+    async def _delete_interview(
+        self,
+        event: OutboxEvent,
+        attempt: int,
+    ) -> ConsumerResult:
+        policy_version = event.payload.get("deletion_policy_version")
+        requested_session_id = event.payload.get("interview_session_id")
+        if (
+            policy_version != "interview-deletion.v1"
+            or requested_session_id != str(event.interview_session_id)
+        ):
+            return await self._record_failure(
+                event.id, attempt, "INVALID_DELETION_REQUEST", permanent=True
+            )
+        if self._deletion_service is None:
+            return await self._record_failure(
+                event.id, attempt, "DELETION_SERVICE_UNAVAILABLE", permanent=True
+            )
+        result = await self._deletion_service.delete(
+            outbox_event_id=event.id,
+            attempt=attempt,
+        )
+        if result is None:
+            return ConsumerResult(event.id, "SKIPPED", "OUTBOX_OWNERSHIP_LOST")
+        # The deletion transaction removes this outbox row with the session graph.
         return ConsumerResult(event.id, "COMPLETED")
 
     async def _recalculate_mastery(

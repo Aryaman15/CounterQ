@@ -14,6 +14,7 @@ from app.countermap.service import CounterMapGenerationService
 from app.db.registry import register_orm_models
 from app.db.session import build_engine
 from app.evidence.coordinator import SessionEvidenceEvaluationCoordinator
+from app.interviews.deletion import InterviewDeletionCleanupService
 from app.mastery.service import MasteryRecalculationService
 from app.outbox.consumer import PostSessionOutboxConsumer
 from app.reports.service import SessionReportGenerationService
@@ -35,6 +36,7 @@ async def _consume(outbox_event_id: UUID, attempt: int) -> dict[str, str | None]
         sessionmaker=sessionmaker,
         provider=build_reasoning_provider(settings),
     )
+    mastery_service = MasteryRecalculationService(sessionmaker=sessionmaker)
     consumer = PostSessionOutboxConsumer(
         sessionmaker=sessionmaker,
         evidence_coordinator=SessionEvidenceEvaluationCoordinator(
@@ -47,7 +49,11 @@ async def _consume(outbox_event_id: UUID, attempt: int) -> dict[str, str | None]
             reasoning_timeout_seconds=(settings.session_report_reasoning_timeout_seconds),
         ),
         countermap_service=CounterMapGenerationService(sessionmaker=sessionmaker),
-        mastery_service=MasteryRecalculationService(sessionmaker=sessionmaker),
+        mastery_service=mastery_service,
+        deletion_service=InterviewDeletionCleanupService(
+            sessionmaker=sessionmaker,
+            mastery_service=mastery_service,
+        ),
         max_attempts=settings.outbox_max_attempts,
         processing_lease_seconds=settings.outbox_claim_lease_seconds,
     )

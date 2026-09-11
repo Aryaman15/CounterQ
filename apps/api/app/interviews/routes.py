@@ -28,6 +28,7 @@ from app.interviews.contracts import (
     CandidateInterviewHistoryResponse,
     CreateInterviewRequest,
     CreateInterviewResponse,
+    DeleteInterviewResponse,
     InterviewBootstrapResponse,
     InterviewHistoryQuery,
     RestoreInterviewRequest,
@@ -37,6 +38,7 @@ from app.interviews.creation import (
     SelfServeInterviewCreationService,
     SelfServeInterviewSelectionInvalid,
 )
+from app.interviews.deletion import InterviewDeletionRequestService
 from app.interviews.history import CandidateInterviewHistoryReader
 from app.interviews.mode_policy import ModePolicy
 from app.interviews.restoration import (
@@ -116,6 +118,35 @@ async def create_interview(
     )
 
 
+@router.delete(
+    "/{interview_session_id}",
+    response_model=DeleteInterviewResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def delete_interview(
+    interview_session_id: UUID,
+    current_user: Annotated[CurrentUser, Depends(get_current_user)],
+    database_session: Annotated[AsyncSession, Depends(get_session)],
+) -> DeleteInterviewResponse:
+    try:
+        requested = await InterviewDeletionRequestService(database_session).request(
+            principal_user_id=current_user.id,
+            interview_session_id=interview_session_id,
+        )
+        await database_session.commit()
+    except OwnedInterviewNotFound as exc:
+        await database_session.rollback()
+        raise HTTPException(status_code=404, detail="Interview session was not found") from exc
+    except Exception:
+        await database_session.rollback()
+        raise
+    return DeleteInterviewResponse(
+        interview_session_id=requested.interview_session_id,
+        status="DELETION_PENDING",
+        deletion_request_id=requested.deletion_request_id,
+    )
+
+
 @router.post("/{interview_session_id}/restore", response_model=InterviewBootstrapResponse)
 async def restore_interview(
     interview_session_id: UUID,
@@ -127,6 +158,13 @@ async def restore_interview(
         await InterviewOwnershipRepository(database_session).get_owned(
             principal_user_id=current_user.id,
             interview_session_id=interview_session_id,
+            allowed_statuses=(
+                "READY",
+                "ACTIVE",
+                "RECONNECTING",
+                "COMPLETED",
+                "ABANDONED",
+            ),
         )
     except OwnedInterviewNotFound as exc:
         raise HTTPException(status_code=404, detail="Interview session was not found") from exc
@@ -280,6 +318,13 @@ async def request_candidate_assistance(
         await InterviewOwnershipRepository(database_session).get_owned(
             principal_user_id=current_user.id,
             interview_session_id=interview_session_id,
+            allowed_statuses=(
+                "READY",
+                "ACTIVE",
+                "RECONNECTING",
+                "COMPLETED",
+                "ABANDONED",
+            ),
         )
     except OwnedInterviewNotFound as exc:
         raise HTTPException(status_code=404, detail="Interview session was not found") from exc
