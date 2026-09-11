@@ -495,8 +495,8 @@ async def test_deletion_retracts_sole_evidence_repairs_breakpoint_and_hard_delet
             before_skill = await session.scalar(
                 select(SkillMastery).where(SkillMastery.user_id == user_id)
             )
-            assert before_concept is not None and before_concept.state != "UNTESTED"
-            assert before_skill is not None and before_skill.state != "UNTESTED"
+            assert before_concept is not None and before_concept.state == "WEAK"
+            assert before_skill is not None and before_skill.state == "WEAK"
             recommendation = await session.scalar(
                 select(RetestRecommendation).where(
                     RetestRecommendation.user_id == user_id,
