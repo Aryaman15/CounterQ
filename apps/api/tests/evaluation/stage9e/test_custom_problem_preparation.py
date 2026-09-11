@@ -51,6 +51,7 @@ from app.problems.custom import (
     CUSTOM_PREPARATION_POLICY_VERSION,
     CUSTOM_PROCESSING_LEASE,
     CUSTOM_QUALITY_GATE_VERSION,
+    CUSTOM_REASONING_CALL_LIMIT,
     CustomPreparationIdempotencyConflict,
     CustomPreparationInProgress,
     CustomPreparationNotFound,
@@ -479,6 +480,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v4"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v4"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -510,6 +513,21 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         normalization_request = provider.requests[0]
         normalization_input = json.loads(normalization_request.input_content)
         assert normalization_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
+        assert normalization_input["software_source_evidence"] == {
+            "signature": {
+                "method_name": "countPairs",
+                "arguments": [
+                    {"name": "nums", "type": "int[]"},
+                    {"name": "target", "type": "int"},
+                ],
+                "return_type": "int",
+            },
+            "has_explicit_return_directive": True,
+            "has_example_section": True,
+            "has_expected_output_example": True,
+        }
+        assert "normalization_recovery" not in normalization_input
+        assert normalization_request.metadata["normalization_attempt"] == "initial"
         assert "C++ `vector<int>` maps to" in normalization_request.instructions
         assert "`int[]`" in normalization_request.instructions
         assert normalization_request.policy.version == CUSTOM_PREPARATION_POLICY_VERSION
@@ -545,6 +563,138 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         assert pack.model == runtime_settings.reasoning_strong_model
         assert pack.user_id == user_id
         assert pack.interview_session_id is None
+    finally:
+        await engine.dispose()
+
+
+async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(
+        [
+            _non_ready_output("NEEDS_CORRECTION", "MISSING_RETURN_BEHAVIOR"),
+            *_count_pairs_outputs(),
+        ]
+    )
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-count-pairs-false-missing-return",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.operational_status == "COMPLETED"
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.candidate_reasons_json == []
+        assert ready.problem_version is not None
+        execution = cast(dict[str, Any], ready.problem_version.io_schema_json["execution"])
+        assert execution["method_name"] == "countPairs"
+        assert execution["arguments"] == [
+            {"name": "nums", "type": "int[]"},
+            {"name": "target", "type": "int"},
+        ]
+        assert execution["return_type"] == "int"
+        assert [request.purpose for request in provider.requests] == [
+            "custom_problem_normalization",
+            "custom_problem_normalization",
+            "custom_problem_pack_preparation",
+        ]
+        assert [request.capability for request in provider.requests] == [
+            "STANDARD_REASONING",
+            "STRONG_REASONING",
+            "STRONG_REASONING",
+        ]
+        runtime_settings = get_settings()
+        assert provider.models == [
+            runtime_settings.reasoning_standard_model,
+            runtime_settings.reasoning_strong_model,
+            runtime_settings.reasoning_strong_model,
+        ]
+        assert provider.reasoning_efforts == ["medium", "medium", "medium"]
+        assert [request.timeout_seconds for request in provider.requests] == [90.0, 90.0, 90.0]
+        assert [request.user_id for request in provider.requests] == [user_id, user_id, user_id]
+        assert [request.interview_session_id for request in provider.requests] == [None, None, None]
+        assert provider.requests[0].metadata["normalization_attempt"] == "initial"
+        assert provider.requests[1].metadata == {
+            "custom_problem_preparation_id": str(created.preparation.id),
+            "normalization_attempt": "recovery",
+            "recovery_attempt": 1,
+            "contradicted_finding_codes": ["MISSING_RETURN_BEHAVIOR"],
+        }
+        assert provider.requests[1].policy.policy_key == (
+            "stage9e_custom_problem_preparation.normalize.recovery"
+        )
+        assert provider.requests[1].policy.configuration == {
+            "quality_gate": CUSTOM_QUALITY_GATE_VERSION,
+            "normalization_attempt": "recovery",
+        }
+        recovery_input = json.loads(provider.requests[1].input_content)
+        assert recovery_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
+        assert recovery_input["software_source_evidence"]["signature"] == {
+            "method_name": "countPairs",
+            "arguments": [
+                {"name": "nums", "type": "int[]"},
+                {"name": "target", "type": "int"},
+            ],
+            "return_type": "int",
+        }
+        assert recovery_input["normalization_recovery"] == {
+            "attempt": 1,
+            "reason": "prior_findings_contradicted_by_software_source_evidence",
+            "contradicted_finding_codes": ["MISSING_RETURN_BEHAVIOR"],
+        }
+        assert [request.language for request in executor.requests] == ["cpp", "python", "java"]
+
+        async with maker() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.user_id == user_id)
+                    .order_by(AIInvocation.provider_request_id)
+                )
+            )
+            policies = {
+                invocation.provider_request_id: await session.get(
+                    AIPolicyVersion, invocation.ai_policy_version_id
+                )
+                for invocation in invocations
+            }
+        assert len(invocations) == 3
+        initial, recovery, pack = invocations
+        assert initial.provider_request_id == "request-1"
+        assert initial.purpose == "custom_problem_normalization"
+        assert initial.capability == "STANDARD_REASONING"
+        assert recovery.provider_request_id == "request-2"
+        assert recovery.purpose == "custom_problem_normalization"
+        assert recovery.capability == "STRONG_REASONING"
+        assert pack.provider_request_id == "request-3"
+        assert pack.purpose == "custom_problem_pack_preparation"
+        assert pack.capability == "STRONG_REASONING"
+        assert ready.preparation.normalization_ai_invocation_id == recovery.id
+        assert policies["request-1"] is not None
+        assert policies["request-2"] is not None
+        assert policies["request-3"] is not None
+        assert policies["request-1"].policy_key == (
+            "stage9e_custom_problem_preparation.normalize"
+        )
+        assert policies["request-2"].policy_key == (
+            "stage9e_custom_problem_preparation.normalize.recovery"
+        )
+        assert policies["request-2"].configuration_json == {
+            "quality_gate": CUSTOM_QUALITY_GATE_VERSION,
+            "normalization_attempt": "recovery",
+        }
+        assert policies["request-3"].policy_key == (
+            "stage9e_custom_problem_preparation.pack"
+        )
+        assert all(
+            policy is not None and policy.version == CUSTOM_PREPARATION_POLICY_VERSION
+            for policy in policies.values()
+        )
     finally:
         await engine.dispose()
 
@@ -618,7 +768,8 @@ async def test_reasoning_timeout_is_retryable_and_a_later_attempt_can_succeed(
     ("problem_text", "finding_code", "expected_message"),
     [
         (
-            "Given nums and target, find a pair.",
+            "Given nums and target, find a pair. "
+            "Function signature: int solve(vector<int> nums, int target)",
             "MISSING_RETURN_BEHAVIOR",
             "Specify what the function should return.",
         ),
@@ -655,6 +806,105 @@ async def test_normalization_blockers_produce_specific_software_owned_feedback(
         ]
         assert completed.preparation.prepared_problem_version_id is None
         assert len(provider.requests) == 1
+        normalization_input = json.loads(provider.requests[0].input_content)
+        source_signature = normalization_input["software_source_evidence"]["signature"]
+        if finding_code == "MISSING_RETURN_BEHAVIOR":
+            assert source_signature == {
+                "method_name": "solve",
+                "arguments": [
+                    {"name": "nums", "type": "int[]"},
+                    {"name": "target", "type": "int"},
+                ],
+                "return_type": "int",
+            }
+            assert not normalization_input["software_source_evidence"][
+                "has_explicit_return_directive"
+            ]
+        assert "normalization_recovery" not in normalization_input
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "finding_code",
+    ["MISSING_ARGUMENTS", "AMBIGUOUS_ARGUMENT_TYPES", "MISSING_EXAMPLE"],
+)
+async def test_other_source_contradicted_findings_trigger_one_recovery(
+    finding_code: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(
+        [_non_ready_output("NEEDS_CORRECTION", finding_code), *_count_pairs_outputs()]
+    )
+    service = _service(maker, provider, PassingExecutor())
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"stage9e-contradicted-{finding_code.lower()}",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.candidate_reasons_json == []
+        assert len(provider.requests) == CUSTOM_REASONING_CALL_LIMIT
+        assert provider.requests[1].metadata["normalization_attempt"] == "recovery"
+        recovery_input = json.loads(provider.requests[1].input_content)
+        assert recovery_input["normalization_recovery"][
+            "contradicted_finding_codes"
+        ] == [finding_code]
+    finally:
+        await engine.dispose()
+
+
+async def test_repeated_source_contradiction_fails_operationally_and_is_retryable() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(
+        [
+            _non_ready_output("NEEDS_CORRECTION", "MISSING_RETURN_BEHAVIOR"),
+            _non_ready_output("NEEDS_CORRECTION", "MISSING_RETURN_BEHAVIOR"),
+        ]
+    )
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-repeated-source-contradiction",
+        )
+        failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "NORMALIZATION_INCONSISTENT"
+        assert failed.preparation.candidate_message == (
+            "CounterQ could not finish preparing this problem. Retry the preparation."
+        )
+        assert failed.preparation.candidate_reasons_json == []
+        assert failed.preparation.prepared_problem_version_id is None
+        assert custom_preparation_retryable(failed.preparation)
+        assert len(provider.requests) == 2
+        assert executor.requests == []
+
+        async with maker() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.user_id == user_id)
+                    .order_by(AIInvocation.provider_request_id)
+                )
+            )
+        assert len(invocations) == 2
+        assert failed.preparation.normalization_ai_invocation_id == invocations[1].id
+        assert [invocation.capability for invocation in invocations] == [
+            "STANDARD_REASONING",
+            "STRONG_REASONING",
+        ]
     finally:
         await engine.dispose()
 

@@ -43,6 +43,11 @@ from app.problems.content import (
     VisibleCase,
     canonical_hash,
 )
+from app.problems.custom_source_evidence import (
+    CustomProblemSourceEvidence,
+    contradicted_normalization_findings,
+    derive_custom_problem_source_evidence,
+)
 from app.problems.models import (
     Concept,
     CustomProblemPreparation,
@@ -55,14 +60,16 @@ from app.problems.starter_scaffolds import starter_languages_for_execution
 
 MAX_CUSTOM_PROBLEM_CHARACTERS = 20_000
 CUSTOM_PREPARATION_POLICY_KEY = "stage9e_custom_problem_preparation"
-CUSTOM_PREPARATION_POLICY_VERSION = "v3"
-CUSTOM_QUALITY_GATE_VERSION = "stage9e.v3"
-CUSTOM_REASONING_CALL_LIMIT = 2
+CUSTOM_PREPARATION_POLICY_VERSION = "v4"
+CUSTOM_QUALITY_GATE_VERSION = "stage9e.v4"
+CUSTOM_REASONING_CALL_LIMIT = 3
 CUSTOM_PROCESSING_LEASE = timedelta(minutes=10)
 NORMALIZE_PURPOSE = "custom_problem_normalization"
 PACK_PURPOSE = "custom_problem_pack_preparation"
 CUSTOM_NORMALIZATION_CAPABILITY: ReasoningCapability = "STANDARD_REASONING"
 CUSTOM_NORMALIZATION_REASONING_EFFORT: ReasoningEffort = "medium"
+CUSTOM_NORMALIZATION_RECOVERY_CAPABILITY: ReasoningCapability = "STRONG_REASONING"
+CUSTOM_NORMALIZATION_RECOVERY_REASONING_EFFORT: ReasoningEffort = "medium"
 CUSTOM_PACK_CAPABILITY: ReasoningCapability = "STRONG_REASONING"
 CUSTOM_PACK_REASONING_EFFORT: ReasoningEffort = "medium"
 
@@ -91,6 +98,17 @@ supported function/method. Return REJECTED only when the content is not a coding
 requires an unsupported execution shape. Do not veto an otherwise complete normalized problem because
 the candidate omitted CounterQ's internal schema, language variants, title, pack, concepts, starter code,
 private cases, or comparator details.
+
+The input keeps candidate-authored `untrusted_problem_text` separate from trusted
+`software_source_evidence`. That evidence is authoritative only for the bounded syntactic facts it
+contains; it does not establish the algorithm or broader problem semantics. Do not return
+MISSING_ARGUMENTS when a complete supported signature and its arguments are supplied. Do not return
+AMBIGUOUS_ARGUMENT_TYPES when every signature argument has a supported mapped semantic type. Do not
+return MISSING_RETURN_BEHAVIOR when the signature has a supported non-void return type and software
+confirms an explicit return directive. Do not return MISSING_EXAMPLE when software confirms an explicit
+example containing both input and expected output. If `normalization_recovery` is present, it identifies
+findings from one prior result that software proved false; reconsider the normalization using only the
+supplied bounded evidence and never repeat a contradicted finding.
 
 The output is coherent in exactly one of these forms:
 - READY: findings is empty and problem_json/private_cases_json contain complete valid JSON artifacts.
@@ -319,6 +337,9 @@ class CustomProblemPreparationService:
             active_concepts = await self._active_concepts()
             if self._gateway is None or self._executor is None:
                 raise RuntimeError("Preparation providers were not configured")
+            source_evidence = derive_custom_problem_source_evidence(
+                claimed.original_problem_text
+            )
             normalized_result = await self._gateway.reason_structured_for_user(
                 user_id=user_id,
                 user_scoped_budget=UserScopedReasoningBudget(
@@ -333,11 +354,18 @@ class CustomProblemPreparationService:
                     configuration={"quality_gate": CUSTOM_QUALITY_GATE_VERSION},
                 ),
                 instructions=NORMALIZE_INSTRUCTIONS,
-                input_content=_normalization_input(claimed.original_problem_text, active_concepts),
+                input_content=_normalization_input(
+                    claimed.original_problem_text,
+                    active_concepts,
+                    source_evidence,
+                ),
                 output_model=NormalizedProblemOutput,
                 timeout_seconds=self._reasoning_timeout_seconds,
                 reasoning_effort_override=CUSTOM_NORMALIZATION_REASONING_EFFORT,
-                metadata={"custom_problem_preparation_id": str(preparation_id)},
+                metadata={
+                    "custom_problem_preparation_id": str(preparation_id),
+                    "normalization_attempt": "initial",
+                },
             )
             await self._record_invocation(
                 preparation_id,
@@ -346,6 +374,67 @@ class CustomProblemPreparationService:
                 normalized_result.invocation_id,
             )
             normalized = normalized_result.parsed
+            reasoning_calls_used = 1
+            contradicted_findings = contradicted_normalization_findings(
+                (finding.code for finding in normalized.findings), source_evidence
+            )
+            if contradicted_findings:
+                recovery_result = await self._gateway.reason_structured_for_user(
+                    user_id=user_id,
+                    user_scoped_budget=UserScopedReasoningBudget(
+                        calls_used_before=reasoning_calls_used,
+                        max_calls=CUSTOM_REASONING_CALL_LIMIT,
+                    ),
+                    capability=CUSTOM_NORMALIZATION_RECOVERY_CAPABILITY,
+                    purpose=NORMALIZE_PURPOSE,
+                    policy=ReasoningPolicyDescriptor(
+                        policy_key=f"{CUSTOM_PREPARATION_POLICY_KEY}.normalize.recovery",
+                        version=CUSTOM_PREPARATION_POLICY_VERSION,
+                        instructions=NORMALIZE_INSTRUCTIONS,
+                        configuration={
+                            "quality_gate": CUSTOM_QUALITY_GATE_VERSION,
+                            "normalization_attempt": "recovery",
+                        },
+                    ),
+                    instructions=NORMALIZE_INSTRUCTIONS,
+                    input_content=_normalization_input(
+                        claimed.original_problem_text,
+                        active_concepts,
+                        source_evidence,
+                        contradicted_findings=contradicted_findings,
+                    ),
+                    output_model=NormalizedProblemOutput,
+                    timeout_seconds=self._reasoning_timeout_seconds,
+                    reasoning_effort_override=(
+                        CUSTOM_NORMALIZATION_RECOVERY_REASONING_EFFORT
+                    ),
+                    metadata={
+                        "custom_problem_preparation_id": str(preparation_id),
+                        "normalization_attempt": "recovery",
+                        "recovery_attempt": 1,
+                        "contradicted_finding_codes": list(contradicted_findings),
+                    },
+                )
+                reasoning_calls_used += 1
+                await self._record_invocation(
+                    preparation_id,
+                    claimed.attempt,
+                    "normalization_ai_invocation_id",
+                    recovery_result.invocation_id,
+                )
+                normalized = recovery_result.parsed
+                recovery_contradictions = contradicted_normalization_findings(
+                    (finding.code for finding in normalized.findings), source_evidence
+                )
+                if recovery_contradictions:
+                    await self._fail(
+                        preparation_id,
+                        claimed.attempt,
+                        "NORMALIZATION_INCONSISTENT",
+                    )
+                    return await self.get_owned(
+                        user_id=user_id, preparation_id=preparation_id
+                    )
             if normalized.recommendation != "READY":
                 await self._complete_quality(
                     preparation_id,
@@ -365,7 +454,8 @@ class CustomProblemPreparationService:
             pack_result = await self._gateway.reason_structured_for_user(
                 user_id=user_id,
                 user_scoped_budget=UserScopedReasoningBudget(
-                    calls_used_before=1, max_calls=CUSTOM_REASONING_CALL_LIMIT
+                    calls_used_before=reasoning_calls_used,
+                    max_calls=CUSTOM_REASONING_CALL_LIMIT,
                 ),
                 capability=CUSTOM_PACK_CAPABILITY,
                 purpose=PACK_PURPOSE,
@@ -784,22 +874,36 @@ def deterministic_intake_outcome(
     return None
 
 
-def _normalization_input(value: str, concepts: dict[str, Concept]) -> str:
+def _normalization_input(
+    value: str,
+    concepts: dict[str, Concept],
+    source_evidence: CustomProblemSourceEvidence,
+    *,
+    contradicted_findings: tuple[str, ...] = (),
+) -> str:
+    payload: dict[str, object] = {
+        "untrusted_problem_text": value,
+        "software_source_evidence": source_evidence.to_payload(),
+        "active_concept_allowlist": list(concepts),
+        "supported_languages": ["cpp", "python", "java"],
+        "supported_types": [
+            "int",
+            "bool",
+            "string",
+            "int[]",
+            "string[]",
+            "int[][]",
+            "string[][]",
+        ],
+    }
+    if contradicted_findings:
+        payload["normalization_recovery"] = {
+            "attempt": 1,
+            "reason": "prior_findings_contradicted_by_software_source_evidence",
+            "contradicted_finding_codes": list(contradicted_findings),
+        }
     return json.dumps(
-        {
-            "untrusted_problem_text": value,
-            "active_concept_allowlist": list(concepts),
-            "supported_languages": ["cpp", "python", "java"],
-            "supported_types": [
-                "int",
-                "bool",
-                "string",
-                "int[]",
-                "string[]",
-                "int[][]",
-                "string[][]",
-            ],
-        },
+        payload,
         ensure_ascii=False,
         sort_keys=True,
     )
