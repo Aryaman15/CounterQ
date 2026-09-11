@@ -24,6 +24,7 @@ from app.problems.starter_scaffolds import starter_languages_for_execution
 NormalizationArtifactIssueCode = Literal[
     "PROBLEM_JSON_INVALID",
     "PROBLEM_SCHEMA_INVALID",
+    "COMPARATOR_INVALID",
     "EXECUTION_SIGNATURE_CONFLICT",
     "VISIBLE_CASE_ARGUMENT_MISMATCH",
     "VISIBLE_CASE_VALUE_TYPE_INVALID",
@@ -38,6 +39,7 @@ NormalizationArtifactIssueCode = Literal[
 
 _SAFE_FIELD_PATH = re.compile(r"^[A-Za-z0-9_.\[\]-]{1,160}$")
 _SAFE_CONCEPT_KEY = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+_SCALAR_RETURN_TYPES = frozenset({"int", "bool", "string"})
 
 
 @dataclass(frozen=True)
@@ -93,16 +95,12 @@ def validate_normalization_artifacts(
             [NormalizationArtifactIssue("PROBLEM_SCHEMA_INVALID", "problem")]
         )
 
+    raw_execution = canonicalize_execution_comparator(raw_problem.get("execution"))
     try:
-        execution = ExecutionDefinition.model_validate(raw_problem.get("execution"))
+        execution = ExecutionDefinition.model_validate(raw_execution)
     except ValidationError as exc:
         raise NormalizationArtifactValidationError(
-            [
-                NormalizationArtifactIssue(
-                    "PROBLEM_SCHEMA_INVALID",
-                    _validation_field("problem.execution", exc),
-                )
-            ]
+            [_execution_validation_issue(exc)]
         ) from exc
 
     issues: list[NormalizationArtifactIssue] = []
@@ -207,6 +205,18 @@ def validate_normalization_artifacts(
     return problem, private_cases
 
 
+def canonicalize_execution_comparator(raw_execution: object) -> object:
+    """Make scalar equality software-owned without inferring collection semantics."""
+
+    if not isinstance(raw_execution, dict):
+        return raw_execution
+    if raw_execution.get("return_type") not in _SCALAR_RETURN_TYPES:
+        return raw_execution
+    canonical = dict(raw_execution)
+    canonical["comparator"] = "EXACT"
+    return canonical
+
+
 def execution_signature_issue(
     execution: ExecutionDefinition,
     source_evidence: CustomProblemSourceEvidence,
@@ -273,6 +283,18 @@ def _validation_field(prefix: str, exc: ValidationError) -> str:
         return prefix
     location = ".".join(str(part) for part in errors[0].get("loc", ()))
     return f"{prefix}.{location}" if location else prefix
+
+
+def _execution_validation_issue(exc: ValidationError) -> NormalizationArtifactIssue:
+    errors = exc.errors(include_url=False, include_context=False, include_input=False)
+    if any(tuple(error.get("loc", ())) == ("comparator",) for error in errors):
+        return NormalizationArtifactIssue(
+            "COMPARATOR_INVALID", "problem.execution.comparator"
+        )
+    return NormalizationArtifactIssue(
+        "PROBLEM_SCHEMA_INVALID",
+        _validation_field("problem.execution", exc),
+    )
 
 
 def _bounded_unique_issues(

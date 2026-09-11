@@ -25,6 +25,7 @@ from app.problems.custom import (
     CustomPreparationIdempotencyConflict,
     CustomPreparationInProgress,
     CustomPreparationNotFound,
+    CustomPreparationPolicyOutdated,
     CustomProblemPreparationService,
 )
 
@@ -103,6 +104,14 @@ async def prepare_custom_problem(
             detail={
                 "category": "custom_problem_preparation_in_progress",
                 "message": "This problem is already being prepared.",
+            },
+        ) from exc
+    except CustomPreparationPolicyOutdated as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "category": "custom_problem_preparation_policy_outdated",
+                "message": "This saved preparation must be recreated before it can continue.",
             },
         ) from exc
 

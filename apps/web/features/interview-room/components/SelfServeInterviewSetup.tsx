@@ -240,35 +240,47 @@ export function SelfServeInterviewSetupForm({
     try {
       let preparation = customPreparation;
       const userId = me?.user_id;
-      const idempotencyKey = customDraftIdempotencyKey || createDraftIdempotencyKey();
+      let idempotencyKey = customDraftIdempotencyKey || createDraftIdempotencyKey();
       if (!customDraftIdempotencyKey) setCustomDraftIdempotencyKey(idempotencyKey);
-      if (userId) {
-        writeCustomPreparationPointer({
-          version: 1,
-          user_id: userId,
-          preparation_id: preparation?.preparation_id ?? null,
-          idempotency_key: idempotencyKey,
-          draft_text: customProblemText,
-        });
-      }
-      if (!preparation) {
-        preparation = await api.createCustomProblemPreparation({
-          problem_text: customProblemText,
-          idempotency_key: idempotencyKey,
-        });
-        setCustomPreparation(preparation);
+      for (let policyAttempt = 0; policyAttempt < 2; policyAttempt += 1) {
         if (userId) {
           writeCustomPreparationPointer({
             version: 1,
             user_id: userId,
-            preparation_id: preparation.preparation_id,
+            preparation_id: preparation?.preparation_id ?? null,
             idempotency_key: idempotencyKey,
             draft_text: customProblemText,
           });
         }
+        if (!preparation) {
+          preparation = await api.createCustomProblemPreparation({
+            problem_text: customProblemText,
+            idempotency_key: idempotencyKey,
+          });
+          setCustomPreparation(preparation);
+          if (userId) {
+            writeCustomPreparationPointer({
+              version: 1,
+              user_id: userId,
+              preparation_id: preparation.preparation_id,
+              idempotency_key: idempotencyKey,
+              draft_text: customProblemText,
+            });
+          }
+        }
+        try {
+          const prepared = await api.prepareCustomProblem(preparation.preparation_id);
+          setCustomPreparation(prepared);
+          return;
+        } catch (caught: unknown) {
+          if (policyAttempt !== 0 || !isPreparationPolicyOutdated(caught)) throw caught;
+          if (userId) clearCustomPreparationPointer(userId);
+          idempotencyKey = createDraftIdempotencyKey();
+          preparation = null;
+          setCustomDraftIdempotencyKey(idempotencyKey);
+          setCustomPreparation(null);
+        }
       }
-      const prepared = await api.prepareCustomProblem(preparation.preparation_id);
-      setCustomPreparation(prepared);
     } catch {
       setCustomError("CounterQ could not prepare this problem right now. Try again.");
     } finally {
@@ -589,6 +601,12 @@ function clearCustomPreparationPointer(userId: string): void {
 
 function isNotFound(error: unknown): boolean {
   return error instanceof CounterQApiError && error.status === 404;
+}
+
+function isPreparationPolicyOutdated(error: unknown): boolean {
+  return error instanceof CounterQApiError
+    && error.status === 409
+    && error.detailCategory === "custom_problem_preparation_policy_outdated";
 }
 
 function SetupBoundary({ status, children }: { status: string; children?: React.ReactNode }) {

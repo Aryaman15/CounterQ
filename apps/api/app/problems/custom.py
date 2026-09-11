@@ -66,8 +66,8 @@ logger = structlog.get_logger(__name__)
 
 MAX_CUSTOM_PROBLEM_CHARACTERS = 20_000
 CUSTOM_PREPARATION_POLICY_KEY = "stage9e_custom_problem_preparation"
-CUSTOM_PREPARATION_POLICY_VERSION = "v5"
-CUSTOM_QUALITY_GATE_VERSION = "stage9e.v5"
+CUSTOM_PREPARATION_POLICY_VERSION = "v6"
+CUSTOM_QUALITY_GATE_VERSION = "stage9e.v6"
 CUSTOM_REASONING_CALL_LIMIT = 3
 CUSTOM_PROCESSING_LEASE = timedelta(minutes=10)
 NORMALIZE_PURPOSE = "custom_problem_normalization"
@@ -83,6 +83,7 @@ TRUSTED_CUSTOM_PREPARATION_POLICY_GATES = frozenset(
     {
         ("v3", "stage9e.v3"),
         ("v4", "stage9e.v4"),
+        ("v5", "stage9e.v5"),
         (CUSTOM_PREPARATION_POLICY_VERSION, CUSTOM_QUALITY_GATE_VERSION),
     }
 )
@@ -153,6 +154,10 @@ class CustomPreparationIdempotencyConflict(ValueError):
 
 
 class CustomPreparationInProgress(ValueError):
+    pass
+
+
+class CustomPreparationPolicyOutdated(ValueError):
     pass
 
 
@@ -629,6 +634,24 @@ class CustomProblemPreparationService:
             )
             if preparation is None:
                 raise CustomPreparationNotFound("Custom problem preparation was not found")
+            if (
+                preparation.operational_status == "COMPLETED"
+                and preparation.quality_outcome == "READY"
+            ):
+                return CustomPreparationClaim(
+                    original_problem_text=preparation.original_problem_text,
+                    attempt=preparation.attempt_count,
+                    completed=True,
+                )
+            if (
+                preparation.preparation_policy_key != CUSTOM_PREPARATION_POLICY_KEY
+                or preparation.preparation_policy_version
+                != CUSTOM_PREPARATION_POLICY_VERSION
+                or preparation.quality_gate_version != CUSTOM_QUALITY_GATE_VERSION
+            ):
+                raise CustomPreparationPolicyOutdated(
+                    "Custom problem preparation policy is outdated"
+                )
             if preparation.operational_status == "COMPLETED":
                 return CustomPreparationClaim(
                     original_problem_text=preparation.original_problem_text,

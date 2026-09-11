@@ -11,6 +11,7 @@ from app.problems.content import load_curated_content
 from app.problems.custom_artifact_validation import (
     NormalizationArtifactIssue,
     NormalizationArtifactValidationError,
+    canonicalize_execution_comparator,
     validate_normalization_artifacts,
 )
 from app.problems.custom_source_evidence import derive_custom_problem_source_evidence
@@ -72,6 +73,7 @@ def _validate(
     [
         ("problem_json_invalid", "PROBLEM_JSON_INVALID"),
         ("problem_schema_invalid", "PROBLEM_SCHEMA_INVALID"),
+        ("collection_comparator", "COMPARATOR_INVALID"),
         ("signature_conflict", "EXECUTION_SIGNATURE_CONFLICT"),
         ("visible_arguments", "VISIBLE_CASE_ARGUMENT_MISMATCH"),
         ("visible_value_type", "VISIBLE_CASE_VALUE_TYPE_INVALID"),
@@ -95,6 +97,9 @@ def test_normalized_artifact_failures_have_bounded_diagnostic_codes(
         problem_input = "{"
     elif mutation == "problem_schema_invalid":
         del problem_input["execution"]
+    elif mutation == "collection_comparator":
+        problem_input["execution"]["return_type"] = "int[]"
+        problem_input["execution"]["comparator"] = "COUNT"
     elif mutation == "signature_conflict":
         problem_input["execution"]["method_name"] = "solve"
     elif mutation == "visible_arguments":
@@ -148,6 +153,45 @@ def test_valid_artifacts_preserve_the_exact_source_signature() -> None:
     ]
     assert validated.execution.return_type == "int"
     assert len(validated_private_cases) == 1
+
+
+@pytest.mark.parametrize(
+    ("return_type", "model_comparator"),
+    [
+        ("int", "COUNT"),
+        ("bool", "UNORDERED_LIST"),
+        ("string", "anything"),
+    ],
+)
+def test_scalar_comparator_is_canonicalized_to_exact(
+    return_type: str,
+    model_comparator: str,
+) -> None:
+    proposed = {"return_type": return_type, "comparator": model_comparator}
+
+    canonical = canonicalize_execution_comparator(proposed)
+
+    assert canonical == {"return_type": return_type, "comparator": "EXACT"}
+    assert proposed["comparator"] == model_comparator
+
+
+@pytest.mark.parametrize(
+    ("return_type", "comparator"),
+    [
+        ("int[]", "EXACT"),
+        ("string[]", "UNORDERED_LIST"),
+        ("int[][]", "EXACT"),
+        ("string[][]", "UNORDERED_LIST"),
+        ("int[]", "COUNT"),
+    ],
+)
+def test_collection_comparator_is_not_inferred_or_rewritten(
+    return_type: str,
+    comparator: str,
+) -> None:
+    proposed = {"return_type": return_type, "comparator": comparator}
+
+    assert canonicalize_execution_comparator(proposed) is proposed
 
 
 def test_diagnostic_payload_drops_unbounded_or_unsafe_generated_labels() -> None:

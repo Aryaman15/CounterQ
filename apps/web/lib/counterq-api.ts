@@ -39,6 +39,7 @@ export class CounterQApiError extends Error {
     readonly category: "AUTHENTICATION_REQUIRED" | "ACCESS_DENIED" | "REQUEST_FAILED",
     readonly status: number,
     readonly stage: CounterQApiErrorStage = "HTTP_RESPONSE",
+    readonly detailCategory: string | null = null,
   ) {
     super(category === "REQUEST_FAILED" ? "CounterQ request failed" : category);
     this.name = "CounterQApiError";
@@ -276,7 +277,12 @@ export class CounterQApiClient {
         : response.status === 403
           ? "ACCESS_DENIED"
           : "REQUEST_FAILED";
-      throw new CounterQApiError(category, response.status, "HTTP_RESPONSE");
+      throw new CounterQApiError(
+        category,
+        response.status,
+        "HTTP_RESPONSE",
+        await boundedErrorDetailCategory(response),
+      );
     }
     try {
       return await response.json() as T;
@@ -285,6 +291,23 @@ export class CounterQApiClient {
       developmentAuthDiagnostic("API response body invalid");
       throw new CounterQApiError("REQUEST_FAILED", response.status, "RESPONSE_BODY");
     }
+  }
+}
+
+async function boundedErrorDetailCategory(response: Response): Promise<string | null> {
+  try {
+    const value: unknown = await response.json();
+    if (!value || typeof value !== "object" || !("detail" in value)) return null;
+    const detail = value.detail;
+    if (!detail || typeof detail !== "object" || !("category" in detail)) return null;
+    const category = detail.category;
+    return typeof category === "string"
+      && category.length <= 128
+      && /^[a-z][a-z0-9_]*$/.test(category)
+      ? category
+      : null;
+  } catch {
+    return null;
   }
 }
 

@@ -12,6 +12,7 @@ from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,6 +34,7 @@ from app.ai_gateway.provider import (
     ReasoningUsage,
 )
 from app.auth.models import User
+from app.auth.principal import CurrentUser
 from app.auth.repository import CandidateProfileRepository, UserRepository
 from app.config.settings import create_settings, get_settings
 from app.db.session import build_engine
@@ -62,11 +64,13 @@ from app.problems.custom import (
     CustomPreparationIdempotencyConflict,
     CustomPreparationInProgress,
     CustomPreparationNotFound,
+    CustomPreparationPolicyOutdated,
     CustomProblemPreparationService,
     NormalizedProblemOutput,
     custom_preparation_retryable,
     normalize_problem_text,
 )
+from app.problems.custom_routes import prepare_custom_problem
 from app.problems.models import CustomProblemPreparation, InterviewPackVersion, Problem
 from app.problems.selection import CandidateProblemSelectionInvalid
 from app.problems.service import CuratedProblemService
@@ -572,8 +576,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v5"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v5"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v6"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v6"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -938,6 +942,70 @@ async def test_count_pairs_invalid_ready_artifact_recovers_once_and_launches(
         ]
         assert ready.preparation.normalization_ai_invocation_id == invocations[1].id
         assert invocations[0].status == "SUCCEEDED"
+    finally:
+        await engine.dispose()
+
+
+async def test_count_pairs_visible_case_recovery_canonicalizes_scalar_comparator() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    initial, pack = _count_pairs_outputs()
+    initial_problem = json.loads(initial["problem_json"])
+    initial_problem["execution"]["visible_cases"] = []
+    initial["problem_json"] = json.dumps(initial_problem)
+    recovered = deepcopy(_count_pairs_outputs()[0])
+    recovered_problem = json.loads(recovered["problem_json"])
+    recovered_problem["execution"]["comparator"] = "COUNT"
+    recovered["problem_json"] = json.dumps(recovered_problem)
+    provider = SequenceReasoningProvider([initial, recovered, pack])
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-count-pairs-scalar-comparator",
+        )
+        ready = await service.prepare(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.problem_version is not None
+        assert [request.capability for request in provider.requests] == [
+            "STANDARD_REASONING",
+            "STRONG_REASONING",
+            "STRONG_REASONING",
+        ]
+        assert provider.reasoning_efforts == ["medium", "medium", "medium"]
+        assert [request.timeout_seconds for request in provider.requests] == [
+            90.0,
+            90.0,
+            90.0,
+        ]
+        recovery_input = json.loads(provider.requests[1].input_content)
+        assert recovery_input["normalization_recovery"]["artifact_issues"] == [
+            {
+                "code": "PROBLEM_SCHEMA_INVALID",
+                "field": "problem.execution.visible_cases",
+            }
+        ]
+        assert [request.language for request in executor.requests] == [
+            "cpp",
+            "python",
+            "java",
+        ]
+        execution = cast(
+            dict[str, Any], ready.problem_version.io_schema_json["execution"]
+        )
+        assert execution["method_name"] == "countPairs"
+        assert execution["arguments"] == [
+            {"name": "nums", "type": "int[]"},
+            {"name": "target", "type": "int"},
+        ]
+        assert execution["return_type"] == "int"
+        assert execution["comparator"] == "EXACT"
     finally:
         await engine.dispose()
 
@@ -1322,6 +1390,85 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
         await engine.dispose()
 
 
+async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider([])
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-outdated-failed-v5",
+        )
+        async with maker() as session, session.begin():
+            preparation = await session.get(
+                CustomProblemPreparation, created.preparation.id
+            )
+            assert preparation is not None
+            preparation.preparation_policy_version = "v5"
+            preparation.quality_gate_version = "stage9e.v5"
+            preparation.operational_status = "FAILED"
+            preparation.failure_category = "TIMEOUT"
+            preparation.attempt_count = 2
+            preparation.candidate_message = "The earlier preparation did not finish."
+
+        before = await service.get_owned(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+        before_state = (
+            before.preparation.preparation_policy_key,
+            before.preparation.preparation_policy_version,
+            before.preparation.quality_gate_version,
+            before.preparation.operational_status,
+            before.preparation.failure_category,
+            before.preparation.attempt_count,
+            before.preparation.normalization_ai_invocation_id,
+            before.preparation.pack_ai_invocation_id,
+            before.preparation.updated_at,
+        )
+
+        with pytest.raises(CustomPreparationPolicyOutdated):
+            await service.prepare(
+                user_id=user_id, preparation_id=created.preparation.id
+            )
+
+        with pytest.raises(HTTPException) as conflict:
+            await prepare_custom_problem(
+                preparation_id=created.preparation.id,
+                current_user=CurrentUser(id=user_id, status="ACTIVE"),
+                settings=get_settings(),
+                reasoning_provider_builder=lambda _settings: provider,
+                executor_provider_builder=lambda _settings: executor,
+                maker=maker,
+            )
+        assert conflict.value.status_code == 409
+        assert cast(object, conflict.value.detail) == {
+            "category": "custom_problem_preparation_policy_outdated",
+            "message": "This saved preparation must be recreated before it can continue.",
+        }
+        after = await service.get_owned(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+        assert (
+            after.preparation.preparation_policy_key,
+            after.preparation.preparation_policy_version,
+            after.preparation.quality_gate_version,
+            after.preparation.operational_status,
+            after.preparation.failure_category,
+            after.preparation.attempt_count,
+            after.preparation.normalization_ai_invocation_id,
+            after.preparation.pack_ai_invocation_id,
+            after.preparation.updated_at,
+        ) == before_state
+        assert provider.requests == []
+        assert executor.requests == []
+    finally:
+        await engine.dispose()
+
+
 async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_runtime() -> None:
     user_id = await _candidate()
     engine = build_engine()
@@ -1438,7 +1585,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
 
 @pytest.mark.parametrize(
     ("policy_version", "gate_version"),
-    [("v3", "stage9e.v3"), ("v4", "stage9e.v4")],
+    [("v3", "stage9e.v3"), ("v4", "stage9e.v4"), ("v5", "stage9e.v5")],
 )
 async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(
     policy_version: str,

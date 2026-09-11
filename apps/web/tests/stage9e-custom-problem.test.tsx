@@ -263,6 +263,77 @@ describe("Stage 9E custom problem setup", () => {
     expect(prepareCalls).toBe(1);
   });
 
+  it("recreates an outdated failed preparation with a fresh identity and preserved draft", async () => {
+    storePreparationPointer(pending.preparation_id);
+    const oldFailed = {
+      ...pending,
+      operational_status: "FAILED",
+      retryable: true,
+      message: "CounterQ could not finish preparing this problem. Retry the preparation.",
+    };
+    const freshPreparationId = "01991b74-927a-7000-8000-000000000040";
+    const freshPending = { ...pending, preparation_id: freshPreparationId };
+    const freshReady = { ...ready, preparation_id: freshPreparationId };
+    let createBody: Record<string, string> | null = null;
+    const prepareIds: string[] = [];
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/me")) return response(profile);
+      if (url.endsWith("/api/problems/curated")) return response(catalog);
+      if (url.endsWith(`/preparations/${pending.preparation_id}`)) {
+        return response(oldFailed);
+      }
+      if (url.endsWith(`/preparations/${pending.preparation_id}/prepare`)) {
+        prepareIds.push(pending.preparation_id);
+        return response({
+          detail: {
+            category: "custom_problem_preparation_policy_outdated",
+            message: "This saved preparation must be recreated before it can continue.",
+          },
+        }, 409);
+      }
+      if (url.endsWith("/api/problems/custom/preparations") && init?.method === "POST") {
+        createBody = JSON.parse(String(init.body));
+        return response(freshPending, 201);
+      }
+      if (url.endsWith(`/preparations/${freshPreparationId}/prepare`)) {
+        prepareIds.push(freshPreparationId);
+        return response(freshReady);
+      }
+      throw new Error(`Unexpected request: ${url} ${init?.method}`);
+    });
+    const api = new CounterQApiClient(
+      async () => "token",
+      "http://api.test",
+      fetchFn as typeof fetch,
+    );
+    render(
+      <SelfServeInterviewSetupForm
+        api={api}
+        onOnboardingRequired={vi.fn()}
+        onCreated={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Retry preparation" }));
+
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.getByLabelText("Full statement")).toHaveValue(customProblemText);
+    expect(prepareIds).toEqual([pending.preparation_id, freshPreparationId]);
+    expect(createBody).toEqual({
+      problem_text: customProblemText,
+      idempotency_key: expect.not.stringMatching(/^stable-draft-key$/),
+    });
+    const stored = JSON.parse(String(sessionStorage.getItem(
+      `counterq:custom-preparation:v1:${profile.user_id}`,
+    )));
+    expect(stored).toMatchObject({
+      preparation_id: freshPreparationId,
+      draft_text: customProblemText,
+    });
+    expect(stored.idempotency_key).not.toBe("stable-draft-key");
+  });
+
   it("restores NEEDS_CORRECTION and requires a new edited draft", async () => {
     storePreparationPointer(pending.preparation_id);
     const needsCorrection = {
