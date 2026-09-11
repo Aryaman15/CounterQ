@@ -208,6 +208,7 @@ class CustomProblemPreparationService:
         gateway: AIGateway | None = None,
         executor: ExecutorProvider | None = None,
         clock: Callable[[], datetime] | None = None,
+        reasoning_timeout_seconds: float = 90.0,
         compile_timeout_seconds: int = DEFAULT_COMPILE_TIMEOUT_SECONDS,
         run_timeout_seconds: int = DEFAULT_RUN_TIMEOUT_SECONDS,
         memory_limit_mb: int = DEFAULT_MEMORY_LIMIT_MB,
@@ -217,6 +218,9 @@ class CustomProblemPreparationService:
         self._gateway = gateway
         self._executor = executor
         self._clock = clock or (lambda: datetime.now(UTC))
+        if reasoning_timeout_seconds <= 0:
+            raise ValueError("Custom problem reasoning timeout must be positive")
+        self._reasoning_timeout_seconds = reasoning_timeout_seconds
         self._compile_timeout_seconds = compile_timeout_seconds
         self._run_timeout_seconds = run_timeout_seconds
         self._memory_limit_mb = memory_limit_mb
@@ -323,6 +327,7 @@ class CustomProblemPreparationService:
                 instructions=NORMALIZE_INSTRUCTIONS,
                 input_content=_normalization_input(claimed.original_problem_text, active_concepts),
                 output_model=NormalizedProblemOutput,
+                timeout_seconds=self._reasoning_timeout_seconds,
                 metadata={"custom_problem_preparation_id": str(preparation_id)},
             )
             await self._record_invocation(
@@ -364,6 +369,7 @@ class CustomProblemPreparationService:
                 instructions=PACK_INSTRUCTIONS,
                 input_content=_pack_input(problem, active_concepts),
                 output_model=PreparedPackOutput,
+                timeout_seconds=self._reasoning_timeout_seconds,
                 metadata={"custom_problem_preparation_id": str(preparation_id)},
             )
             await self._record_invocation(

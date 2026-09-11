@@ -83,6 +83,7 @@ async def prepare_custom_problem(
             provider=reasoning_provider_builder(settings),
         ),
         executor=executor_provider_builder(settings),
+        reasoning_timeout_seconds=settings.custom_problem_reasoning_timeout_seconds,
         compile_timeout_seconds=settings.execution_compile_timeout_seconds,
         run_timeout_seconds=settings.execution_run_timeout_seconds,
         memory_limit_mb=settings.execution_memory_limit_mb,

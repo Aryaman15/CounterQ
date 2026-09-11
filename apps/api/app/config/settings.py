@@ -134,6 +134,12 @@ class Settings(BaseSettings):
         default=20.0,
         validation_alias="COUNTERQ_REASONING_TIMEOUT_SECONDS",
     )
+    custom_problem_reasoning_timeout_seconds: float = Field(
+        default=90.0,
+        gt=0,
+        le=180,
+        validation_alias="COUNTERQ_CUSTOM_PROBLEM_REASONING_TIMEOUT_SECONDS",
+    )
     session_report_reasoning_timeout_seconds: float = Field(
         default=60.0,
         gt=0,

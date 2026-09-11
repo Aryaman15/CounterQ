@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.ai_gateway import gateway as gateway_module
 from app.ai_gateway.gateway import (
     AIGateway,
     ReasoningBudgetExceeded,
@@ -32,7 +33,7 @@ from app.ai_gateway.provider import (
 )
 from app.auth.models import User
 from app.auth.repository import CandidateProfileRepository, UserRepository
-from app.config.settings import get_settings
+from app.config.settings import create_settings, get_settings
 from app.db.session import build_engine
 from app.execution.harness import execution_request_for_problem
 from app.execution.provider import (
@@ -137,6 +138,14 @@ class MutableClock:
 
     def advance(self, delta: timedelta) -> None:
         self.value += delta
+
+
+class CapturingLogger:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, dict[str, object]]] = []
+
+    def info(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
 
 
 class PassingExecutor:
@@ -357,6 +366,7 @@ def _service(
     executor: PassingExecutor,
     *,
     clock: Callable[[], datetime] | None = None,
+    reasoning_timeout_seconds: float = 90.0,
 ) -> CustomProblemPreparationService:
     gateway = AIGateway(
         settings=get_settings(),
@@ -369,6 +379,7 @@ def _service(
         gateway=gateway,
         executor=executor,
         clock=clock,
+        reasoning_timeout_seconds=reasoning_timeout_seconds,
     )
 
 
@@ -425,13 +436,42 @@ def test_starter_scaffolds_cover_every_supported_semantic_type(
     assert "UnsupportedOperationException" in languages["java"].starter_code
 
 
+def test_custom_problem_timeout_setting_is_dedicated_and_bounded(tmp_path: Path) -> None:
+    defaults = create_settings(env_file=tmp_path / "missing.env")
+    assert defaults.reasoning_timeout_seconds == 20.0
+    assert defaults.session_report_reasoning_timeout_seconds == 60.0
+    assert defaults.custom_problem_reasoning_timeout_seconds == 90.0
+
+    env_file = tmp_path / "custom-problem-timeout.env"
+    env_file.write_text(
+        "COUNTERQ_CUSTOM_PROBLEM_REASONING_TIMEOUT_SECONDS=73\n",
+        encoding="utf-8",
+    )
+    configured = create_settings(env_file=env_file)
+    assert configured.custom_problem_reasoning_timeout_seconds == 73.0
+    assert configured.reasoning_timeout_seconds == 20.0
+    assert configured.session_report_reasoning_timeout_seconds == 60.0
+
+    env_file.write_text(
+        "COUNTERQ_CUSTOM_PROBLEM_REASONING_TIMEOUT_SECONDS=181\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError):
+        create_settings(env_file=env_file)
+
+
 async def test_count_pairs_language_signature_normalizes_to_ready_without_clarification() -> None:
     user_id = await _candidate()
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     provider = SequenceReasoningProvider(_count_pairs_outputs())
     executor = PassingExecutor()
-    service = _service(maker, provider, executor)
+    service = _service(
+        maker,
+        provider,
+        executor,
+        reasoning_timeout_seconds=73.0,
+    )
     try:
         created = await service.create(
             user_id=user_id,
@@ -452,6 +492,11 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ]
         assert execution["return_type"] == "int"
         assert len(provider.requests) == 2
+        assert [request.timeout_seconds for request in provider.requests] == [73.0, 73.0]
+        assert [request.purpose for request in provider.requests] == [
+            "custom_problem_normalization",
+            "custom_problem_pack_preparation",
+        ]
         normalization_request = provider.requests[0]
         normalization_input = json.loads(normalization_request.input_content)
         assert normalization_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
@@ -466,6 +511,71 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
             "python",
             "java",
         ]
+    finally:
+        await engine.dispose()
+
+
+async def test_reasoning_timeout_is_retryable_and_a_later_attempt_can_succeed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    timeout_provider = SequenceReasoningProvider(_outputs(), delay_seconds=0.05)
+    timeout_service = _service(
+        maker,
+        timeout_provider,
+        PassingExecutor(),
+        reasoning_timeout_seconds=0.001,
+    )
+    captured_logs = CapturingLogger()
+    monkeypatch.setattr(gateway_module, "logger", captured_logs)
+    problem_text = (
+        "Given an integer array and target, return the requested integer. The statement "
+        "includes examples, constraints, input, output, and a function signature."
+    )
+    try:
+        created = await timeout_service.create(
+            user_id=user_id,
+            problem_text=problem_text,
+            idempotency_key="stage9e-timeout-retry",
+        )
+        failed = await timeout_service.prepare(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "TIMEOUT"
+        assert custom_preparation_retryable(failed.preparation)
+        assert failed.preparation.attempt_count == 1
+        assert len(timeout_provider.requests) == 1
+        assert timeout_provider.requests[0].timeout_seconds == 0.001
+        timeout_log = next(
+            fields
+            for event, fields in captured_logs.events
+            if event == "reasoning_provider_call_timing" and fields["outcome"] == "TIMEOUT"
+        )
+        assert timeout_log["purpose"] == "custom_problem_normalization"
+        assert isinstance(timeout_log["provider_elapsed_ms"], int)
+        assert "instructions" not in timeout_log
+        assert "input_content" not in timeout_log
+
+        retry_provider = SequenceReasoningProvider(_outputs())
+        retry_service = _service(
+            maker,
+            retry_provider,
+            PassingExecutor(),
+            reasoning_timeout_seconds=1.0,
+        )
+        ready = await retry_service.prepare(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+
+        assert ready.preparation.operational_status == "COMPLETED"
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.attempt_count == 2
+        assert [request.timeout_seconds for request in retry_provider.requests] == [1.0, 1.0]
     finally:
         await engine.dispose()
 
