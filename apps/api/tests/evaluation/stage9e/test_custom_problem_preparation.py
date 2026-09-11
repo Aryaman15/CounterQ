@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator, Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
@@ -46,7 +47,9 @@ from app.interviews.restoration import SessionRestorationService
 from app.problems.content import ExecutionDefinition, load_curated_content, load_ontology
 from app.problems.contracts import custom_preparation_response
 from app.problems.custom import (
+    CUSTOM_PREPARATION_POLICY_VERSION,
     CUSTOM_PROCESSING_LEASE,
+    CUSTOM_QUALITY_GATE_VERSION,
     CustomPreparationIdempotencyConflict,
     CustomPreparationInProgress,
     CustomPreparationNotFound,
@@ -58,6 +61,10 @@ from app.problems.models import CustomProblemPreparation, Problem
 from app.problems.selection import CandidateProblemSelectionInvalid
 from app.problems.service import CuratedProblemService
 from app.problems.starter_scaffolds import starter_languages_for_execution
+
+COUNT_PAIRS_PROBLEM = (Path(__file__).with_name("fixtures") / "count_pairs_problem.txt").read_text(
+    encoding="utf-8"
+)
 
 
 class SequenceReasoningProvider:
@@ -232,12 +239,116 @@ def _outputs(*, concept_key: str | None = None) -> list[dict[str, Any]]:
     return [
         {
             "recommendation": "READY",
-            "candidate_message": "The statement can be prepared.",
+            "findings": [],
             "problem_json": json.dumps(problem),
             "private_cases_json": json.dumps([private_case]),
         },
         {"pack_json": json.dumps(entry.interview_pack.model_dump(mode="json"))},
     ]
+
+
+def _count_pairs_outputs() -> list[dict[str, Any]]:
+    entry = next(item for item in load_curated_content() if item.problem.slug == "two-sum")
+    problem = entry.problem.model_dump(mode="json")
+    problem.update(
+        {
+            "title": "Count Pairs",
+            "statement": (
+                "Given an array of integers nums and an integer target, return the number "
+                "of index pairs (i, j) where i < j and nums[i] + nums[j] equals target."
+            ),
+            "constraints": [
+                "1 <= nums.length <= 100000",
+                "-100000 <= nums[i] <= 100000",
+                "-200000 <= target <= 200000",
+            ],
+            "examples": [
+                {
+                    "input": "nums = [1, 2, 3, 4], target = 5",
+                    "output": "2",
+                    "explanation": "The valid value pairs are (1,4) and (2,3).",
+                },
+                {
+                    "input": "nums = [1, 1, 1], target = 2",
+                    "output": "3",
+                    "explanation": "All three distinct index pairs are valid.",
+                },
+            ],
+            "execution": {
+                "method_name": "countPairs",
+                "arguments": [
+                    {"name": "nums", "type": "int[]"},
+                    {"name": "target", "type": "int"},
+                ],
+                "return_type": "int",
+                "comparator": "EXACT",
+                "visible_cases": [
+                    {
+                        "arguments": {"nums": [1, 2, 3, 4], "target": 5},
+                        "expected_output": 2,
+                    },
+                    {
+                        "arguments": {"nums": [1, 1, 1], "target": 2},
+                        "expected_output": 3,
+                    },
+                ],
+                "custom_test_supported": True,
+            },
+        }
+    )
+    pack = entry.interview_pack.model_dump(mode="json")
+    reference_sources = {
+        "cpp": (
+            "class Solution { public: int countPairs(vector<int> nums, int target) { "
+            "unordered_map<int,int> seen; int count=0; for (int value: nums) { "
+            "count += seen[target-value]; ++seen[value]; } return count; } };"
+        ),
+        "python": (
+            "class Solution:\n"
+            "    def countPairs(self, nums, target):\n"
+            "        seen = {}\n"
+            "        count = 0\n"
+            "        for value in nums:\n"
+            "            count += seen.get(target - value, 0)\n"
+            "            seen[value] = seen.get(value, 0) + 1\n"
+            "        return count"
+        ),
+        "java": (
+            "class Solution { public int countPairs(int[] nums, int target) { "
+            "java.util.Map<Integer,Integer> seen=new java.util.HashMap<>(); int count=0; "
+            "for(int value:nums){ count += seen.getOrDefault(target-value,0); "
+            "seen.put(value,seen.getOrDefault(value,0)+1); } return count; } }"
+        ),
+    }
+    for reference in pack["reference_solutions"]:
+        reference["source_code"] = reference_sources[reference["language"]]
+    return [
+        {
+            "recommendation": "READY",
+            "findings": [],
+            "problem_json": json.dumps(problem),
+            "private_cases_json": json.dumps(
+                [
+                    {
+                        "arguments": {"nums": [1, 1, 1, 1], "target": 2},
+                        "expected_output": 6,
+                    }
+                ]
+            ),
+        },
+        {"pack_json": json.dumps(pack)},
+    ]
+
+
+def _non_ready_output(
+    recommendation: Literal["NEEDS_CORRECTION", "REJECTED"], code: str
+) -> dict[str, Any]:
+    return {
+        "recommendation": recommendation,
+        "findings": [{"code": code}],
+        "problem_json": "",
+        "private_cases_json": "",
+    }
 
 
 def _service(
@@ -312,6 +423,149 @@ def test_starter_scaffolds_cover_every_supported_semantic_type(
     assert "logic_error" in languages["cpp"].starter_code
     assert "NotImplementedError" in languages["python"].starter_code
     assert "UnsupportedOperationException" in languages["java"].starter_code
+
+
+async def test_count_pairs_language_signature_normalizes_to_ready_without_clarification() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(_count_pairs_outputs())
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-count-pairs-acceptance",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
+        assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
+        assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
+        assert ready.problem_version is not None
+        execution = cast(dict[str, Any], ready.problem_version.io_schema_json["execution"])
+        assert execution["method_name"] == "countPairs"
+        assert execution["arguments"] == [
+            {"name": "nums", "type": "int[]"},
+            {"name": "target", "type": "int"},
+        ]
+        assert execution["return_type"] == "int"
+        assert len(provider.requests) == 2
+        normalization_request = provider.requests[0]
+        normalization_input = json.loads(normalization_request.input_content)
+        assert normalization_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
+        assert "C++ `vector<int>` maps to" in normalization_request.instructions
+        assert "`int[]`" in normalization_request.instructions
+        assert normalization_request.policy.version == CUSTOM_PREPARATION_POLICY_VERSION
+        assert normalization_request.policy.configuration == {
+            "quality_gate": CUSTOM_QUALITY_GATE_VERSION
+        }
+        assert [request.language for request in executor.requests] == [
+            "cpp",
+            "python",
+            "java",
+        ]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("problem_text", "finding_code", "expected_message"),
+    [
+        (
+            "Given nums and target, find a pair.",
+            "MISSING_RETURN_BEHAVIOR",
+            "Specify what the function should return.",
+        ),
+        (
+            "Given nums = [1, 1, 1] and target = 2, return the count of index pairs. "
+            "Example: the same input has expected output 2. Another example for the same "
+            "input has expected output 3. Function: int countPairs(vector<int> nums, int target).",
+            "CONTRADICTORY_EXAMPLES",
+            "Resolve the conflicting expected outputs for the same input.",
+        ),
+    ],
+)
+async def test_normalization_blockers_produce_specific_software_owned_feedback(
+    problem_text: str, finding_code: str, expected_message: str
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider([_non_ready_output("NEEDS_CORRECTION", finding_code)])
+    service = _service(maker, provider, PassingExecutor())
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=problem_text,
+            idempotency_key=f"stage9e-specific-{uuid4()}",
+        )
+        completed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert completed.preparation.operational_status == "COMPLETED"
+        assert completed.preparation.quality_outcome == "NEEDS_CORRECTION"
+        assert completed.preparation.candidate_message == expected_message
+        assert completed.preparation.candidate_reasons_json == [
+            {"code": finding_code, "message": expected_message}
+        ]
+        assert completed.preparation.prepared_problem_version_id is None
+        assert len(provider.requests) == 1
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "malformed_output",
+    [
+        {
+            "recommendation": "NEEDS_CORRECTION",
+            "findings": [],
+            "problem_json": "",
+            "private_cases_json": "",
+        },
+        {
+            "recommendation": "NEEDS_CORRECTION",
+            "findings": [{"code": "MISSING_RETURN_BEHAVIOR"}],
+            "candidate_message": "The problem is vaguely incomplete.",
+            "problem_json": "",
+            "private_cases_json": "",
+        },
+        {
+            "recommendation": "READY",
+            "findings": [{"code": "MISSING_EXAMPLE"}],
+            "problem_json": "{}",
+            "private_cases_json": "[]",
+        },
+    ],
+)
+async def test_incoherent_normalization_output_fails_retryably(
+    malformed_output: dict[str, Any],
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider([malformed_output])
+    service = _service(maker, provider, PassingExecutor())
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=(
+                "Given an integer array and a target, return a specified result. The statement "
+                "contains input, output, constraints, examples, and a function signature."
+            ),
+            idempotency_key=f"stage9e-incoherent-{uuid4()}",
+        )
+        failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "STRUCTURED_OUTPUT_INVALID"
+        assert custom_preparation_retryable(failed.preparation)
+        assert failed.preparation.prepared_problem_version_id is None
+        assert len(provider.requests) == 1
+    finally:
+        await engine.dispose()
 
 
 async def test_model_authored_reference_solutions_never_become_candidate_starter_code() -> None:

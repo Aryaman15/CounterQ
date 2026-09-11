@@ -1,0 +1,19 @@
+Given an array of integers nums and an integer target, return the number of
+pairs of indices (i, j) such that i < j and nums[i] + nums[j] == target.
+
+Function signature:
+int countPairs(vector<int> nums, int target)
+
+Constraints:
+1 <= nums.length <= 100000
+-100000 <= nums[i] <= 100000
+-200000 <= target <= 200000
+
+Example 1:
+Input: nums = [1, 2, 3, 4], target = 5
+Output: 2
+Explanation: The valid pairs are (1,4) and (2,3).
+
+Example 2:
+Input: nums = [1, 1, 1], target = 2
+Output: 3
