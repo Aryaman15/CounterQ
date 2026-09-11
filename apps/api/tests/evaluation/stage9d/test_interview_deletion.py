@@ -174,6 +174,30 @@ async def test_delete_api_is_owned_idempotent_and_immediately_unavailable() -> N
             competing.status = "PROCESSING"
             competing.attempt_count = 1
 
+            report_id = pending_report.id
+            countermap_id = pending_map.id
+
+        await MasteryRecalculationService(
+            sessionmaker=sessions,
+            clock=lambda: NOW,
+        ).recalculate(user_id=fixture.user_id)
+        async with sessions() as session:
+            owner_mastery_before = await session.scalar(
+                select(ConceptMastery).where(
+                    ConceptMastery.user_id == fixture.user_id,
+                    ConceptMastery.concept_id == fixture.concept_id,
+                )
+            )
+            assert owner_mastery_before is not None
+            owner_mastery_snapshot = (
+                owner_mastery_before.state,
+                owner_mastery_before.last_evidence_at,
+                owner_mastery_before.mastery_policy_version,
+                owner_mastery_before.projection_version,
+                owner_mastery_before.supporting_evidence_count,
+                owner_mastery_before.context_diversity,
+            )
+
         foreign_app, foreign_engine = _app_for_user(foreign_graph.user.id)
         try:
             async with AsyncClient(
@@ -190,6 +214,26 @@ async def test_delete_api_is_owned_idempotent_and_immediately_unavailable() -> N
                         OutboxEvent.event_type == "DELETE_INTERVIEW",
                     )
                 ) == 0
+                assert await session.get(SessionReport, report_id) is not None
+                assert await session.get(CounterMapProjection, countermap_id) is not None
+                owner_evidence = await session.get(Evidence, fixture.evidence_ids[0])
+                assert owner_evidence is not None
+                assert owner_evidence.validation_status == "VALID"
+                owner_mastery_after = await session.scalar(
+                    select(ConceptMastery).where(
+                        ConceptMastery.user_id == fixture.user_id,
+                        ConceptMastery.concept_id == fixture.concept_id,
+                    )
+                )
+                assert owner_mastery_after is not None
+                assert (
+                    owner_mastery_after.state,
+                    owner_mastery_after.last_evidence_at,
+                    owner_mastery_after.mastery_policy_version,
+                    owner_mastery_after.projection_version,
+                    owner_mastery_after.supporting_evidence_count,
+                    owner_mastery_after.context_diversity,
+                ) == owner_mastery_snapshot
 
             async with AsyncClient(
                 transport=ASGITransport(app=owner_app), base_url="http://test"
