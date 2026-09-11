@@ -19,7 +19,7 @@ from app.problems.custom import (
     custom_problem_content_hash,
     normalize_problem_text,
 )
-from app.problems.custom_artifact_validation import execution_signature_issue
+from app.problems.custom_problem_assembly import execution_signature_conflicts_with_source
 from app.problems.custom_source_evidence import derive_custom_problem_source_evidence
 from app.problems.models import (
     Concept,
@@ -163,11 +163,10 @@ class CandidateProblemSelectionService:
         typed_pack = InterviewPackService.validated_version(custom_pack)
         typed_problem = await self._validated_problem_version(version)
         if (
-            execution_signature_issue(
+            execution_signature_conflicts_with_source(
                 typed_problem.execution,
                 derive_custom_problem_source_evidence(preparation.original_problem_text),
             )
-            is not None
         ):
             raise CandidateProblemSelectionInvalid(
                 "Prepared problem conflicts with its trusted source signature"

@@ -116,6 +116,9 @@ def test_source_evidence_and_contradictions_are_bounded_to_explicit_facts() -> N
 Function signature:
 int countPairs(vector<int> nums, int target)
 
+Constraints:
+1 <= nums.length <= 10
+
 Example 1:
 Input: nums = [1, 2], target = 3
 Output: 1
@@ -123,6 +126,8 @@ Output: 1
     )
 
     assert evidence.to_payload() == {
+        "statement": "Given nums and target, return the number of valid pairs.",
+        "constraints": ["1 <= nums.length <= 10"],
         "signature": {
             "method_name": "countPairs",
             "arguments": [
@@ -138,23 +143,30 @@ Output: 1
             {
                 "arguments": {"nums": [1, 2], "target": 3},
                 "expected_output": 1,
+                "input_text": "nums = [1, 2], target = 3",
+                "output_text": "1",
+                "explanation": "",
             }
         ],
     }
     assert contradicted_normalization_findings(
         [
+            "MISSING_PROBLEM_TEXT",
             "MISSING_RETURN_BEHAVIOR",
             "MISSING_ARGUMENTS",
             "AMBIGUOUS_ARGUMENT_TYPES",
             "MISSING_EXAMPLE",
+            "MISSING_CONSTRAINTS",
             "CONTRADICTORY_EXAMPLES",
         ],
         evidence,
     ) == (
+        "MISSING_PROBLEM_TEXT",
         "MISSING_RETURN_BEHAVIOR",
         "MISSING_ARGUMENTS",
         "AMBIGUOUS_ARGUMENT_TYPES",
         "MISSING_EXAMPLE",
+        "MISSING_CONSTRAINTS",
     )
 
 
@@ -234,9 +246,10 @@ def test_source_examples_parse_supported_typed_literals(
 ) -> None:
     evidence = derive_custom_problem_source_evidence(source)
 
-    assert [case.to_payload() for case in evidence.parsed_visible_cases] == [
-        {"arguments": expected_arguments, "expected_output": expected_output}
-    ]
+    assert len(evidence.parsed_visible_cases) == 1
+    case = evidence.parsed_visible_cases[0]
+    assert dict(case.arguments) == expected_arguments
+    assert case.expected_output == expected_output
 
 
 @pytest.mark.parametrize(
@@ -291,3 +304,61 @@ def test_example_arguments_must_exactly_match_the_source_signature() -> None:
 
     assert evidence.signature is not None
     assert evidence.parsed_visible_cases == ()
+
+
+def test_source_sections_preserve_statement_constraints_and_display_examples() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        """Given values and a label, return the matching groups exactly as described.
+
+FUNCTION SIGNATURE:
+vector<vector<string>> collect(vector<string> values, string label)
+
+CONSTRAINTS:
+- 1 <= values.length <= 10
+- values may contain quoted commas
+
+EXAMPLE 1:
+INPUT: values = ["a,b", "c"], label = "x,y"
+OUTPUT: [["a,b"], ["c"]]
+EXPLANATION: Preserve each nested group.
+
+example 2:
+input: values = ["z"], label = "plain"
+output: [["z"]]
+"""
+    )
+
+    assert evidence.statement == (
+        "Given values and a label, return the matching groups exactly as described."
+    )
+    assert evidence.constraints == (
+        "1 <= values.length <= 10",
+        "values may contain quoted commas",
+    )
+    assert len(evidence.parsed_visible_cases) == 2
+    first, second = evidence.parsed_visible_cases
+    assert dict(first.arguments) == {"values": ["a,b", "c"], "label": "x,y"}
+    assert first.expected_output == [["a,b"], ["c"]]
+    assert first.input_text == 'values = ["a,b", "c"], label = "x,y"'
+    assert first.output_text == '[["a,b"], ["c"]]'
+    assert first.explanation == "Preserve each nested group."
+    assert second.explanation == ""
+
+
+def test_malformed_sections_do_not_create_partial_execution_authority() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        """Return a result for the supplied values.
+Function signature:
+int solve(vector<int> values)
+Constraints:
+Example:
+Input: values = [1, 2]
+Output: not-an-int
+Explanation: Input: values = [9]
+"""
+    )
+
+    assert evidence.signature is not None
+    assert evidence.constraints == ()
+    assert evidence.parsed_visible_cases == ()
+    assert contradicted_normalization_findings(["MISSING_EXAMPLE"], evidence) == ()

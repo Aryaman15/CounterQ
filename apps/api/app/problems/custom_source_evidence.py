@@ -12,10 +12,12 @@ from pydantic import JsonValue
 from app.problems.content import SemanticType, validate_semantic_value
 
 ContradictableFindingCode = Literal[
+    "MISSING_PROBLEM_TEXT",
     "MISSING_ARGUMENTS",
     "AMBIGUOUS_ARGUMENT_TYPES",
     "MISSING_RETURN_BEHAVIOR",
     "MISSING_EXAMPLE",
+    "MISSING_CONSTRAINTS",
 ]
 
 
@@ -46,16 +48,24 @@ class CustomProblemSourceSignature:
 class CustomProblemSourceExample:
     arguments: tuple[tuple[str, JsonValue], ...]
     expected_output: JsonValue
+    input_text: str
+    output_text: str
+    explanation: str
 
     def to_payload(self) -> dict[str, object]:
         return {
             "arguments": dict(self.arguments),
             "expected_output": self.expected_output,
+            "input_text": self.input_text,
+            "output_text": self.output_text,
+            "explanation": self.explanation,
         }
 
 
 @dataclass(frozen=True)
 class CustomProblemSourceEvidence:
+    statement: str | None
+    constraints: tuple[str, ...]
     signature: CustomProblemSourceSignature | None
     has_explicit_return_directive: bool
     has_example_section: bool
@@ -64,6 +74,8 @@ class CustomProblemSourceEvidence:
 
     def to_payload(self) -> dict[str, object]:
         return {
+            "statement": self.statement,
+            "constraints": list(self.constraints),
             "signature": self.signature.to_payload() if self.signature is not None else None,
             "has_explicit_return_directive": self.has_explicit_return_directive,
             "has_example_section": self.has_example_section,
@@ -97,6 +109,14 @@ _EXAMPLE_INPUT_LINE = re.compile(r"(?im)^[ \t]*input[ \t]*:[ \t]*(?P<value>[^\r\
 _EXAMPLE_OUTPUT_LINE = re.compile(
     r"(?im)^[ \t]*(?:expected[ \t]+)?output[ \t]*:[ \t]*(?P<value>[^\r\n]*)[ \t]*$"
 )
+_EXAMPLE_EXPLANATION_LINE = re.compile(
+    r"(?im)^[ \t]*explanation[ \t]*:[ \t]*(?P<value>[^\r\n]*)[ \t]*$"
+)
+_SECTION_HEADING = re.compile(
+    r"(?im)^[ \t]*(?:#{1,6}[ \t]*)?"
+    r"(?P<name>function[ \t]+signature|signature|constraints?|examples?(?:[ \t]+\d+)?)"
+    r"[ \t]*:[ \t]*(?P<inline>[^\r\n]*)[ \t]*$"
+)
 _RETURN_DIRECTIVE = re.compile(
     r"\breturn(?:s)?\s+(?:(?:the|a|an)\s+)?"
     r"(?:number|count|how\s+many|index|indices|value|values|bool|boolean|true|false|"
@@ -109,6 +129,10 @@ _MAX_PARSED_EXAMPLES = 8
 _MAX_LITERAL_CHARACTERS = 4_096
 _MAX_LITERAL_VALUES = 256
 _MAX_LITERAL_DEPTH = 4
+_MAX_CONSTRAINTS = 32
+_MAX_CONSTRAINT_CHARACTERS = 500
+_MAX_STATEMENT_CHARACTERS = 20_000
+_MAX_EXPLANATION_CHARACTERS = 4_096
 
 
 def derive_custom_problem_source_evidence(value: str) -> CustomProblemSourceEvidence:
@@ -130,6 +154,8 @@ def derive_custom_problem_source_evidence(value: str) -> CustomProblemSourceEvid
         for index, match in enumerate(example_sections)
     )
     return CustomProblemSourceEvidence(
+        statement=_extract_source_statement(value),
+        constraints=_extract_source_constraints(value),
         signature=signature,
         has_explicit_return_directive=_RETURN_DIRECTIVE.search(value) is not None,
         has_example_section=bool(example_sections),
@@ -198,10 +224,16 @@ def _parse_source_example(
 ) -> CustomProblemSourceExample | None:
     input_matches = list(_EXAMPLE_INPUT_LINE.finditer(section))
     output_matches = list(_EXAMPLE_OUTPUT_LINE.finditer(section))
+    explanation_matches = list(_EXAMPLE_EXPLANATION_LINE.finditer(section))
     if (
         len(input_matches) != 1
         or len(output_matches) != 1
+        or len(explanation_matches) > 1
         or input_matches[0].end() > output_matches[0].start()
+        or (
+            explanation_matches
+            and len(explanation_matches[0].group("value")) > _MAX_EXPLANATION_CHARACTERS
+        )
     ):
         return None
     parts = _split_top_level(input_matches[0].group("value"), delimiter=",")
@@ -238,7 +270,87 @@ def _parse_source_example(
             (argument.name, argument_values[argument.name]) for argument in signature.arguments
         ),
         expected_output=expected_output,
+        input_text=input_matches[0].group("value").strip(),
+        output_text=output_matches[0].group("value").strip(),
+        explanation=(
+            explanation_matches[0].group("value").strip() if explanation_matches else ""
+        ),
     )
+
+
+def _extract_source_statement(value: str) -> str | None:
+    """Preserve bounded prose preceding the first recognized structural section."""
+
+    structure_starts = [match.start() for match in _SECTION_HEADING.finditer(value)]
+    structure_starts.extend(match.start() for match in _C_LIKE_SIGNATURE.finditer(value))
+    structure_starts.extend(match.start() for match in _PYTHON_SIGNATURE.finditer(value))
+    prefix = value[: min(structure_starts)] if structure_starts else value
+    lines = [line.strip() for line in prefix.splitlines() if line.strip()]
+    while lines and lines[0] in {"```", "~~~"}:
+        lines.pop(0)
+    while lines and lines[-1] in {"```", "~~~"}:
+        lines.pop()
+    if len(lines) > 1 and _looks_like_title(lines[0], lines[1]):
+        lines.pop(0)
+    if len(lines) == 1 and _looks_like_display_title(lines[0]):
+        return None
+    statement = "\n".join(lines).strip()
+    return statement if statement and len(statement) <= _MAX_STATEMENT_CHARACTERS else None
+
+
+def _looks_like_title(first: str, second: str) -> bool:
+    if len(first) > 120 or first.endswith((".", "?", "!", ":", ";")):
+        return False
+    return re.match(
+        r"^(?:given|return|determine|find|compute|implement|write|you are given)\b",
+        second,
+        re.IGNORECASE,
+    ) is not None
+
+
+def _looks_like_display_title(value: str) -> bool:
+    if not value or len(value) > 120 or value.endswith((".", "?", "!", ":", ";")):
+        return False
+    return (
+        re.match(
+            r"^(?:given|return|determine|find|compute|implement|write|you are given)\b",
+            value,
+            re.IGNORECASE,
+        )
+        is None
+    )
+
+
+def _extract_source_constraints(value: str) -> tuple[str, ...]:
+    """Extract one bounded Constraints section without interpreting its contents."""
+
+    headings = list(_SECTION_HEADING.finditer(value))
+    constraint_headings = [
+        (index, heading)
+        for index, heading in enumerate(headings)
+        if heading.group("name").lower().startswith("constraint")
+    ]
+    if len(constraint_headings) != 1:
+        return ()
+    index, heading = constraint_headings[0]
+    end = headings[index + 1].start() if index + 1 < len(headings) else len(value)
+    raw_lines = []
+    inline = heading.group("inline").strip()
+    if inline:
+        raw_lines.append(inline)
+    raw_lines.extend(value[heading.end() : end].splitlines())
+    constraints = [
+        re.sub(r"^[ \t]*(?:[-*][ \t]+|[0-9]+[.)][ \t]+)", "", line).strip()
+        for line in raw_lines
+        if line.strip() and line.strip() not in {"```", "~~~"}
+    ]
+    if (
+        not constraints
+        or len(constraints) > _MAX_CONSTRAINTS
+        or any(len(item) > _MAX_CONSTRAINT_CHARACTERS for item in constraints)
+    ):
+        return ()
+    return tuple(constraints)
 
 
 def _split_top_level(value: str, *, delimiter: str) -> tuple[str, ...]:
@@ -428,7 +540,9 @@ def contradicted_normalization_findings(
     signature = evidence.signature
     contradicted: list[ContradictableFindingCode] = []
     for code in finding_codes:
-        if code == "MISSING_RETURN_BEHAVIOR":
+        if code == "MISSING_PROBLEM_TEXT" and evidence.statement is not None:
+            contradicted.append("MISSING_PROBLEM_TEXT")
+        elif code == "MISSING_RETURN_BEHAVIOR":
             if signature is not None and evidence.has_explicit_return_directive:
                 contradicted.append("MISSING_RETURN_BEHAVIOR")
         elif code == "MISSING_ARGUMENTS":
@@ -437,8 +551,10 @@ def contradicted_normalization_findings(
         elif code == "AMBIGUOUS_ARGUMENT_TYPES":
             if signature is not None and signature.arguments:
                 contradicted.append("AMBIGUOUS_ARGUMENT_TYPES")
-        elif code == "MISSING_EXAMPLE" and evidence.has_expected_output_example:
+        elif code == "MISSING_EXAMPLE" and evidence.parsed_visible_cases:
             contradicted.append("MISSING_EXAMPLE")
+        elif code == "MISSING_CONSTRAINTS" and evidence.constraints:
+            contradicted.append("MISSING_CONSTRAINTS")
     return tuple(contradicted)
 
 
