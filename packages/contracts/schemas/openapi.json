@@ -2740,6 +2740,29 @@
         "title": "CounterMapSummary",
         "type": "object"
       },
+      "CreateCustomProblemPreparationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotency_key": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Idempotency Key",
+            "type": "string"
+          },
+          "problem_text": {
+            "maxLength": 20000,
+            "minLength": 1,
+            "title": "Problem Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "problem_text",
+          "idempotency_key"
+        ],
+        "title": "CreateCustomProblemPreparationRequest",
+        "type": "object"
+      },
       "CreateInterviewRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3103,6 +3126,135 @@
           "profile"
         ],
         "title": "CurrentUserResponse",
+        "type": "object"
+      },
+      "CustomProblemPreparationResponse": {
+        "properties": {
+          "concept_labels": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Concept Labels",
+            "type": "array"
+          },
+          "constraints": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Constraints",
+            "type": "array"
+          },
+          "examples": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "title": "Examples",
+            "type": "array"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "operational_status": {
+            "enum": [
+              "PENDING",
+              "PROCESSING",
+              "FAILED",
+              "COMPLETED"
+            ],
+            "title": "Operational Status",
+            "type": "string"
+          },
+          "preparation_id": {
+            "format": "uuid",
+            "title": "Preparation Id",
+            "type": "string"
+          },
+          "problem_version_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem Version Id"
+          },
+          "quality_outcome": {
+            "anyOf": [
+              {
+                "enum": [
+                  "READY",
+                  "NEEDS_CORRECTION",
+                  "REJECTED"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quality Outcome"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "statement_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Statement Preview"
+          },
+          "supported_languages": {
+            "items": {
+              "enum": [
+                "cpp",
+                "python",
+                "java"
+              ],
+              "type": "string"
+            },
+            "title": "Supported Languages",
+            "type": "array"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "preparation_id",
+          "operational_status",
+          "quality_outcome",
+          "retryable",
+          "title",
+          "statement_preview",
+          "constraints",
+          "examples",
+          "supported_languages",
+          "concept_labels",
+          "problem_version_id",
+          "message"
+        ],
+        "title": "CustomProblemPreparationResponse",
         "type": "object"
       },
       "DeleteInterviewResponse": {
@@ -7509,6 +7661,148 @@
         "summary": "Curated Problem Detail",
         "tags": [
           "curated-problems"
+        ]
+      }
+    },
+    "/api/problems/custom/preparations": {
+      "post": {
+        "operationId": "create_custom_problem_preparation_api_problems_custom_preparations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateCustomProblemPreparationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProblemPreparationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create Custom Problem Preparation",
+        "tags": [
+          "custom-problems"
+        ]
+      }
+    },
+    "/api/problems/custom/preparations/{preparation_id}": {
+      "get": {
+        "operationId": "get_custom_problem_preparation_api_problems_custom_preparations__preparation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preparation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Preparation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProblemPreparationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Get Custom Problem Preparation",
+        "tags": [
+          "custom-problems"
+        ]
+      }
+    },
+    "/api/problems/custom/preparations/{preparation_id}/prepare": {
+      "post": {
+        "operationId": "prepare_custom_problem_api_problems_custom_preparations__preparation_id__prepare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preparation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Preparation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProblemPreparationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Prepare Custom Problem",
+        "tags": [
+          "custom-problems"
         ]
       }
     },

@@ -5,6 +5,8 @@ export type CandidateProfileUpdate = components["schemas"]["CandidateProfileUpda
 export type CuratedCatalogItem = components["schemas"]["CuratedCatalogItem"];
 export type CreateInterviewRequest = components["schemas"]["CreateInterviewRequest"];
 export type CreateInterviewResponse = components["schemas"]["CreateInterviewResponse"];
+export type CreateCustomProblemPreparationRequest = components["schemas"]["CreateCustomProblemPreparationRequest"];
+export type CustomProblemPreparationResponse = components["schemas"]["CustomProblemPreparationResponse"];
 export type InterviewBootstrapResponse = components["schemas"]["InterviewBootstrapResponse"];
 export type InterviewBootstrap = Omit<
   InterviewBootstrapResponse,
@@ -83,6 +85,31 @@ export class CounterQApiClient {
       method: "POST",
       body: JSON.stringify(input),
     });
+  }
+
+  async createCustomProblemPreparation(
+    input: CreateCustomProblemPreparationRequest,
+  ): Promise<CustomProblemPreparationResponse> {
+    return this.request<CustomProblemPreparationResponse>("/api/problems/custom/preparations", {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async prepareCustomProblem(preparationId: string): Promise<CustomProblemPreparationResponse> {
+    return this.request<CustomProblemPreparationResponse>(
+      `/api/problems/custom/preparations/${encodeURIComponent(preparationId)}/prepare`,
+      { method: "POST" },
+    );
+  }
+
+  async getCustomProblemPreparation(
+    preparationId: string,
+  ): Promise<CustomProblemPreparationResponse> {
+    return this.request<CustomProblemPreparationResponse>(
+      `/api/problems/custom/preparations/${encodeURIComponent(preparationId)}`,
+      { cache: "no-store" },
+    );
   }
 
   async listInterviews(

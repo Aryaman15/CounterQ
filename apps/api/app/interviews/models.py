@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from app.auth.models import User
     from app.examiner.models import CandidateClaim, ExaminerDecision
     from app.observation.models import CodeSnapshot, InterviewEvent, TranscriptSegment
-    from app.problems.models import InterviewPackVersion, ProblemVersion
+    from app.problems.models import CustomProblemPreparation, InterviewPackVersion, ProblemVersion
 
 
 def _in_values(column_name: str, values: tuple[str, ...]) -> str:
@@ -65,6 +65,11 @@ class InterviewConfiguration(Base):
             _in_values("level", INTERVIEW_LEVELS), name="interview_configurations_level"
         ),
         CheckConstraint("configured_duration_seconds > 0", name="configured_duration_positive"),
+        CheckConstraint(
+            "(problem_source <> 'CUSTOM' AND custom_problem_preparation_id IS NULL) OR "
+            "(problem_source = 'CUSTOM' AND custom_problem_preparation_id IS NOT NULL)",
+            name="custom_preparation_source",
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True, default=uuid7)
@@ -73,6 +78,15 @@ class InterviewConfiguration(Base):
     language: Mapped[str] = mapped_column(String(64), nullable=False)
     configured_duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     problem_source: Mapped[str] = mapped_column(String(64), nullable=False)
+    custom_problem_preparation_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey(
+            "custom_problem_preparations.id",
+            name="fk_interview_configurations_custom_preparation",
+            ondelete="RESTRICT",
+            use_alter=True,
+        ),
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -82,6 +96,9 @@ class InterviewConfiguration(Base):
     interview_session: Mapped[InterviewSession | None] = relationship(
         back_populates="configuration",
         uselist=False,
+    )
+    custom_problem_preparation: Mapped[CustomProblemPreparation | None] = relationship(
+        back_populates="interview_configurations"
     )
 
 
@@ -199,8 +216,7 @@ class SessionBudget(Base):
         CheckConstraint("probes_used >= 0", name="probes_used_nonnegative"),
         CheckConstraint("deep_reasoning_used >= 0", name="deep_reasoning_used_nonnegative"),
         CheckConstraint(
-            "report_reasoning_used >= 0 AND "
-            "report_reasoning_used <= max_report_reasoning_calls",
+            "report_reasoning_used >= 0 AND report_reasoning_used <= max_report_reasoning_calls",
             name="report_reasoning_used_within_max",
         ),
         CheckConstraint("strong_reasoning_used >= 0", name="strong_reasoning_used_nonnegative"),

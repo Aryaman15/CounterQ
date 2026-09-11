@@ -21,6 +21,7 @@ class InterviewRepository:
         language: str,
         configured_duration_seconds: int,
         problem_source: str,
+        custom_problem_preparation_id: UUID | None = None,
     ) -> InterviewConfiguration:
         configuration = InterviewConfiguration(
             mode=mode,
@@ -28,6 +29,7 @@ class InterviewRepository:
             language=language,
             configured_duration_seconds=configured_duration_seconds,
             problem_source=problem_source,
+            custom_problem_preparation_id=custom_problem_preparation_id,
         )
         self._session.add(configuration)
         await self._session.flush()

@@ -10,12 +10,14 @@ import type {
   CounterQApiClient,
   CreateInterviewRequest,
   CuratedCatalogItem,
+  CustomProblemPreparationResponse,
   CurrentUserResponse,
 } from "@/lib/counterq-api";
 
 type Language = CreateInterviewRequest["language"];
 type InterviewMode = CreateInterviewRequest["mode"];
 type InterviewTemplate = CreateInterviewRequest["template"];
+type ProblemSource = "CURATED" | "CUSTOM";
 
 const languageLabels: Record<Language, string> = {
   cpp: "C++17",
@@ -87,7 +89,13 @@ export function SelfServeInterviewSetupForm({
   const [mode, setMode] = useState<InterviewMode>("SIMULATION");
   const [language, setLanguage] = useState<Language>("python");
   const [problemVersionId, setProblemVersionId] = useState("");
+  const [problemSource, setProblemSource] = useState<ProblemSource>("CURATED");
+  const [customProblemText, setCustomProblemText] = useState("");
+  const [customPreparation, setCustomPreparation] = useState<CustomProblemPreparationResponse | null>(null);
+  const [preparingCustom, setPreparingCustom] = useState(false);
+  const [customError, setCustomError] = useState<string | null>(null);
   const submissionInFlight = useRef(false);
+  const preparationInFlight = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -112,7 +120,6 @@ export function SelfServeInterviewSetupForm({
             currentUser.profile!.preferred_language,
           ))?.problem_version_id ?? "",
         );
-        if (!items.length) setError("No reviewed curated problems are currently available.");
       })
       .catch(() => {
         if (active) setError("CounterQ could not load interview setup right now.");
@@ -141,14 +148,46 @@ export function SelfServeInterviewSetupForm({
     }
   }
 
+  async function prepareCustomProblem() {
+    if (preparationInFlight.current || customProblemText.trim().length === 0) return;
+    preparationInFlight.current = true;
+    setPreparingCustom(true);
+    setCustomError(null);
+    try {
+      let preparation = customPreparation;
+      if (!preparation) {
+        const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `custom-${Date.now()}`;
+        preparation = await api.createCustomProblemPreparation({
+          problem_text: customProblemText,
+          idempotency_key: idempotencyKey,
+        });
+        setCustomPreparation(preparation);
+      }
+      const prepared = await api.prepareCustomProblem(preparation.preparation_id);
+      setCustomPreparation(prepared);
+    } catch {
+      setCustomError("CounterQ could not prepare this problem right now. Try again.");
+    } finally {
+      preparationInFlight.current = false;
+      setPreparingCustom(false);
+    }
+  }
+
+  const customReady = customPreparation?.quality_outcome === "READY"
+    && customPreparation.problem_version_id !== null
+    && customPreparation.supported_languages.includes(language);
+  const launchProblemVersionId = problemSource === "CURATED"
+    ? problemVersionId
+    : customReady ? customPreparation.problem_version_id : null;
+
   async function startInterview() {
-    if (submissionInFlight.current || !problemVersionId || !selectedProblem) return;
+    if (submissionInFlight.current || !launchProblemVersionId) return;
     submissionInFlight.current = true;
     setSubmitting(true);
     setError(null);
     try {
       const created = await api.createInterview({
-        problem_version_id: problemVersionId,
+        problem_version_id: launchProblemVersionId,
         template,
         mode,
         language,
@@ -169,7 +208,7 @@ export function SelfServeInterviewSetupForm({
         <div className="setup-heading">
           <p className="panel-kicker">New CounterQ interview</p>
           <h1 id="self-serve-setup-title">Set the conditions. Then defend your reasoning.</h1>
-          <p>A focused session with reviewed problems, live voice, and a server-owned clock.</p>
+          <p>A focused session with reviewed or prepared problems, live voice, and a server-owned clock.</p>
         </div>
 
         {loading ? <p role="status">Loading your profile and curated catalog…</p> : null}
@@ -193,6 +232,30 @@ export function SelfServeInterviewSetupForm({
                       <span><strong>{templateDetails[item].label}</strong><small>{templateDetails[item].duration}</small></span>
                     </label>
                   ))}
+                </div>
+              </fieldset>
+
+              <fieldset>
+                <legend>Problem source</legend>
+                <div className="setup-choice-row">
+                  <label className="setup-choice">
+                    <input
+                      type="radio"
+                      name="problem-source"
+                      checked={problemSource === "CURATED"}
+                      onChange={() => setProblemSource("CURATED")}
+                    />
+                    <span><strong>Reviewed problems</strong><small>CounterQ&apos;s prepared catalog</small></span>
+                  </label>
+                  <label className="setup-choice">
+                    <input
+                      type="radio"
+                      name="problem-source"
+                      checked={problemSource === "CUSTOM"}
+                      onChange={() => setProblemSource("CUSTOM")}
+                    />
+                    <span><strong>Paste your own</strong><small>Prepared before it can launch</small></span>
+                  </label>
                 </div>
               </fieldset>
 
@@ -220,9 +283,10 @@ export function SelfServeInterviewSetupForm({
                 </label>
               </div>
 
-              <fieldset className="problem-selector setup-catalog" disabled={submitting}>
-                <legend>Reviewed problem</legend>
-                {catalog.map((item) => {
+              {problemSource === "CURATED" ? (
+                <fieldset className="problem-selector setup-catalog" disabled={submitting}>
+                  <legend>Reviewed problem</legend>
+                  {catalog.map((item) => {
                   const compatible = item.supported_languages.includes(language);
                   return (
                     <label
@@ -244,14 +308,50 @@ export function SelfServeInterviewSetupForm({
                       </span>
                     </label>
                   );
-                })}
-              </fieldset>
+                  })}
+                  {!catalog.length ? <p>No reviewed problems are available right now.</p> : null}
+                </fieldset>
+              ) : (
+                <fieldset className="custom-problem-intake" disabled={submitting || preparingCustom}>
+                  <legend>Paste a coding problem</legend>
+                  <label htmlFor="custom-problem-text">
+                    Full statement
+                    <textarea
+                      id="custom-problem-text"
+                      rows={12}
+                      maxLength={20_000}
+                      value={customProblemText}
+                      placeholder="Include the statement, constraints, examples, expected outputs, and function signature."
+                      onChange={(event) => {
+                        setCustomProblemText(event.target.value);
+                        setCustomPreparation(null);
+                        setCustomError(null);
+                      }}
+                    />
+                  </label>
+                  <div className="custom-problem-actions">
+                    <small>{customProblemText.length.toLocaleString()} / 20,000 characters</small>
+                    <button
+                      type="button"
+                      className="prepare-problem-button"
+                      disabled={!customProblemText.trim() || preparingCustom}
+                      onClick={() => void prepareCustomProblem()}
+                    >
+                      {preparingCustom ? "Preparing problem…" : customPreparation?.retryable ? "Retry preparation" : "Prepare problem"}
+                    </button>
+                  </div>
+                  {customPreparation ? (
+                    <CustomPreparationStatus preparation={customPreparation} />
+                  ) : null}
+                  {customError ? <p className="setup-error" role="alert">{customError}</p> : null}
+                </fieldset>
+              )}
 
               {error ? <p className="setup-error" role="alert">{error}</p> : null}
               <button
                 type="submit"
                 className="start-interview-button"
-                disabled={submitting || !problemVersionId || Boolean(error)}
+                disabled={submitting || !launchProblemVersionId || Boolean(error)}
               >
                 {submitting ? "Starting interview…" : "Start interview"}
               </button>
@@ -265,6 +365,7 @@ export function SelfServeInterviewSetupForm({
                 <div><dt>Mode</dt><dd>{mode === "SIMULATION" ? "Simulation" : "Coach"}</dd></div>
                 <div><dt>Language</dt><dd>{languageLabels[language]}</dd></div>
                 <div><dt>Level</dt><dd>{levelLabels[profile.interview_level] ?? profile.interview_level}</dd></div>
+                <div><dt>Problem</dt><dd>{problemSource === "CURATED" ? selectedProblem?.title ?? "Choose a problem" : customPreparation?.title ?? "Awaiting preparation"}</dd></div>
               </dl>
               <p>The timer begins when you start. Refreshing the room never resets it.</p>
             </aside>
@@ -272,6 +373,35 @@ export function SelfServeInterviewSetupForm({
         ) : null}
       </section>
     </main>
+  );
+}
+
+function CustomPreparationStatus({
+  preparation,
+}: {
+  preparation: CustomProblemPreparationResponse;
+}) {
+  const ready = preparation.quality_outcome === "READY";
+  const label = preparation.operational_status === "FAILED"
+    ? "Preparation interrupted"
+    : preparation.quality_outcome === "NEEDS_CORRECTION"
+      ? "Needs correction"
+      : preparation.quality_outcome === "REJECTED"
+        ? "Not supported"
+        : ready ? "Ready" : "Preparing";
+  return (
+    <section
+      className={`custom-preparation-status custom-preparation-status-${ready ? "ready" : "attention"}`}
+      aria-live="polite"
+    >
+      <p className="panel-kicker">{label}</p>
+      {preparation.title ? <h2>{preparation.title}</h2> : null}
+      <p>{preparation.message}</p>
+      {preparation.statement_preview ? <p>{preparation.statement_preview}</p> : null}
+      {preparation.concept_labels.length ? (
+        <p><strong>Focus:</strong> {preparation.concept_labels.join(" · ")}</p>
+      ) : null}
+    </section>
   );
 }
 

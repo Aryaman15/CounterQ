@@ -46,6 +46,7 @@ from app.interviews.restoration import (
     SessionRestorationService,
 )
 from app.interviews.runtime import InterviewRuntimeError
+from app.problems.selection import CandidateProblemSelectionInvalid
 from app.problems.service import CuratedProblemError
 from app.realtime.control_protocol import (
     RestoredCodeSnapshotMessage,
@@ -92,7 +93,12 @@ async def create_interview(
                 "message": "Complete onboarding before starting an interview",
             },
         ) from exc
-    except (CuratedProblemError, SelfServeInterviewSelectionInvalid, ValueError) as exc:
+    except (
+        CandidateProblemSelectionInvalid,
+        CuratedProblemError,
+        SelfServeInterviewSelectionInvalid,
+        ValueError,
+    ) as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={

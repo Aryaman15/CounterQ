@@ -884,6 +884,24 @@ a:focus-visible,
   text-transform: uppercase;
 }
 .self-serve-form > .start-interview-button { min-height: 48px; margin-top: -12px; }
+.custom-problem-intake { display: grid; gap: 14px; }
+.custom-problem-intake label { display: grid; gap: 8px; color: var(--quiet); font-size: 13px; }
+.custom-problem-intake textarea {
+  width: 100%; min-height: 240px; resize: vertical; border: 1px solid var(--line);
+  border-radius: 12px; background: #101411; color: var(--text); padding: 14px 16px;
+  font: 14px/1.55 var(--font-mono, monospace);
+}
+.custom-problem-intake textarea:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.custom-problem-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.prepare-problem-button {
+  min-height: 40px; border: 1px solid #566a5d; border-radius: 999px; background: #171d19;
+  color: var(--text); padding: 0 18px; font-weight: 700; cursor: pointer;
+}
+.prepare-problem-button:disabled { cursor: not-allowed; opacity: .5; }
+.custom-preparation-status { border-left: 2px solid #776a49; padding: 4px 0 4px 16px; }
+.custom-preparation-status-ready { border-left-color: var(--green); }
+.custom-preparation-status h2 { margin: 4px 0 8px; font-size: 18px; }
+.custom-preparation-status p { margin: 6px 0; color: var(--quiet); }
 .setup-summary {
   position: sticky;
   top: 32px;

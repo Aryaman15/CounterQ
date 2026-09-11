@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Literal, cast
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
+from app.problems.custom import CustomPreparationView
 from app.problems.models import ProblemVersion
 
 CandidateLanguage = Literal["cpp", "python", "java"]
@@ -30,6 +31,65 @@ class CandidateProblemDetail(CuratedCatalogItem):
     return_type: str
     comparator: str
     custom_test_supported: bool
+
+
+class CreateCustomProblemPreparationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    problem_text: str = Field(min_length=1, max_length=20_000)
+    idempotency_key: str = Field(min_length=1, max_length=128)
+
+
+class CustomProblemPreparationResponse(BaseModel):
+    preparation_id: UUID
+    operational_status: Literal["PENDING", "PROCESSING", "FAILED", "COMPLETED"]
+    quality_outcome: Literal["READY", "NEEDS_CORRECTION", "REJECTED"] | None
+    retryable: bool
+    title: str | None
+    statement_preview: str | None
+    constraints: list[str]
+    examples: list[dict[str, str]]
+    supported_languages: list[CandidateLanguage]
+    concept_labels: list[str]
+    problem_version_id: UUID | None
+    message: str
+
+
+def custom_preparation_response(
+    view: CustomPreparationView,
+) -> CustomProblemPreparationResponse:
+    preparation = view.preparation
+    version = view.problem_version
+    languages: list[CandidateLanguage] = []
+    constraints: list[str] = []
+    examples: list[dict[str, str]] = []
+    if version is not None:
+        raw_languages = cast(dict[str, object], version.io_schema_json.get("languages", {}))
+        languages = [item for item in SUPPORTED_CANDIDATE_LANGUAGES if item in raw_languages]
+        constraints = cast(list[str], version.constraints_json.get("items", []))
+        examples = cast(list[dict[str, str]], version.examples_json)
+    outcome = cast(
+        Literal["READY", "NEEDS_CORRECTION", "REJECTED"] | None,
+        preparation.quality_outcome,
+    )
+    status = cast(
+        Literal["PENDING", "PROCESSING", "FAILED", "COMPLETED"],
+        preparation.operational_status,
+    )
+    return CustomProblemPreparationResponse(
+        preparation_id=preparation.id,
+        operational_status=status,
+        quality_outcome=outcome,
+        retryable=status == "FAILED",
+        title=version.title if version is not None else None,
+        statement_preview=(version.statement[:600] if version is not None else None),
+        constraints=constraints,
+        examples=examples,
+        supported_languages=languages,
+        concept_labels=list(view.concept_labels),
+        problem_version_id=preparation.prepared_problem_version_id,
+        message=preparation.candidate_message or "Custom problem preparation is pending.",
+    )
 
 
 def curated_catalog_item(version: ProblemVersion) -> CuratedCatalogItem:

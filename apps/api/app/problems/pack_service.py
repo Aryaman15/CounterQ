@@ -30,7 +30,7 @@ class InterviewPackService:
         pack = await CuratedProblemService(self._session).reviewed_pack_for_problem(
             problem_version_id
         )
-        return self._validated(pack)
+        return self.validated_version(pack)
 
     async def for_session(self, session_id: UUID) -> InterviewPackContent:
         interview = await self._session.get(InterviewSession, session_id)
@@ -39,7 +39,7 @@ class InterviewPackService:
         pack = await self._session.get(InterviewPackVersion, interview.interview_pack_version_id)
         if pack is None:
             raise CuratedProblemError("Interview Pack is unavailable")
-        return self._validated(pack)
+        return self.validated_version(pack)
 
     @staticmethod
     def approaches_by_concept(pack: InterviewPackContent, concept_key: str) -> list[Approach]:
@@ -97,7 +97,7 @@ class InterviewPackService:
         return next((item for item in pack.common_followups if item.id == followup_id), None)
 
     @staticmethod
-    def _validated(pack: InterviewPackVersion) -> InterviewPackContent:
+    def validated_version(pack: InterviewPackVersion) -> InterviewPackContent:
         try:
             typed = InterviewPackContent.model_validate(pack.pack_json)
         except ValidationError as exc:

@@ -38,6 +38,4 @@ async def curated_problem_detail(
     try:
         return candidate_problem_detail(version, language)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=404, detail="Requested language is not available"
-        ) from exc
+        raise HTTPException(status_code=404, detail="Requested language is not available") from exc

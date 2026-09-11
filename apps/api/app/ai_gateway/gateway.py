@@ -62,6 +62,10 @@ class ReasoningSessionNotFound(AIGatewayError):
     category = "SESSION_NOT_FOUND"
 
 
+class ReasoningUserNotFound(AIGatewayError):
+    category = "USER_NOT_FOUND"
+
+
 class StructuredOutputValidationFailure(AIGatewayError):
     category = "STRUCTURED_OUTPUT_INVALID"
 
@@ -96,6 +100,18 @@ class PreparedInvocation:
     budget_remaining: int
 
 
+@dataclass(frozen=True)
+class UserScopedReasoningBudget:
+    """A narrow workflow-owned call allowance, never a fake SessionBudget."""
+
+    calls_used_before: int
+    max_calls: int
+
+    def __post_init__(self) -> None:
+        if self.calls_used_before < 0 or self.max_calls < 1:
+            raise ValueError("User-scoped reasoning allowance is invalid")
+
+
 class AIGateway:
     def __init__(
         self,
@@ -118,7 +134,9 @@ class AIGateway:
     async def reason_structured(
         self,
         *,
-        interview_session_id: UUID,
+        interview_session_id: UUID | None = None,
+        user_id: UUID | None = None,
+        user_scoped_budget: UserScopedReasoningBudget | None = None,
         capability: ReasoningCapability,
         purpose: str,
         policy: ReasoningPolicyDescriptor,
@@ -161,14 +179,36 @@ class AIGateway:
         )
 
         preparation_started = time.perf_counter()
-        prepared = await self._prepare_invocation(
-            interview_session_id=interview_session_id,
-            provider_name=self._provider.provider_name,
-            model=model,
-            capability=capability,
-            purpose=purpose,
-            policy=policy,
-        )
+        if (interview_session_id is None) == (user_id is None):
+            raise AIGatewayError(
+                "Reasoning must be scoped to exactly one interview session or user"
+            )
+        if interview_session_id is not None:
+            if user_scoped_budget is not None:
+                raise AIGatewayError("Session reasoning cannot use a user-scoped allowance")
+            prepared = await self._prepare_invocation(
+                interview_session_id=interview_session_id,
+                provider_name=self._provider.provider_name,
+                model=model,
+                capability=capability,
+                purpose=purpose,
+                policy=policy,
+            )
+        else:
+            if user_scoped_budget is None:
+                raise ReasoningBudgetExceeded(
+                    "User-scoped reasoning requires an explicit workflow allowance"
+                )
+            assert user_id is not None
+            prepared = await self._prepare_user_invocation(
+                user_id=user_id,
+                provider_name=self._provider.provider_name,
+                model=model,
+                capability=capability,
+                purpose=purpose,
+                policy=policy,
+                budget=user_scoped_budget,
+            )
         gateway_preparation_ms = max(
             int((time.perf_counter() - preparation_started) * 1000),
             0,
@@ -226,9 +266,7 @@ class AIGateway:
                         int((time.perf_counter() - provider_started) * 1000),
                         0,
                     ),
-                    usefulness_remaining_ms_at_dispatch=(
-                        usefulness_remaining_ms_at_dispatch
-                    ),
+                    usefulness_remaining_ms_at_dispatch=(usefulness_remaining_ms_at_dispatch),
                     outcome=provider_outcome,
                 )
         except asyncio.CancelledError:
@@ -272,9 +310,7 @@ class AIGateway:
                 policy_version=policy.version,
                 output_schema_name=output_model.__name__,
                 validation_error_count=len(validation_errors),
-                validation_error_types=sorted(
-                    {str(error["type"]) for error in validation_errors}
-                ),
+                validation_error_types=sorted({str(error["type"]) for error in validation_errors}),
                 validation_error_field_paths=[
                     ".".join(str(path_part) for path_part in error.get("loc", ()))
                     for error in validation_errors
@@ -311,6 +347,37 @@ class AIGateway:
             currency=provider_result.currency,
             budget_used=prepared.budget_used,
             budget_remaining=prepared.budget_remaining,
+        )
+
+    async def reason_structured_for_user(
+        self,
+        *,
+        user_id: UUID,
+        user_scoped_budget: UserScopedReasoningBudget,
+        capability: ReasoningCapability,
+        purpose: str,
+        policy: ReasoningPolicyDescriptor,
+        instructions: str,
+        input_content: str,
+        output_model: type[T],
+        timeout_seconds: float | None = None,
+        reasoning_effort_override: ReasoningEffort | None = None,
+        correlation_id: str | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> AIGatewayResult[T]:
+        return await self.reason_structured(
+            user_id=user_id,
+            user_scoped_budget=user_scoped_budget,
+            capability=capability,
+            purpose=purpose,
+            policy=policy,
+            instructions=instructions,
+            input_content=input_content,
+            output_model=output_model,
+            timeout_seconds=timeout_seconds,
+            reasoning_effort_override=reasoning_effort_override,
+            correlation_id=correlation_id,
+            metadata=metadata,
         )
 
     def model_for_capability(self, capability: ReasoningCapability) -> str:
@@ -375,6 +442,54 @@ class AIGateway:
                         user_id=interview.user_id,
                         budget_used=budget_used,
                         budget_remaining=budget_remaining,
+                    )
+            finally:
+                self._active_transaction_count -= 1
+
+    async def _prepare_user_invocation(
+        self,
+        *,
+        user_id: UUID,
+        provider_name: str,
+        model: str,
+        capability: ReasoningCapability,
+        purpose: str,
+        policy: ReasoningPolicyDescriptor,
+        budget: UserScopedReasoningBudget,
+    ) -> PreparedInvocation:
+        if budget.calls_used_before >= budget.max_calls:
+            raise ReasoningBudgetExceeded("Preparation reasoning allowance is exhausted")
+        from app.auth.models import User
+
+        async with self._sessionmaker() as session:
+            self._active_transaction_count += 1
+            try:
+                async with session.begin():
+                    user = await session.get(User, user_id)
+                    if user is None or user.status != "ACTIVE":
+                        raise ReasoningUserNotFound("Candidate account was not found")
+                    policy_version = await get_or_create_policy_version(session, policy)
+                    invocation = AIInvocation(
+                        user_id=user.id,
+                        interview_session_id=None,
+                        provider=provider_name,
+                        model=model,
+                        capability=capability,
+                        purpose=purpose,
+                        ai_policy_version_id=policy_version.id,
+                        status="STARTED",
+                        started_at=datetime.now(UTC),
+                        retry_count=0,
+                    )
+                    session.add(invocation)
+                    await session.flush()
+                    used = budget.calls_used_before + 1
+                    return PreparedInvocation(
+                        invocation_id=invocation.id,
+                        policy_version_id=policy_version.id,
+                        user_id=user.id,
+                        budget_used=used,
+                        budget_remaining=budget.max_calls - used,
                     )
             finally:
                 self._active_transaction_count -= 1

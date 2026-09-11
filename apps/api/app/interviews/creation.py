@@ -18,7 +18,7 @@ from app.interviews.template_policy import (
     template_policy,
 )
 from app.problems.models import InterviewPackVersion, ProblemVersion
-from app.problems.service import CuratedProblemService
+from app.problems.selection import CandidateProblemSelectionService
 
 SelfServeInterviewTemplate = Literal["QUICK_DRILL", "STANDARD_CODING_INTERVIEW"]
 SELF_SERVE_INTERVIEW_TEMPLATES: tuple[SelfServeInterviewTemplate, ...] = (
@@ -46,7 +46,7 @@ class SelfServeInterviewCreation:
 
 
 class SelfServeInterviewCreationService:
-    """Create one profile-backed, curated production interview atomically."""
+    """Create one profile-backed interview from a server-trusted selection atomically."""
 
     def __init__(
         self,
@@ -71,18 +71,13 @@ class SelfServeInterviewCreationService:
             if profile is None:
                 raise CandidateProfileRequired("CandidateProfile is required")
             policy = self._policy(template)
-            curated = CuratedProblemService(self._session)
-            problem_version = await curated.candidate_problem(problem_version_id)
-            languages = problem_version.io_schema_json.get("languages")
-            if not isinstance(languages, dict) or language not in languages:
-                raise SelfServeInterviewSelectionInvalid(
-                    "Requested language is not supported by the selected problem"
-                )
-            pack_version = await curated.reviewed_pack_for_problem(problem_version.id)
-            if pack_version.problem_version_id != problem_version.id:
-                raise SelfServeInterviewSelectionInvalid(
-                    "Reviewed Interview Pack does not match the selected problem"
-                )
+            selection = await CandidateProblemSelectionService(self._session).select(
+                user_id=user_id,
+                problem_version_id=problem_version_id,
+                language=language,
+            )
+            problem_version = selection.problem_version
+            pack_version = selection.pack_version
 
             duration = policy.configured_duration_seconds
             if duration is None or not policy.stage_plan:
@@ -96,7 +91,8 @@ class SelfServeInterviewCreationService:
                 level=profile.interview_level,
                 language=language,
                 configured_duration_seconds=duration,
-                problem_source="CURATED",
+                problem_source=selection.source_type,
+                custom_problem_preparation_id=selection.custom_problem_preparation_id,
             )
             interview = await repository.add_session(
                 user_id=user_id,

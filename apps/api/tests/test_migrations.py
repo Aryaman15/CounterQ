@@ -12,11 +12,11 @@ from sqlalchemy.engine import make_url
 from app.config.settings import get_settings
 
 
-def test_alembic_configuration_has_stage9d_interview_deletion_head() -> None:
+def test_alembic_configuration_has_stage9e_custom_problem_preparation_head() -> None:
     config = Config(str(Path("alembic.ini")))
     script = ScriptDirectory.from_config(config)
 
-    assert script.get_current_head() == "202609110122"
+    assert script.get_current_head() == "202609110123"
 
 
 def test_full_migration_chain_downgrades_and_upgrades_cleanly() -> None:
@@ -122,6 +122,48 @@ def test_stage9a_candidate_profile_columns_are_explicit() -> None:
         "updated_at",
         "user_id",
     }
+
+
+def test_stage9e_custom_preparation_boundary_and_binding_are_explicit() -> None:
+    columns = asyncio.run(table_columns("custom_problem_preparations"))
+
+    assert columns == {
+        "attempt_count",
+        "candidate_message",
+        "candidate_reasons_json",
+        "completed_at",
+        "created_at",
+        "failure_category",
+        "id",
+        "idempotency_key",
+        "normalization_ai_invocation_id",
+        "normalized_content_hash",
+        "operational_status",
+        "original_problem_text",
+        "pack_ai_invocation_id",
+        "preparation_policy_key",
+        "preparation_policy_version",
+        "prepared_pack_version_id",
+        "prepared_problem_version_id",
+        "processing_started_at",
+        "quality_gate_version",
+        "quality_outcome",
+        "sandbox_validation_json",
+        "updated_at",
+        "user_id",
+    }
+    assert "custom_problem_preparation_id" in asyncio.run(
+        table_columns("interview_configurations")
+    )
+    constraints = asyncio.run(table_constraints("custom_problem_preparations"))
+    assert {
+        "ck_custom_problem_preparations_completed_has_quality_outcome",
+        "ck_custom_problem_preparations_operational_status",
+        "ck_custom_problem_preparations_quality_outcome",
+        "ck_custom_problem_preparations_ready_has_prepared_artifacts",
+        "fk_custom_preparations_pack_problem_version",
+        "uq_custom_preparations_user_key",
+    }.issubset(constraints)
 
 
 def test_stage9a_candidate_profile_constraints_preserve_one_to_one_domain() -> None:

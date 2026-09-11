@@ -1338,6 +1338,9 @@ pnpm run eval:stage9c
 Evaluate the Stage 9D interview deletion and learning-integrity gate:
 pnpm run eval:stage9d
 
+Evaluate the Stage 9E custom-problem preparation gate:
+pnpm run eval:stage9e
+
 ```
 
 Codex must not claim these commands succeeded unless they were actually run in the current task/environment.
@@ -1495,12 +1498,12 @@ Follow `PHASE_1_IMPLEMENTATION.md`.
 
 ```text
 Current Stage:
-Stage 9D — Interview Deletion + Learning-Model Integrity
+Stage 9E — Custom Pasted Problem Intake + Trusted Preparation Gate
 
 Current Goal:
-Allow an authenticated candidate to delete one interview while removing its
-candidate content and deterministically rebuilding Breakpoints, Mastery and
-Retest recommendations from surviving Evidence, without beginning Stage 9E.
+Allow an authenticated candidate to paste a coding problem, prepare it through
+the trusted deterministic and sandbox quality gate, and launch only READY
+immutable content through the normal interview runtime, without beginning Stage 10.
 ```
 
 Update only this small section as implementation progresses.

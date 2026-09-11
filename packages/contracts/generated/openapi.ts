@@ -498,6 +498,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/problems/custom/preparations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Custom Problem Preparation */
+        post: operations["create_custom_problem_preparation_api_problems_custom_preparations_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/problems/custom/preparations/{preparation_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Custom Problem Preparation */
+        get: operations["get_custom_problem_preparation_api_problems_custom_preparations__preparation_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/problems/custom/preparations/{preparation_id}/prepare": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Prepare Custom Problem */
+        post: operations["prepare_custom_problem_api_problems_custom_preparations__preparation_id__prepare_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/realtime/development-interview": {
         parameters: {
             query?: never;
@@ -1635,6 +1686,13 @@ export interface components {
             /** Title */
             title: string;
         };
+        /** CreateCustomProblemPreparationRequest */
+        CreateCustomProblemPreparationRequest: {
+            /** Idempotency Key */
+            idempotency_key: string;
+            /** Problem Text */
+            problem_text: string;
+        };
         /** CreateInterviewRequest */
         CreateInterviewRequest: {
             /**
@@ -1806,6 +1864,41 @@ export interface components {
              * Format: uuid
              */
             user_id: string;
+        };
+        /** CustomProblemPreparationResponse */
+        CustomProblemPreparationResponse: {
+            /** Concept Labels */
+            concept_labels: string[];
+            /** Constraints */
+            constraints: string[];
+            /** Examples */
+            examples: {
+                [key: string]: string;
+            }[];
+            /** Message */
+            message: string;
+            /**
+             * Operational Status
+             * @enum {string}
+             */
+            operational_status: "PENDING" | "PROCESSING" | "FAILED" | "COMPLETED";
+            /**
+             * Preparation Id
+             * Format: uuid
+             */
+            preparation_id: string;
+            /** Problem Version Id */
+            problem_version_id: string | null;
+            /** Quality Outcome */
+            quality_outcome: ("READY" | "NEEDS_CORRECTION" | "REJECTED") | null;
+            /** Retryable */
+            retryable: boolean;
+            /** Statement Preview */
+            statement_preview: string | null;
+            /** Supported Languages */
+            supported_languages: ("cpp" | "python" | "java")[];
+            /** Title */
+            title: string | null;
         };
         /** DeleteInterviewResponse */
         DeleteInterviewResponse: {
@@ -3803,6 +3896,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CandidateProblemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_custom_problem_preparation_api_problems_custom_preparations_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCustomProblemPreparationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomProblemPreparationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_custom_problem_preparation_api_problems_custom_preparations__preparation_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preparation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomProblemPreparationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prepare_custom_problem_api_problems_custom_preparations__preparation_id__prepare_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                preparation_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomProblemPreparationResponse"];
                 };
             };
             /** @description Validation Error */
