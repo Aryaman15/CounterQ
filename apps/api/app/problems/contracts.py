@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.problems.custom import CustomPreparationView
+from app.problems.custom import CustomPreparationView, custom_preparation_retryable
 from app.problems.models import ProblemVersion
 
 CandidateLanguage = Literal["cpp", "python", "java"]
@@ -57,6 +58,8 @@ class CustomProblemPreparationResponse(BaseModel):
 
 def custom_preparation_response(
     view: CustomPreparationView,
+    *,
+    now: datetime | None = None,
 ) -> CustomProblemPreparationResponse:
     preparation = view.preparation
     version = view.problem_version
@@ -80,7 +83,7 @@ def custom_preparation_response(
         preparation_id=preparation.id,
         operational_status=status,
         quality_outcome=outcome,
-        retryable=status == "FAILED",
+        retryable=custom_preparation_retryable(preparation, now=now),
         title=version.title if version is not None else None,
         statement_preview=(version.statement[:600] if version is not None else None),
         constraints=constraints,

@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -41,16 +42,22 @@ from app.execution.provider import (
 from app.execution.sandbox_provider import LocalSandboxExecutorProvider
 from app.interviews.creation import SelfServeInterviewCreationService
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
-from app.problems.content import load_curated_content, load_ontology
+from app.interviews.restoration import SessionRestorationService
+from app.problems.content import ExecutionDefinition, load_curated_content, load_ontology
 from app.problems.contracts import custom_preparation_response
 from app.problems.custom import (
+    CUSTOM_PROCESSING_LEASE,
+    CustomPreparationIdempotencyConflict,
+    CustomPreparationInProgress,
     CustomPreparationNotFound,
     CustomProblemPreparationService,
     NormalizedProblemOutput,
+    custom_preparation_retryable,
 )
-from app.problems.models import Problem
+from app.problems.models import CustomProblemPreparation, Problem
 from app.problems.selection import CandidateProblemSelectionInvalid
 from app.problems.service import CuratedProblemService
+from app.problems.starter_scaffolds import starter_languages_for_execution
 
 
 class SequenceReasoningProvider:
@@ -92,6 +99,37 @@ class SequenceReasoningProvider:
             estimated_cost=Decimal("0.001"),
             currency="USD",
         )
+
+
+class BlockingReasoningProvider(SequenceReasoningProvider):
+    def __init__(self, outputs: Sequence[dict[str, Any]]) -> None:
+        super().__init__(outputs)
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def reason_structured(
+        self,
+        request: ReasoningRequest,
+        *,
+        model: str,
+        reasoning_effort: ReasoningEffort,
+    ) -> ProviderReasoningResult:
+        self.started.set()
+        await self.release.wait()
+        return await super().reason_structured(
+            request, model=model, reasoning_effort=reasoning_effort
+        )
+
+
+class MutableClock:
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def __call__(self) -> datetime:
+        return self.value
+
+    def advance(self, delta: timedelta) -> None:
+        self.value += delta
 
 
 class PassingExecutor:
@@ -206,6 +244,8 @@ def _service(
     maker: async_sessionmaker,
     provider: SequenceReasoningProvider,
     executor: PassingExecutor,
+    *,
+    clock: Callable[[], datetime] | None = None,
 ) -> CustomProblemPreparationService:
     gateway = AIGateway(
         settings=get_settings(),
@@ -217,7 +257,122 @@ def _service(
         sessionmaker=maker,
         gateway=gateway,
         executor=executor,
+        clock=clock,
     )
+
+
+@pytest.mark.parametrize(
+    ("semantic_type", "value", "cpp_type", "python_type", "java_type"),
+    [
+        ("int", 7, "int", "int", "int"),
+        ("bool", True, "bool", "bool", "boolean"),
+        ("string", "seven", "string", "str", "String"),
+        ("int[]", [1, 2], "vector<int>", "list[int]", "int[]"),
+        ("string[]", ["a", "b"], "vector<string>", "list[str]", "String[]"),
+        ("int[][]", [[1], [2]], "vector<vector<int>>", "list[list[int]]", "int[][]"),
+        (
+            "string[][]",
+            [["a"], ["b"]],
+            "vector<vector<string>>",
+            "list[list[str]]",
+            "String[][]",
+        ),
+    ],
+)
+def test_starter_scaffolds_cover_every_supported_semantic_type(
+    semantic_type: str,
+    value: object,
+    cpp_type: str,
+    python_type: str,
+    java_type: str,
+) -> None:
+    execution = ExecutionDefinition.model_validate(
+        {
+            "method_name": "solveValue",
+            "arguments": [{"name": "value", "type": semantic_type}],
+            "return_type": semantic_type,
+            "visible_cases": [
+                {"arguments": {"value": value}, "expected_output": value}
+            ],
+        }
+    )
+
+    languages = starter_languages_for_execution(execution)
+
+    assert set(languages) == {"cpp", "python", "java"}
+    assert languages["cpp"].display_signature == (
+        f"{cpp_type} solveValue({cpp_type} value)"
+    )
+    assert languages["python"].display_signature == (
+        f"def solveValue(self, value: {python_type}) -> {python_type}"
+    )
+    assert languages["java"].display_signature == (
+        f"public {java_type} solveValue({java_type} value)"
+    )
+    assert "logic_error" in languages["cpp"].starter_code
+    assert "NotImplementedError" in languages["python"].starter_code
+    assert "UnsupportedOperationException" in languages["java"].starter_code
+
+
+async def test_model_authored_reference_solutions_never_become_candidate_starter_code() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    outputs = _outputs()
+    normalized_problem = json.loads(outputs[0]["problem_json"])
+    prepared_pack = json.loads(outputs[1]["pack_json"])
+    leaked_by_language = {
+        item["language"]: item["source_code"]
+        for item in prepared_pack["reference_solutions"]
+        if item["approach_id"] == prepared_pack["expected_approaches"][0]["approach_id"]
+    }
+    for language, source_code in leaked_by_language.items():
+        normalized_problem["languages"][language]["starter_code"] = source_code
+    outputs[0]["problem_json"] = json.dumps(normalized_problem)
+    service = _service(maker, SequenceReasoningProvider(outputs), PassingExecutor())
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=(
+                "Given an integer array and target, return the requested result. The complete "
+                "statement includes examples, constraints, input, output, and a function signature."
+            ),
+            idempotency_key="stage9e-model-solution-leak",
+        )
+        ready = await service.prepare(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+        assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
+        assert ready.problem_version is not None
+        stored_languages = ready.problem_version.io_schema_json["languages"]
+        assert isinstance(stored_languages, dict)
+        for language, leaked_source in leaked_by_language.items():
+            definition = stored_languages[language]
+            assert isinstance(definition, dict)
+            starter = definition["starter_code"]
+            assert isinstance(starter, str)
+            assert starter != leaked_source
+            assert "Not implemented" in starter
+
+        problem_version_id = ready.preparation.prepared_problem_version_id
+        assert problem_version_id is not None
+        for language in ("cpp", "python", "java"):
+            async with maker() as session:
+                interview = await SelfServeInterviewCreationService(session).create(
+                    user_id=user_id,
+                    problem_version_id=problem_version_id,
+                    template="QUICK_DRILL",
+                    mode="SIMULATION",
+                    language=cast(Literal["cpp", "python", "java"], language),
+                )
+                restored = await SessionRestorationService(session).restore(
+                    interview_session_id=interview.interview_session.id,
+                    client_instance_id="stage9e-starter-restore",
+                )
+                assert restored.problem.starter_code != leaked_by_language[language]
+                assert "Not implemented" in restored.problem.starter_code
+    finally:
+        await engine.dispose()
 
 
 async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_runtime() -> None:
@@ -251,7 +406,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         again = await service.prepare(
             user_id=user_id, preparation_id=created.preparation.id
         )
-        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
         assert again.preparation.prepared_problem_version_id == (
             ready.preparation.prepared_problem_version_id
         )
@@ -337,6 +492,172 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
             assert len(invocations) == 2
             assert all(item.interview_session_id is None for item in invocations)
     finally:
+        await engine.dispose()
+
+
+async def test_concurrent_create_is_postgresql_idempotent_and_conflict_safe() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    service = CustomProblemPreparationService(sessionmaker=maker)
+    text = (
+        "Given an integer array and target, return the requested integer. The statement "
+        "includes examples, constraints, input, output, and a function signature."
+    )
+    try:
+        created = await asyncio.gather(
+            *(
+                service.create(
+                    user_id=user_id,
+                    problem_text=text,
+                    idempotency_key="stage9e-concurrent-create",
+                )
+                for _ in range(8)
+            )
+        )
+        preparation_ids = {item.preparation.id for item in created}
+        assert len(preparation_ids) == 1
+        async with maker() as session:
+            assert int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(CustomProblemPreparation)
+                    .where(
+                        CustomProblemPreparation.user_id == user_id,
+                        CustomProblemPreparation.idempotency_key
+                        == "stage9e-concurrent-create",
+                    )
+                )
+                or 0
+            ) == 1
+
+        with pytest.raises(CustomPreparationIdempotencyConflict):
+            await service.create(
+                user_id=user_id,
+                problem_text=f"{text} This is different text.",
+                idempotency_key="stage9e-concurrent-create",
+            )
+    finally:
+        await engine.dispose()
+
+
+async def test_processing_lease_reclaims_stale_work_and_fences_old_attempt() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    clock = MutableClock(datetime(2032, 1, 1, tzinfo=UTC))
+    old_provider = BlockingReasoningProvider(_outputs())
+    old_provider.provider_name = "stage9e_old_attempt"
+    old_service = _service(maker, old_provider, PassingExecutor(), clock=clock)
+    new_provider = SequenceReasoningProvider(_outputs())
+    new_provider.provider_name = "stage9e_new_attempt"
+    new_service = _service(maker, new_provider, PassingExecutor(), clock=clock)
+    try:
+        created = await old_service.create(
+            user_id=user_id,
+            problem_text=(
+                "Given an integer array, return the requested result. The complete statement "
+                "includes examples, constraints, inputs, outputs, and a function signature."
+            ),
+            idempotency_key="stage9e-processing-lease",
+        )
+        preparation_id = created.preparation.id
+        old_task = asyncio.create_task(
+            old_service.prepare(user_id=user_id, preparation_id=preparation_id)
+        )
+        await asyncio.wait_for(old_provider.started.wait(), timeout=2)
+
+        current = await old_service.get_owned(
+            user_id=user_id, preparation_id=preparation_id
+        )
+        assert current.preparation.attempt_count == 1
+        assert not custom_preparation_retryable(current.preparation, now=clock())
+        assert not custom_preparation_response(current, now=clock()).retryable
+        with pytest.raises(CustomPreparationInProgress):
+            await new_service.prepare(user_id=user_id, preparation_id=preparation_id)
+
+        clock.advance(CUSTOM_PROCESSING_LEASE - timedelta(seconds=1))
+        with pytest.raises(CustomPreparationInProgress):
+            await new_service.prepare(user_id=user_id, preparation_id=preparation_id)
+
+        clock.advance(timedelta(seconds=2))
+        stale = await new_service.get_owned(
+            user_id=user_id, preparation_id=preparation_id
+        )
+        assert custom_preparation_retryable(stale.preparation, now=clock())
+        assert custom_preparation_response(stale, now=clock()).retryable
+        ready = await new_service.prepare(user_id=user_id, preparation_id=preparation_id)
+        assert ready.preparation.attempt_count == 2
+        assert ready.preparation.quality_outcome == "READY"
+        new_normalization_id = ready.preparation.normalization_ai_invocation_id
+        new_pack_id = ready.preparation.pack_ai_invocation_id
+        assert new_normalization_id is not None
+        assert new_pack_id is not None
+
+        old_provider.release.set()
+        obsolete_result = await asyncio.wait_for(old_task, timeout=5)
+        assert obsolete_result.preparation.quality_outcome == "READY"
+        assert obsolete_result.preparation.normalization_ai_invocation_id == new_normalization_id
+        assert obsolete_result.preparation.pack_ai_invocation_id == new_pack_id
+        async with maker() as session:
+            linked_invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(
+                        AIInvocation.id.in_([new_normalization_id, new_pack_id])
+                    )
+                )
+            )
+            assert {item.provider for item in linked_invocations} == {
+                "stage9e_new_attempt"
+            }
+            assert int(
+                await session.scalar(
+                    select(func.count()).select_from(Problem).where(
+                        Problem.owner_user_id == user_id
+                    )
+                )
+                or 0
+            ) == 1
+    finally:
+        old_provider.release.set()
+        if "old_task" in locals() and not old_task.done():
+            old_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await old_task
+        await engine.dispose()
+
+
+async def test_cancelled_current_attempt_becomes_retryable_failed_and_reraises() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = BlockingReasoningProvider(_outputs())
+    service = _service(maker, provider, PassingExecutor())
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=(
+                "Given an integer array, return the requested result. The complete statement "
+                "includes examples, constraints, inputs, outputs, and a function signature."
+            ),
+            idempotency_key="stage9e-cancelled-attempt",
+        )
+        task = asyncio.create_task(
+            service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+        )
+        await asyncio.wait_for(provider.started.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        failed = await service.get_owned(
+            user_id=user_id, preparation_id=created.preparation.id
+        )
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.failure_category == "PREPARATION_CANCELLED"
+        assert custom_preparation_retryable(failed.preparation)
+    finally:
+        provider.release.set()
         await engine.dispose()
 
 

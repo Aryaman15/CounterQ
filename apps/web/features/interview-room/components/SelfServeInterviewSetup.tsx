@@ -6,18 +6,30 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCounterQApi } from "@/features/auth/useCounterQApi";
-import type {
-  CounterQApiClient,
-  CreateInterviewRequest,
-  CuratedCatalogItem,
-  CustomProblemPreparationResponse,
-  CurrentUserResponse,
+import {
+  CounterQApiError,
+  type CounterQApiClient,
+  type CreateInterviewRequest,
+  type CuratedCatalogItem,
+  type CustomProblemPreparationResponse,
+  type CurrentUserResponse,
 } from "@/lib/counterq-api";
 
 type Language = CreateInterviewRequest["language"];
 type InterviewMode = CreateInterviewRequest["mode"];
 type InterviewTemplate = CreateInterviewRequest["template"];
 type ProblemSource = "CURATED" | "CUSTOM";
+
+type CustomPreparationPointer = {
+  version: 1;
+  user_id: string;
+  preparation_id: string | null;
+  idempotency_key: string;
+  draft_text: string;
+};
+
+const customPreparationPointerPrefix = "counterq:custom-preparation:v1:";
+const customPreparationPollMilliseconds = 3_000;
 
 const languageLabels: Record<Language, string> = {
   cpp: "C++17",
@@ -94,8 +106,13 @@ export function SelfServeInterviewSetupForm({
   const [customPreparation, setCustomPreparation] = useState<CustomProblemPreparationResponse | null>(null);
   const [preparingCustom, setPreparingCustom] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
+  const [customPollTick, setCustomPollTick] = useState(0);
+  const [customDraftIdempotencyKey, setCustomDraftIdempotencyKey] = useState(
+    createDraftIdempotencyKey,
+  );
   const submissionInFlight = useRef(false);
   const preparationInFlight = useRef(false);
+  const recoveredUserId = useRef<string | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -130,6 +147,73 @@ export function SelfServeInterviewSetupForm({
     return () => { active = false; };
   }, [api, onOnboardingRequired]);
 
+  useEffect(() => {
+    const userId = me?.user_id;
+    if (!userId || recoveredUserId.current === userId) return;
+    recoveredUserId.current = userId;
+    const pointer = readCustomPreparationPointer(userId);
+    if (!pointer) return;
+
+    setProblemSource("CUSTOM");
+    setCustomProblemText(pointer.draft_text);
+    setCustomDraftIdempotencyKey(pointer.idempotency_key);
+    setCustomPreparation(null);
+    setCustomError(null);
+    if (!pointer.preparation_id) return;
+
+    let active = true;
+    void api.getCustomProblemPreparation(pointer.preparation_id)
+      .then((preparation) => {
+        if (active) setCustomPreparation(preparation);
+      })
+      .catch((caught: unknown) => {
+        if (!active) return;
+        if (isNotFound(caught)) {
+          clearCustomPreparationPointer(userId);
+          setCustomProblemText("");
+          setCustomDraftIdempotencyKey(createDraftIdempotencyKey());
+          setCustomPreparation(null);
+          return;
+        }
+        setCustomError("CounterQ could not recover this preparation right now.");
+      });
+    return () => { active = false; };
+  }, [api, me?.user_id]);
+
+  useEffect(() => {
+    const userId = me?.user_id;
+    const preparation = customPreparation;
+    if (
+      !userId
+      || preparation?.operational_status !== "PROCESSING"
+      || preparation.retryable
+    ) return;
+
+    let active = true;
+    const timeout = globalThis.setTimeout(() => {
+      void api.getCustomProblemPreparation(preparation.preparation_id)
+        .then((latest) => {
+          if (active) setCustomPreparation(latest);
+        })
+        .catch((caught: unknown) => {
+          if (!active) return;
+          if (isNotFound(caught)) {
+            clearCustomPreparationPointer(userId);
+            setCustomProblemText("");
+            setCustomDraftIdempotencyKey(createDraftIdempotencyKey());
+            setCustomPreparation(null);
+            return;
+          }
+          setCustomError("CounterQ could not refresh this preparation right now.");
+          setCustomPollTick((current) => current + 1);
+        });
+    }, customPreparationPollMilliseconds);
+    return () => {
+      active = false;
+      globalThis.clearTimeout(timeout);
+    };
+  }, [api, customPollTick, customPreparation, me?.user_id]);
+
   const selectedProblem = useMemo(
     () => catalog.find((item) => item.problem_version_id === problemVersionId) ?? null,
     [catalog, problemVersionId],
@@ -155,13 +239,33 @@ export function SelfServeInterviewSetupForm({
     setCustomError(null);
     try {
       let preparation = customPreparation;
+      const userId = me?.user_id;
+      const idempotencyKey = customDraftIdempotencyKey || createDraftIdempotencyKey();
+      if (!customDraftIdempotencyKey) setCustomDraftIdempotencyKey(idempotencyKey);
+      if (userId) {
+        writeCustomPreparationPointer({
+          version: 1,
+          user_id: userId,
+          preparation_id: preparation?.preparation_id ?? null,
+          idempotency_key: idempotencyKey,
+          draft_text: customProblemText,
+        });
+      }
       if (!preparation) {
-        const idempotencyKey = globalThis.crypto?.randomUUID?.() ?? `custom-${Date.now()}`;
         preparation = await api.createCustomProblemPreparation({
           problem_text: customProblemText,
           idempotency_key: idempotencyKey,
         });
         setCustomPreparation(preparation);
+        if (userId) {
+          writeCustomPreparationPointer({
+            version: 1,
+            user_id: userId,
+            preparation_id: preparation.preparation_id,
+            idempotency_key: idempotencyKey,
+            draft_text: customProblemText,
+          });
+        }
       }
       const prepared = await api.prepareCustomProblem(preparation.preparation_id);
       setCustomPreparation(prepared);
@@ -176,6 +280,18 @@ export function SelfServeInterviewSetupForm({
   const customReady = customPreparation?.quality_outcome === "READY"
     && customPreparation.problem_version_id !== null
     && customPreparation.supported_languages.includes(language);
+  const customProcessing = customPreparation?.operational_status === "PROCESSING"
+    && !customPreparation.retryable;
+  const customCompleted = customPreparation?.operational_status === "COMPLETED";
+  const customActionLabel = preparingCustom || customProcessing
+    ? "Preparing problem…"
+    : customCompleted
+      ? customReady ? "Problem prepared" : "Edit problem to try again"
+      : customPreparation?.retryable
+        ? "Retry preparation"
+        : customPreparation?.operational_status === "PENDING"
+          ? "Resume preparation"
+          : "Prepare problem";
   const launchProblemVersionId = problemSource === "CURATED"
     ? problemVersionId
     : customReady ? customPreparation.problem_version_id : null;
@@ -312,7 +428,7 @@ export function SelfServeInterviewSetupForm({
                   {!catalog.length ? <p>No reviewed problems are available right now.</p> : null}
                 </fieldset>
               ) : (
-                <fieldset className="custom-problem-intake" disabled={submitting || preparingCustom}>
+                <fieldset className="custom-problem-intake" disabled={submitting}>
                   <legend>Paste a coding problem</legend>
                   <label htmlFor="custom-problem-text">
                     Full statement
@@ -321,11 +437,24 @@ export function SelfServeInterviewSetupForm({
                       rows={12}
                       maxLength={20_000}
                       value={customProblemText}
+                      disabled={preparingCustom || customProcessing}
                       placeholder="Include the statement, constraints, examples, expected outputs, and function signature."
                       onChange={(event) => {
-                        setCustomProblemText(event.target.value);
+                        const draftText = event.target.value;
+                        const idempotencyKey = createDraftIdempotencyKey();
+                        setCustomProblemText(draftText);
+                        setCustomDraftIdempotencyKey(idempotencyKey);
                         setCustomPreparation(null);
                         setCustomError(null);
+                        if (me) {
+                          writeCustomPreparationPointer({
+                            version: 1,
+                            user_id: me.user_id,
+                            preparation_id: null,
+                            idempotency_key: idempotencyKey,
+                            draft_text: draftText,
+                          });
+                        }
                       }}
                     />
                   </label>
@@ -334,10 +463,15 @@ export function SelfServeInterviewSetupForm({
                     <button
                       type="button"
                       className="prepare-problem-button"
-                      disabled={!customProblemText.trim() || preparingCustom}
+                      disabled={
+                        !customProblemText.trim()
+                        || preparingCustom
+                        || customProcessing
+                        || customCompleted
+                      }
                       onClick={() => void prepareCustomProblem()}
                     >
-                      {preparingCustom ? "Preparing problem…" : customPreparation?.retryable ? "Retry preparation" : "Prepare problem"}
+                      {customActionLabel}
                     </button>
                   </div>
                   {customPreparation ? (
@@ -403,6 +537,58 @@ function CustomPreparationStatus({
       ) : null}
     </section>
   );
+}
+
+function createDraftIdempotencyKey(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `custom-${Date.now()}-${Math.random()}`;
+}
+
+function customPreparationPointerKey(userId: string): string {
+  return `${customPreparationPointerPrefix}${userId}`;
+}
+
+function readCustomPreparationPointer(userId: string): CustomPreparationPointer | null {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(customPreparationPointerKey(userId));
+    if (!raw) return null;
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value
+      || typeof value !== "object"
+      || !("version" in value) || value.version !== 1
+      || !("user_id" in value) || value.user_id !== userId
+      || !("preparation_id" in value)
+      || (value.preparation_id !== null && typeof value.preparation_id !== "string")
+      || !("idempotency_key" in value) || typeof value.idempotency_key !== "string"
+      || !("draft_text" in value) || typeof value.draft_text !== "string"
+    ) return null;
+    return value as CustomPreparationPointer;
+  } catch {
+    return null;
+  }
+}
+
+function writeCustomPreparationPointer(pointer: CustomPreparationPointer): void {
+  try {
+    globalThis.sessionStorage?.setItem(
+      customPreparationPointerKey(pointer.user_id),
+      JSON.stringify(pointer),
+    );
+  } catch {
+    // Recovery is best-effort; PostgreSQL remains canonical.
+  }
+}
+
+function clearCustomPreparationPointer(userId: string): void {
+  try {
+    globalThis.sessionStorage?.removeItem(customPreparationPointerKey(userId));
+  } catch {
+    // An unavailable browser store must not change server truth.
+  }
+}
+
+function isNotFound(error: unknown): boolean {
+  return error instanceof CounterQApiError && error.status === 404;
 }
 
 function SetupBoundary({ status, children }: { status: string; children?: React.ReactNode }) {
