@@ -79,6 +79,8 @@ class SequenceReasoningProvider:
     ) -> None:
         self.outputs = list(outputs)
         self.requests: list[ReasoningRequest] = []
+        self.models: list[str] = []
+        self.reasoning_efforts: list[ReasoningEffort] = []
         self.delay_seconds = delay_seconds
         self.assert_no_gateway_transaction: AIGateway | None = None
 
@@ -89,8 +91,9 @@ class SequenceReasoningProvider:
         model: str,
         reasoning_effort: ReasoningEffort,
     ) -> ProviderReasoningResult:
-        del reasoning_effort
         self.requests.append(request)
+        self.models.append(model)
+        self.reasoning_efforts.append(reasoning_effort)
         if self.assert_no_gateway_transaction is not None:
             assert self.assert_no_gateway_transaction.active_transaction_count == 0
         if self.delay_seconds:
@@ -466,12 +469,7 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
     maker = async_sessionmaker(engine, expire_on_commit=False)
     provider = SequenceReasoningProvider(_count_pairs_outputs())
     executor = PassingExecutor()
-    service = _service(
-        maker,
-        provider,
-        executor,
-        reasoning_timeout_seconds=73.0,
-    )
+    service = _service(maker, provider, executor)
     try:
         created = await service.create(
             user_id=user_id,
@@ -492,11 +490,23 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ]
         assert execution["return_type"] == "int"
         assert len(provider.requests) == 2
-        assert [request.timeout_seconds for request in provider.requests] == [73.0, 73.0]
+        runtime_settings = get_settings()
+        assert [request.timeout_seconds for request in provider.requests] == [90.0, 90.0]
         assert [request.purpose for request in provider.requests] == [
             "custom_problem_normalization",
             "custom_problem_pack_preparation",
         ]
+        assert [request.capability for request in provider.requests] == [
+            "STANDARD_REASONING",
+            "STRONG_REASONING",
+        ]
+        assert provider.models == [
+            runtime_settings.reasoning_standard_model,
+            runtime_settings.reasoning_strong_model,
+        ]
+        assert provider.reasoning_efforts == ["medium", "medium"]
+        assert [request.user_id for request in provider.requests] == [user_id, user_id]
+        assert [request.interview_session_id for request in provider.requests] == [None, None]
         normalization_request = provider.requests[0]
         normalization_input = json.loads(normalization_request.input_content)
         assert normalization_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
@@ -511,6 +521,30 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
             "python",
             "java",
         ]
+
+        async with maker() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation).where(
+                        AIInvocation.user_id == user_id,
+                        AIInvocation.purpose.in_(
+                            ["custom_problem_normalization", "custom_problem_pack_preparation"]
+                        ),
+                    )
+                )
+            )
+        assert len(invocations) == 2
+        by_purpose = {invocation.purpose: invocation for invocation in invocations}
+        normalization = by_purpose["custom_problem_normalization"]
+        assert normalization.capability == "STANDARD_REASONING"
+        assert normalization.model == runtime_settings.reasoning_standard_model
+        assert normalization.user_id == user_id
+        assert normalization.interview_session_id is None
+        pack = by_purpose["custom_problem_pack_preparation"]
+        assert pack.capability == "STRONG_REASONING"
+        assert pack.model == runtime_settings.reasoning_strong_model
+        assert pack.user_id == user_id
+        assert pack.interview_session_id is None
     finally:
         await engine.dispose()
 
