@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Sequence
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,7 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import delete, func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.ai_gateway import gateway as gateway_module
 from app.ai_gateway.gateway import (
@@ -45,7 +46,13 @@ from app.execution.sandbox_provider import LocalSandboxExecutorProvider
 from app.interviews.creation import SelfServeInterviewCreationService
 from app.interviews.models import InterviewConfiguration, InterviewSession, SessionBudget
 from app.interviews.restoration import SessionRestorationService
-from app.problems.content import ExecutionDefinition, load_curated_content, load_ontology
+from app.problems import custom as custom_module
+from app.problems.content import (
+    ExecutionDefinition,
+    canonical_hash,
+    load_curated_content,
+    load_ontology,
+)
 from app.problems.contracts import custom_preparation_response
 from app.problems.custom import (
     CUSTOM_PREPARATION_POLICY_VERSION,
@@ -58,8 +65,9 @@ from app.problems.custom import (
     CustomProblemPreparationService,
     NormalizedProblemOutput,
     custom_preparation_retryable,
+    normalize_problem_text,
 )
-from app.problems.models import CustomProblemPreparation, Problem
+from app.problems.models import CustomProblemPreparation, InterviewPackVersion, Problem
 from app.problems.selection import CandidateProblemSelectionInvalid
 from app.problems.service import CuratedProblemService
 from app.problems.starter_scaffolds import starter_languages_for_execution
@@ -149,6 +157,9 @@ class CapturingLogger:
         self.events: list[tuple[str, dict[str, object]]] = []
 
     def info(self, event: str, **fields: object) -> None:
+        self.events.append((event, fields))
+
+    def warning(self, event: str, **fields: object) -> None:
         self.events.append((event, fields))
 
 
@@ -353,6 +364,33 @@ def _count_pairs_outputs() -> list[dict[str, Any]]:
     ]
 
 
+def _invalid_count_pairs_normalization(
+    variant: Literal[
+        "wrong_method",
+        "private_argument_mismatch",
+        "wrong_expected_output_type",
+        "unknown_concept",
+    ],
+) -> dict[str, Any]:
+    output = deepcopy(_count_pairs_outputs()[0])
+    problem = json.loads(output["problem_json"])
+    private_cases = json.loads(output["private_cases_json"])
+    if variant == "wrong_method":
+        problem["execution"]["method_name"] = "solve"
+    elif variant == "private_argument_mismatch":
+        private_cases[0]["arguments"] = {
+            "values": [1, 1, 1, 1],
+            "target": 2,
+        }
+    elif variant == "wrong_expected_output_type":
+        problem["execution"]["visible_cases"][0]["expected_output"] = "2"
+    else:
+        problem["problem_concepts"][0]["canonical_key"] = "model_invented_concept"
+    output["problem_json"] = json.dumps(problem)
+    output["private_cases_json"] = json.dumps(private_cases)
+    return output
+
+
 def _non_ready_output(
     recommendation: Literal["NEEDS_CORRECTION", "REJECTED"], code: str
 ) -> dict[str, Any]:
@@ -387,6 +425,64 @@ def _service(
     )
 
 
+async def _retag_ready_preparation_as_historical(
+    session: AsyncSession,
+    preparation: CustomProblemPreparation,
+    *,
+    policy_version: str,
+    gate_version: str,
+) -> None:
+    assert preparation.normalization_ai_invocation_id is not None
+    assert preparation.pack_ai_invocation_id is not None
+    assert preparation.prepared_pack_version_id is not None
+    normalization_invocation = await session.get(
+        AIInvocation, preparation.normalization_ai_invocation_id
+    )
+    pack_invocation = await session.get(AIInvocation, preparation.pack_ai_invocation_id)
+    pack_version = await session.get(InterviewPackVersion, preparation.prepared_pack_version_id)
+    assert normalization_invocation is not None
+    assert pack_invocation is not None
+    assert pack_version is not None
+
+    async def historical_policy(
+        policy_key: str, configuration: dict[str, object]
+    ) -> AIPolicyVersion:
+        policy = await session.scalar(
+            select(AIPolicyVersion).where(
+                AIPolicyVersion.policy_key == policy_key,
+                AIPolicyVersion.version == policy_version,
+            )
+        )
+        if policy is None:
+            policy = AIPolicyVersion(
+                policy_key=policy_key,
+                version=policy_version,
+                prompt_hash=canonical_hash(f"{policy_key}:{policy_version}"),
+                configuration_json=configuration,
+            )
+            session.add(policy)
+            await session.flush()
+        assert policy.configuration_json.get("quality_gate") == gate_version
+        return policy
+
+    normalization_policy = await historical_policy(
+        "stage9e_custom_problem_preparation.normalize",
+        {"quality_gate": gate_version},
+    )
+    pack_policy = await historical_policy(
+        "stage9e_custom_problem_preparation.pack",
+        {"quality_gate": gate_version},
+    )
+    normalization_invocation.ai_policy_version_id = normalization_policy.id
+    pack_invocation.ai_policy_version_id = pack_policy.id
+    pack_version.ai_policy_version_id = pack_policy.id
+    preparation.preparation_policy_version = policy_version
+    preparation.quality_gate_version = gate_version
+    evidence = dict(preparation.sandbox_validation_json)
+    evidence["gate_version"] = gate_version
+    preparation.sandbox_validation_json = evidence
+
+
 @pytest.mark.parametrize(
     ("semantic_type", "value", "cpp_type", "python_type", "java_type"),
     [
@@ -417,18 +513,14 @@ def test_starter_scaffolds_cover_every_supported_semantic_type(
             "method_name": "solveValue",
             "arguments": [{"name": "value", "type": semantic_type}],
             "return_type": semantic_type,
-            "visible_cases": [
-                {"arguments": {"value": value}, "expected_output": value}
-            ],
+            "visible_cases": [{"arguments": {"value": value}, "expected_output": value}],
         }
     )
 
     languages = starter_languages_for_execution(execution)
 
     assert set(languages) == {"cpp", "python", "java"}
-    assert languages["cpp"].display_signature == (
-        f"{cpp_type} solveValue({cpp_type} value)"
-    )
+    assert languages["cpp"].display_signature == (f"{cpp_type} solveValue({cpp_type} value)")
     assert languages["python"].display_signature == (
         f"def solveValue(self, value: {python_type}) -> {python_type}"
     )
@@ -480,8 +572,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v4"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v4"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v5"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v5"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -623,6 +715,7 @@ async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> N
             "custom_problem_preparation_id": str(created.preparation.id),
             "normalization_attempt": "recovery",
             "recovery_attempt": 1,
+            "recovery_reason": ("prior_findings_contradicted_by_software_source_evidence"),
             "contradicted_finding_codes": ["MISSING_RETURN_BEHAVIOR"],
         }
         assert provider.requests[1].policy.policy_key == (
@@ -678,9 +771,7 @@ async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> N
         assert policies["request-1"] is not None
         assert policies["request-2"] is not None
         assert policies["request-3"] is not None
-        assert policies["request-1"].policy_key == (
-            "stage9e_custom_problem_preparation.normalize"
-        )
+        assert policies["request-1"].policy_key == ("stage9e_custom_problem_preparation.normalize")
         assert policies["request-2"].policy_key == (
             "stage9e_custom_problem_preparation.normalize.recovery"
         )
@@ -688,13 +779,225 @@ async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> N
             "quality_gate": CUSTOM_QUALITY_GATE_VERSION,
             "normalization_attempt": "recovery",
         }
-        assert policies["request-3"].policy_key == (
-            "stage9e_custom_problem_preparation.pack"
-        )
+        assert policies["request-3"].policy_key == ("stage9e_custom_problem_preparation.pack")
         assert all(
             policy is not None and policy.version == CUSTOM_PREPARATION_POLICY_VERSION
             for policy in policies.values()
         )
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("variant", "issue_code", "field_path"),
+    [
+        ("wrong_method", "EXECUTION_SIGNATURE_CONFLICT", "problem.execution"),
+        (
+            "private_argument_mismatch",
+            "PRIVATE_CASE_ARGUMENT_MISMATCH",
+            "private_cases[0].arguments",
+        ),
+        (
+            "wrong_expected_output_type",
+            "EXPECTED_OUTPUT_TYPE_INVALID",
+            "problem.execution.visible_cases[0].expected_output",
+        ),
+        ("unknown_concept", "UNKNOWN_CONCEPT_KEY", "problem.problem_concepts"),
+    ],
+)
+async def test_count_pairs_invalid_ready_artifact_recovers_once_and_launches(
+    monkeypatch: pytest.MonkeyPatch,
+    variant: str,
+    issue_code: str,
+    field_path: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(
+        [_invalid_count_pairs_normalization(cast(Any, variant)), *_count_pairs_outputs()]
+    )
+    executor = PassingExecutor()
+    captured_logs = CapturingLogger()
+    monkeypatch.setattr(custom_module, "logger", captured_logs)
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"stage9e-artifact-recovery-{variant}",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.operational_status == "COMPLETED"
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.failure_category is None
+        assert ready.problem_version is not None
+        assert [request.purpose for request in provider.requests] == [
+            "custom_problem_normalization",
+            "custom_problem_normalization",
+            "custom_problem_pack_preparation",
+        ]
+        assert [request.capability for request in provider.requests] == [
+            "STANDARD_REASONING",
+            "STRONG_REASONING",
+            "STRONG_REASONING",
+        ]
+        assert provider.reasoning_efforts == ["medium", "medium", "medium"]
+        assert [request.timeout_seconds for request in provider.requests] == [
+            90.0,
+            90.0,
+            90.0,
+        ]
+        recovery_request = provider.requests[1]
+        assert recovery_request.metadata == {
+            "custom_problem_preparation_id": str(created.preparation.id),
+            "normalization_attempt": "recovery",
+            "recovery_attempt": 1,
+            "recovery_reason": "generated_artifacts_failed_validation",
+            "artifact_issue_codes": [issue_code],
+        }
+        recovery_input = json.loads(recovery_request.input_content)
+        assert recovery_input["untrusted_problem_text"] == COUNT_PAIRS_PROBLEM
+        assert recovery_input["software_source_evidence"]["signature"] == {
+            "method_name": "countPairs",
+            "arguments": [
+                {"name": "nums", "type": "int[]"},
+                {"name": "target", "type": "int"},
+            ],
+            "return_type": "int",
+        }
+        assert recovery_input["active_concept_allowlist"]
+        assert recovery_input["supported_languages"] == ["cpp", "python", "java"]
+        assert recovery_input["supported_types"]
+        assert recovery_input["normalization_recovery"]["reason"] == (
+            "generated_artifacts_failed_validation"
+        )
+        assert recovery_input["normalization_recovery"]["artifact_issues"] == [
+            {
+                "code": issue_code,
+                "field": field_path,
+                **(
+                    {"expected_semantic_type": "int"}
+                    if variant == "wrong_expected_output_type"
+                    else {}
+                ),
+                **(
+                    {"unknown_concept_key": "model_invented_concept"}
+                    if variant == "unknown_concept"
+                    else {}
+                ),
+            }
+        ]
+        assert [request.language for request in executor.requests] == [
+            "cpp",
+            "python",
+            "java",
+        ]
+        execution = cast(dict[str, Any], ready.problem_version.io_schema_json["execution"])
+        assert execution["method_name"] == "countPairs"
+        assert execution["arguments"] == [
+            {"name": "nums", "type": "int[]"},
+            {"name": "target", "type": "int"},
+        ]
+        assert execution["return_type"] == "int"
+
+        artifact_logs = [
+            fields
+            for event, fields in captured_logs.events
+            if event == "custom_problem_normalization_artifact_invalid"
+        ]
+        assert artifact_logs == [
+            {
+                "custom_problem_preparation_id": str(created.preparation.id),
+                "attempt_count": 1,
+                "normalization_ai_invocation_id": artifact_logs[0][
+                    "normalization_ai_invocation_id"
+                ],
+                "issue_codes": [issue_code],
+                "field_paths": [field_path],
+            }
+        ]
+        serialized_log = json.dumps(artifact_logs)
+        assert COUNT_PAIRS_PROBLEM not in serialized_log
+        assert "problem_json" not in serialized_log
+        assert "private_cases_json" not in serialized_log
+
+        async with maker() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.user_id == user_id)
+                    .order_by(AIInvocation.provider_request_id)
+                )
+            )
+        assert [item.provider_request_id for item in invocations] == [
+            "request-1",
+            "request-2",
+            "request-3",
+        ]
+        assert ready.preparation.normalization_ai_invocation_id == invocations[1].id
+        assert invocations[0].status == "SUCCEEDED"
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("recovery_origin", ["artifact", "finding"])
+async def test_invalid_artifact_after_the_only_recovery_fails_without_a_third_call(
+    recovery_origin: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    first = (
+        _invalid_count_pairs_normalization("wrong_method")
+        if recovery_origin == "artifact"
+        else _non_ready_output("NEEDS_CORRECTION", "MISSING_RETURN_BEHAVIOR")
+    )
+    provider = SequenceReasoningProvider(
+        [first, _invalid_count_pairs_normalization("wrong_method")]
+    )
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"stage9e-invalid-after-{recovery_origin}-recovery",
+        )
+        failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "NORMALIZATION_ARTIFACT_INVALID"
+        assert failed.preparation.prepared_problem_version_id is None
+        assert failed.preparation.prepared_pack_version_id is None
+        assert custom_preparation_retryable(failed.preparation)
+        assert len(provider.requests) == 2
+        assert provider.requests[1].metadata["recovery_attempt"] == 1
+        assert executor.requests == []
+        async with maker() as session:
+            invocations = list(
+                await session.scalars(
+                    select(AIInvocation)
+                    .where(AIInvocation.user_id == user_id)
+                    .order_by(AIInvocation.provider_request_id)
+                )
+            )
+            persisted_problem_count = int(
+                await session.scalar(
+                    select(func.count())
+                    .select_from(Problem)
+                    .where(Problem.owner_user_id == user_id)
+                )
+                or 0
+            )
+        assert [item.provider_request_id for item in invocations] == [
+            "request-1",
+            "request-2",
+        ]
+        assert failed.preparation.normalization_ai_invocation_id == invocations[1].id
+        assert persisted_problem_count == 0
     finally:
         await engine.dispose()
 
@@ -752,9 +1055,7 @@ async def test_reasoning_timeout_is_retryable_and_a_later_attempt_can_succeed(
             PassingExecutor(),
             reasoning_timeout_seconds=1.0,
         )
-        ready = await retry_service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        ready = await retry_service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.operational_status == "COMPLETED"
         assert ready.preparation.quality_outcome == "READY"
@@ -852,9 +1153,9 @@ async def test_other_source_contradicted_findings_trigger_one_recovery(
         assert len(provider.requests) == CUSTOM_REASONING_CALL_LIMIT
         assert provider.requests[1].metadata["normalization_attempt"] == "recovery"
         recovery_input = json.loads(provider.requests[1].input_content)
-        assert recovery_input["normalization_recovery"][
-            "contradicted_finding_codes"
-        ] == [finding_code]
+        assert recovery_input["normalization_recovery"]["contradicted_finding_codes"] == [
+            finding_code
+        ]
     finally:
         await engine.dispose()
 
@@ -987,9 +1288,7 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
             ),
             idempotency_key="stage9e-model-solution-leak",
         )
-        ready = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
         assert ready.problem_version is not None
         stored_languages = ready.problem_version.io_schema_json["languages"]
@@ -1048,12 +1347,8 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         )
         assert duplicate.preparation.id == created.preparation.id
 
-        ready = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
-        again = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+        again = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
         assert again.preparation.prepared_problem_version_id == (
             ready.preparation.prepared_problem_version_id
@@ -1094,9 +1389,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
             assert created_interview.interview_session.interview_pack_version_id == (
                 ready.preparation.prepared_pack_version_id
             )
-            language_definitions = created_interview.problem_version.io_schema_json[
-                "languages"
-            ]
+            language_definitions = created_interview.problem_version.io_schema_json["languages"]
             assert isinstance(language_definitions, dict)
             python_definition = language_definitions["python"]
             assert isinstance(python_definition, dict)
@@ -1143,6 +1436,139 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("policy_version", "gate_version"),
+    [("v3", "stage9e.v3"), ("v4", "stage9e.v4")],
+)
+async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(
+    policy_version: str,
+    gate_version: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    service = _service(
+        maker,
+        SequenceReasoningProvider(_count_pairs_outputs()),
+        PassingExecutor(),
+    )
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"historical-selection-{policy_version}",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+        assert ready.preparation.quality_outcome == "READY"
+        assert ready.preparation.prepared_problem_version_id is not None
+        async with maker() as session, session.begin():
+            preparation = await session.get(CustomProblemPreparation, ready.preparation.id)
+            assert preparation is not None
+            await _retag_ready_preparation_as_historical(
+                session,
+                preparation,
+                policy_version=policy_version,
+                gate_version=gate_version,
+            )
+
+        async with maker() as session:
+            interview = await SelfServeInterviewCreationService(session).create(
+                user_id=user_id,
+                problem_version_id=ready.preparation.prepared_problem_version_id,
+                template="QUICK_DRILL",
+                mode="SIMULATION",
+                language="python",
+            )
+        assert interview.configuration.custom_problem_preparation_id == (ready.preparation.id)
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    ("policy_version", "gate_version"),
+    [("v2", "stage9e.v2"), ("v4", "stage9e.v5")],
+)
+async def test_non_allowlisted_historical_preparation_cannot_launch(
+    policy_version: str,
+    gate_version: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    service = _service(
+        maker,
+        SequenceReasoningProvider(_count_pairs_outputs()),
+        PassingExecutor(),
+    )
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"untrusted-history-{policy_version}-{gate_version}",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+        assert ready.preparation.prepared_problem_version_id is not None
+        async with maker() as session, session.begin():
+            preparation = await session.get(CustomProblemPreparation, ready.preparation.id)
+            assert preparation is not None
+            preparation.preparation_policy_version = policy_version
+            preparation.quality_gate_version = gate_version
+
+        async with maker() as session:
+            with pytest.raises(CandidateProblemSelectionInvalid):
+                await SelfServeInterviewCreationService(session).create(
+                    user_id=user_id,
+                    problem_version_id=ready.preparation.prepared_problem_version_id,
+                    template="QUICK_DRILL",
+                    mode="SIMULATION",
+                    language="python",
+                )
+    finally:
+        await engine.dispose()
+
+
+async def test_selection_revalidates_historical_source_signature() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    service = _service(
+        maker,
+        SequenceReasoningProvider(_count_pairs_outputs()),
+        PassingExecutor(),
+    )
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="historical-signature-revalidation",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+        assert ready.preparation.prepared_problem_version_id is not None
+        async with maker() as session, session.begin():
+            preparation = await session.get(CustomProblemPreparation, ready.preparation.id)
+            assert preparation is not None
+            changed_source = preparation.original_problem_text.replace(
+                "countPairs", "countPairsChanged"
+            )
+            assert changed_source != preparation.original_problem_text
+            preparation.original_problem_text = changed_source
+            preparation.normalized_content_hash = canonical_hash(
+                normalize_problem_text(changed_source)
+            )
+
+        async with maker() as session:
+            with pytest.raises(CandidateProblemSelectionInvalid):
+                await SelfServeInterviewCreationService(session).create(
+                    user_id=user_id,
+                    problem_version_id=ready.preparation.prepared_problem_version_id,
+                    template="QUICK_DRILL",
+                    mode="SIMULATION",
+                    language="python",
+                )
+    finally:
+        await engine.dispose()
+
+
 async def test_concurrent_create_is_postgresql_idempotent_and_conflict_safe() -> None:
     user_id = await _candidate()
     engine = build_engine()
@@ -1166,18 +1592,20 @@ async def test_concurrent_create_is_postgresql_idempotent_and_conflict_safe() ->
         preparation_ids = {item.preparation.id for item in created}
         assert len(preparation_ids) == 1
         async with maker() as session:
-            assert int(
-                await session.scalar(
-                    select(func.count())
-                    .select_from(CustomProblemPreparation)
-                    .where(
-                        CustomProblemPreparation.user_id == user_id,
-                        CustomProblemPreparation.idempotency_key
-                        == "stage9e-concurrent-create",
+            assert (
+                int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(CustomProblemPreparation)
+                        .where(
+                            CustomProblemPreparation.user_id == user_id,
+                            CustomProblemPreparation.idempotency_key == "stage9e-concurrent-create",
+                        )
                     )
+                    or 0
                 )
-                or 0
-            ) == 1
+                == 1
+            )
 
         with pytest.raises(CustomPreparationIdempotencyConflict):
             await service.create(
@@ -1215,9 +1643,7 @@ async def test_processing_lease_reclaims_stale_work_and_fences_old_attempt() -> 
         )
         await asyncio.wait_for(old_provider.started.wait(), timeout=2)
 
-        current = await old_service.get_owned(
-            user_id=user_id, preparation_id=preparation_id
-        )
+        current = await old_service.get_owned(user_id=user_id, preparation_id=preparation_id)
         assert current.preparation.attempt_count == 1
         assert not custom_preparation_retryable(current.preparation, now=clock())
         assert not custom_preparation_response(current, now=clock()).retryable
@@ -1229,9 +1655,7 @@ async def test_processing_lease_reclaims_stale_work_and_fences_old_attempt() -> 
             await new_service.prepare(user_id=user_id, preparation_id=preparation_id)
 
         clock.advance(timedelta(seconds=2))
-        stale = await new_service.get_owned(
-            user_id=user_id, preparation_id=preparation_id
-        )
+        stale = await new_service.get_owned(user_id=user_id, preparation_id=preparation_id)
         assert custom_preparation_retryable(stale.preparation, now=clock())
         assert custom_preparation_response(stale, now=clock()).retryable
         ready = await new_service.prepare(user_id=user_id, preparation_id=preparation_id)
@@ -1255,17 +1679,18 @@ async def test_processing_lease_reclaims_stale_work_and_fences_old_attempt() -> 
                     )
                 )
             )
-            assert {item.provider for item in linked_invocations} == {
-                "stage9e_new_attempt"
-            }
-            assert int(
-                await session.scalar(
-                    select(func.count()).select_from(Problem).where(
-                        Problem.owner_user_id == user_id
+            assert {item.provider for item in linked_invocations} == {"stage9e_new_attempt"}
+            assert (
+                int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(Problem)
+                        .where(Problem.owner_user_id == user_id)
                     )
+                    or 0
                 )
-                or 0
-            ) == 1
+                == 1
+            )
     finally:
         old_provider.release.set()
         if "old_task" in locals() and not old_task.done():
@@ -1298,9 +1723,7 @@ async def test_cancelled_current_attempt_becomes_retryable_failed_and_reraises()
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        failed = await service.get_owned(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        failed = await service.get_owned(user_id=user_id, preparation_id=created.preparation.id)
         assert failed.preparation.operational_status == "FAILED"
         assert failed.preparation.failure_category == "PREPARATION_CANCELLED"
         assert custom_preparation_retryable(failed.preparation)
@@ -1338,9 +1761,7 @@ async def test_deterministic_non_ready_outcomes_do_not_call_ai_or_persist_artifa
         created = await service.create(
             user_id=user_id, problem_text=text, idempotency_key=f"case-{uuid4()}"
         )
-        completed = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        completed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
         assert completed.preparation.operational_status == "COMPLETED"
         assert completed.preparation.quality_outcome == outcome
         assert completed.preparation.prepared_problem_version_id is None
@@ -1373,9 +1794,9 @@ async def test_unknown_concept_and_bad_reference_never_become_ready() -> None:
             async with maker() as session:
                 before = int(
                     await session.scalar(
-                        select(func.count()).select_from(Problem).where(
-                            Problem.owner_user_id == user_id
-                        )
+                        select(func.count())
+                        .select_from(Problem)
+                        .where(Problem.owner_user_id == user_id)
                     )
                     or 0
                 )
@@ -1387,18 +1808,16 @@ async def test_unknown_concept_and_bad_reference_never_become_ready() -> None:
                 ),
                 idempotency_key=f"invalid-{uuid4()}",
             )
-            failed = await service.prepare(
-                user_id=user_id, preparation_id=created.preparation.id
-            )
+            failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
             assert failed.preparation.operational_status == "FAILED"
             assert failed.preparation.quality_outcome is None
             assert failed.preparation.prepared_problem_version_id is None
             async with maker() as session:
                 after = int(
                     await session.scalar(
-                        select(func.count()).select_from(Problem).where(
-                            Problem.owner_user_id == user_id
-                        )
+                        select(func.count())
+                        .select_from(Problem)
+                        .where(Problem.owner_user_id == user_id)
                     )
                     or 0
                 )
@@ -1423,9 +1842,7 @@ async def test_foreign_preparation_is_hidden_as_not_found() -> None:
             idempotency_key="foreign-hidden",
         )
         with pytest.raises(CustomPreparationNotFound):
-            await service.get_owned(
-                user_id=other_id, preparation_id=created.preparation.id
-            )
+            await service.get_owned(user_id=other_id, preparation_id=created.preparation.id)
         with pytest.raises(CustomPreparationNotFound):
             await service.prepare(user_id=other_id, preparation_id=created.preparation.id)
     finally:
@@ -1448,9 +1865,7 @@ async def test_user_scoped_gateway_keeps_accounting_bounded_and_failure_safe() -
         instructions=invalid_instructions,
         configuration={"workflow": "custom_problem_preparation"},
     )
-    timeout_provider = SequenceReasoningProvider(
-        [_outputs()[0]], delay_seconds=0.05
-    )
+    timeout_provider = SequenceReasoningProvider([_outputs()[0]], delay_seconds=0.05)
     timeout_gateway = AIGateway(
         settings=get_settings(), sessionmaker=maker, provider=timeout_provider
     )
@@ -1470,9 +1885,7 @@ async def test_user_scoped_gateway_keeps_accounting_bounded_and_failure_safe() -
         with pytest.raises(StructuredOutputValidationFailure):
             await invalid_gateway.reason_structured_for_user(
                 user_id=user_id,
-                user_scoped_budget=UserScopedReasoningBudget(
-                    calls_used_before=0, max_calls=2
-                ),
+                user_scoped_budget=UserScopedReasoningBudget(calls_used_before=0, max_calls=2),
                 capability="STRONG_REASONING",
                 purpose="stage9e_user_invalid_output",
                 policy=invalid_policy,
@@ -1484,9 +1897,7 @@ async def test_user_scoped_gateway_keeps_accounting_bounded_and_failure_safe() -
         with pytest.raises(ReasoningProviderError, match="timed out"):
             await timeout_gateway.reason_structured_for_user(
                 user_id=user_id,
-                user_scoped_budget=UserScopedReasoningBudget(
-                    calls_used_before=1, max_calls=2
-                ),
+                user_scoped_budget=UserScopedReasoningBudget(calls_used_before=1, max_calls=2),
                 capability="STRONG_REASONING",
                 purpose="stage9e_user_timeout",
                 policy=timeout_policy,
@@ -1503,9 +1914,7 @@ async def test_user_scoped_gateway_keeps_accounting_bounded_and_failure_safe() -
         with pytest.raises(ReasoningBudgetExceeded):
             await exhausted_gateway.reason_structured_for_user(
                 user_id=user_id,
-                user_scoped_budget=UserScopedReasoningBudget(
-                    calls_used_before=2, max_calls=2
-                ),
+                user_scoped_budget=UserScopedReasoningBudget(calls_used_before=2, max_calls=2),
                 capability="STRONG_REASONING",
                 purpose="stage9e_user_exhausted",
                 policy=invalid_policy,
@@ -1535,24 +1944,24 @@ async def test_user_scoped_gateway_keeps_accounting_bounded_and_failure_safe() -
             assert timed_out.status == "TIMED_OUT"
             assert timed_out.error_class == "TIMEOUT"
             assert all(item.interview_session_id is None for item in invocations)
-            persisted_policy = await session.get(
-                AIPolicyVersion, invalid.ai_policy_version_id
-            )
+            persisted_policy = await session.get(AIPolicyVersion, invalid.ai_policy_version_id)
             assert persisted_policy is not None
-            assert persisted_policy.prompt_hash == policy_instruction_hash(
-                invalid_instructions
-            )
-            assert int(
-                await session.scalar(
-                    select(func.count()).select_from(InterviewSession).where(
-                        InterviewSession.user_id == user_id
+            assert persisted_policy.prompt_hash == policy_instruction_hash(invalid_instructions)
+            assert (
+                int(
+                    await session.scalar(
+                        select(func.count())
+                        .select_from(InterviewSession)
+                        .where(InterviewSession.user_id == user_id)
                     )
+                    or 0
                 )
-                or 0
-            ) == 0
-            assert int(
-                await session.scalar(select(func.count()).select_from(SessionBudget)) or 0
-            ) == budget_count_before
+                == 0
+            )
+            assert (
+                int(await session.scalar(select(func.count()).select_from(SessionBudget)) or 0)
+                == budget_count_before
+            )
     finally:
         await engine.dispose()
 
@@ -1568,9 +1977,7 @@ async def test_ready_gate_executes_all_references_in_real_sandbox() -> None:
     provider = SequenceReasoningProvider(_outputs())
     service = CustomProblemPreparationService(
         sessionmaker=maker,
-        gateway=AIGateway(
-            settings=get_settings(), sessionmaker=maker, provider=provider
-        ),
+        gateway=AIGateway(settings=get_settings(), sessionmaker=maker, provider=provider),
         executor=LocalSandboxExecutorProvider("http://127.0.0.1:8010"),
     )
     try:
@@ -1582,9 +1989,7 @@ async def test_ready_gate_executes_all_references_in_real_sandbox() -> None:
             ),
             idempotency_key=f"real-sandbox-{uuid4()}",
         )
-        ready = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
         assert ready.preparation.quality_outcome == "READY"
         evidence = ready.preparation.sandbox_validation_json
         assert evidence["provider"] == "local_cpp_sandbox"
