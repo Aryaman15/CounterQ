@@ -52,9 +52,10 @@ class NormalizationArtifactIssue:
     def __post_init__(self) -> None:
         if _SAFE_FIELD_PATH.fullmatch(self.field) is None:
             object.__setattr__(self, "field", "artifact")
-        if self.unknown_concept_key is not None and _SAFE_CONCEPT_KEY.fullmatch(
-            self.unknown_concept_key
-        ) is None:
+        if (
+            self.unknown_concept_key is not None
+            and _SAFE_CONCEPT_KEY.fullmatch(self.unknown_concept_key) is None
+        ):
             object.__setattr__(self, "unknown_concept_key", None)
 
     def to_payload(self) -> dict[str, str]:
@@ -95,13 +96,20 @@ def validate_normalization_artifacts(
             [NormalizationArtifactIssue("PROBLEM_SCHEMA_INVALID", "problem")]
         )
 
-    raw_execution = canonicalize_execution_comparator(raw_problem.get("execution"))
+    model_execution = raw_problem.get("execution")
+    source_execution = authoritative_source_execution(
+        source_evidence,
+        model_execution=model_execution,
+    )
+    raw_execution = (
+        source_execution
+        if source_execution is not None
+        else canonicalize_execution_comparator(model_execution)
+    )
     try:
         execution = ExecutionDefinition.model_validate(raw_execution)
     except ValidationError as exc:
-        raise NormalizationArtifactValidationError(
-            [_execution_validation_issue(exc)]
-        ) from exc
+        raise NormalizationArtifactValidationError([_execution_validation_issue(exc)]) from exc
 
     issues: list[NormalizationArtifactIssue] = []
     signature_issue = execution_signature_issue(execution, source_evidence)
@@ -217,6 +225,33 @@ def canonicalize_execution_comparator(raw_execution: object) -> object:
     return canonical
 
 
+def authoritative_source_execution(
+    source_evidence: CustomProblemSourceEvidence,
+    *,
+    model_execution: object,
+) -> dict[str, object] | None:
+    """Construct source-owned mechanics only from a complete signature and typed cases."""
+
+    signature = source_evidence.signature
+    if signature is None or not source_evidence.parsed_visible_cases:
+        return None
+    comparator: object
+    if signature.return_type in _SCALAR_RETURN_TYPES:
+        comparator = "EXACT"
+    elif isinstance(model_execution, dict):
+        comparator = model_execution.get("comparator")
+    else:
+        comparator = None
+    return {
+        "method_name": signature.method_name,
+        "arguments": [argument.to_payload() for argument in signature.arguments],
+        "return_type": signature.return_type,
+        "comparator": comparator,
+        "visible_cases": [case.to_payload() for case in source_evidence.parsed_visible_cases],
+        "custom_test_supported": True,
+    }
+
+
 def execution_signature_issue(
     execution: ExecutionDefinition,
     source_evidence: CustomProblemSourceEvidence,
@@ -288,9 +323,7 @@ def _validation_field(prefix: str, exc: ValidationError) -> str:
 def _execution_validation_issue(exc: ValidationError) -> NormalizationArtifactIssue:
     errors = exc.errors(include_url=False, include_context=False, include_input=False)
     if any(tuple(error.get("loc", ())) == ("comparator",) for error in errors):
-        return NormalizationArtifactIssue(
-            "COMPARATOR_INVALID", "problem.execution.comparator"
-        )
+        return NormalizationArtifactIssue("COMPARATOR_INVALID", "problem.execution.comparator")
     return NormalizationArtifactIssue(
         "PROBLEM_SCHEMA_INVALID",
         _validation_field("problem.execution", exc),

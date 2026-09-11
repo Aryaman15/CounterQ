@@ -11,6 +11,7 @@ from app.problems.content import load_curated_content
 from app.problems.custom_artifact_validation import (
     NormalizationArtifactIssue,
     NormalizationArtifactValidationError,
+    authoritative_source_execution,
     canonicalize_execution_comparator,
     validate_normalization_artifacts,
 )
@@ -22,6 +23,10 @@ Function signature: int countPairs(vector<int> nums, int target)
 Example:
 Input: nums = [1, 2, 3, 4], target = 5
 Output: 2
+"""
+SOURCE_WITHOUT_PARSEABLE_EXAMPLES = """Count Pairs
+Return the number of matching index pairs.
+Function signature: int countPairs(vector<int> nums, int target)
 """
 
 
@@ -63,7 +68,7 @@ def _validate(
         problem if isinstance(problem, str) else json.dumps(problem),
         private_cases if isinstance(private_cases, str) else json.dumps(private_cases),
         preparation_id=uuid4(),
-        source_evidence=derive_custom_problem_source_evidence(SOURCE),
+        source_evidence=derive_custom_problem_source_evidence(SOURCE_WITHOUT_PARSEABLE_EXAMPLES),
         active_concept_keys=concepts,
     )
 
@@ -192,6 +197,112 @@ def test_collection_comparator_is_not_inferred_or_rewritten(
     proposed = {"return_type": return_type, "comparator": comparator}
 
     assert canonicalize_execution_comparator(proposed) is proposed
+
+
+def test_source_execution_replaces_broken_model_mechanics_before_validation() -> None:
+    problem, private_cases, concepts = _artifacts()
+    problem["execution"] = None
+
+    validated, _ = validate_normalization_artifacts(
+        json.dumps(problem),
+        json.dumps(private_cases),
+        preparation_id=uuid4(),
+        source_evidence=derive_custom_problem_source_evidence(SOURCE),
+        active_concept_keys=concepts,
+    )
+
+    assert validated.execution.model_dump(mode="json") == {
+        "method_name": "countPairs",
+        "arguments": [
+            {"name": "nums", "type": "int[]"},
+            {"name": "target", "type": "int"},
+        ],
+        "return_type": "int",
+        "comparator": "EXACT",
+        "visible_cases": [
+            {
+                "arguments": {"nums": [1, 2, 3, 4], "target": 5},
+                "expected_output": 2,
+            }
+        ],
+        "custom_test_supported": True,
+    }
+
+
+def test_collection_source_execution_preserves_only_a_validated_model_comparator() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        "vector<int> echo(vector<int> values)\nExample:\nInput: values = [2, 1]\nOutput: [2, 1]\n"
+    )
+
+    exact = authoritative_source_execution(
+        evidence,
+        model_execution={"comparator": "EXACT", "nonsense": True},
+    )
+    unordered = authoritative_source_execution(
+        evidence,
+        model_execution={"comparator": "UNORDERED_LIST"},
+    )
+    invalid = authoritative_source_execution(
+        evidence,
+        model_execution={"comparator": "COUNT"},
+    )
+
+    assert exact is not None and exact["comparator"] == "EXACT"
+    assert unordered is not None and unordered["comparator"] == "UNORDERED_LIST"
+    assert invalid is not None and invalid["comparator"] == "COUNT"
+
+
+@pytest.mark.parametrize("comparator", ["EXACT", "UNORDERED_LIST"])
+def test_source_owned_collection_execution_accepts_valid_model_comparator(
+    comparator: str,
+) -> None:
+    problem, _, concepts = _artifacts()
+    problem["execution"] = {"comparator": comparator}
+    source = (
+        "vector<int> echo(vector<int> values)\nExample:\nInput: values = [2, 1]\nOutput: [2, 1]\n"
+    )
+    private_cases = [{"arguments": {"values": [3]}, "expected_output": [3]}]
+
+    validated, _ = validate_normalization_artifacts(
+        json.dumps(problem),
+        json.dumps(private_cases),
+        preparation_id=uuid4(),
+        source_evidence=derive_custom_problem_source_evidence(source),
+        active_concept_keys=concepts,
+    )
+
+    assert validated.execution.comparator == comparator
+
+
+def test_source_owned_collection_execution_rejects_invalid_model_comparator() -> None:
+    problem, _, concepts = _artifacts()
+    problem["execution"] = {"comparator": "COUNT"}
+    source = (
+        "vector<int> echo(vector<int> values)\nExample:\nInput: values = [2, 1]\nOutput: [2, 1]\n"
+    )
+    private_cases = [{"arguments": {"values": [3]}, "expected_output": [3]}]
+
+    with pytest.raises(NormalizationArtifactValidationError) as caught:
+        validate_normalization_artifacts(
+            json.dumps(problem),
+            json.dumps(private_cases),
+            preparation_id=uuid4(),
+            source_evidence=derive_custom_problem_source_evidence(source),
+            active_concept_keys=concepts,
+        )
+
+    assert [issue.to_payload() for issue in caught.value.issues] == [
+        {"code": "COMPARATOR_INVALID", "field": "problem.execution.comparator"}
+    ]
+
+
+def test_mismatched_source_example_does_not_authorize_source_execution() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        "int solve(vector<int> nums, int target)\n"
+        "Example:\nInput: values = [1, 2], target = 3\nOutput: 1\n"
+    )
+
+    assert authoritative_source_execution(evidence, model_execution=None) is None
 
 
 def test_diagnostic_payload_drops_unbounded_or_unsafe_generated_labels() -> None:

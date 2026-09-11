@@ -370,24 +370,18 @@ def _count_pairs_outputs() -> list[dict[str, Any]]:
 
 def _invalid_count_pairs_normalization(
     variant: Literal[
-        "wrong_method",
         "private_argument_mismatch",
-        "wrong_expected_output_type",
         "unknown_concept",
     ],
 ) -> dict[str, Any]:
     output = deepcopy(_count_pairs_outputs()[0])
     problem = json.loads(output["problem_json"])
     private_cases = json.loads(output["private_cases_json"])
-    if variant == "wrong_method":
-        problem["execution"]["method_name"] = "solve"
-    elif variant == "private_argument_mismatch":
+    if variant == "private_argument_mismatch":
         private_cases[0]["arguments"] = {
             "values": [1, 1, 1, 1],
             "target": 2,
         }
-    elif variant == "wrong_expected_output_type":
-        problem["execution"]["visible_cases"][0]["expected_output"] = "2"
     else:
         problem["problem_concepts"][0]["canonical_key"] = "model_invented_concept"
     output["problem_json"] = json.dumps(problem)
@@ -576,8 +570,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v6"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v6"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v7"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v7"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -621,6 +615,16 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
             "has_explicit_return_directive": True,
             "has_example_section": True,
             "has_expected_output_example": True,
+            "parsed_visible_cases": [
+                {
+                    "arguments": {"nums": [1, 2, 3, 4], "target": 5},
+                    "expected_output": 2,
+                },
+                {
+                    "arguments": {"nums": [1, 1, 1], "target": 2},
+                    "expected_output": 3,
+                },
+            ],
         }
         assert "normalization_recovery" not in normalization_input
         assert normalization_request.metadata["normalization_attempt"] == "initial"
@@ -795,16 +799,10 @@ async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> N
 @pytest.mark.parametrize(
     ("variant", "issue_code", "field_path"),
     [
-        ("wrong_method", "EXECUTION_SIGNATURE_CONFLICT", "problem.execution"),
         (
             "private_argument_mismatch",
             "PRIVATE_CASE_ARGUMENT_MISMATCH",
             "private_cases[0].arguments",
-        ),
-        (
-            "wrong_expected_output_type",
-            "EXPECTED_OUTPUT_TYPE_INVALID",
-            "problem.execution.visible_cases[0].expected_output",
         ),
         ("unknown_concept", "UNKNOWN_CONCEPT_KEY", "problem.problem_concepts"),
     ],
@@ -882,11 +880,6 @@ async def test_count_pairs_invalid_ready_artifact_recovers_once_and_launches(
                 "code": issue_code,
                 "field": field_path,
                 **(
-                    {"expected_semantic_type": "int"}
-                    if variant == "wrong_expected_output_type"
-                    else {}
-                ),
-                **(
                     {"unknown_concept_key": "model_invented_concept"}
                     if variant == "unknown_concept"
                     else {}
@@ -946,59 +939,50 @@ async def test_count_pairs_invalid_ready_artifact_recovers_once_and_launches(
         await engine.dispose()
 
 
-async def test_count_pairs_visible_case_recovery_canonicalizes_scalar_comparator() -> None:
+async def test_count_pairs_source_execution_replaces_broken_model_execution_without_recovery() -> (
+    None
+):
     user_id = await _candidate()
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     initial, pack = _count_pairs_outputs()
     initial_problem = json.loads(initial["problem_json"])
-    initial_problem["execution"]["visible_cases"] = []
+    initial_problem["execution"] = None
     initial["problem_json"] = json.dumps(initial_problem)
-    recovered = deepcopy(_count_pairs_outputs()[0])
-    recovered_problem = json.loads(recovered["problem_json"])
-    recovered_problem["execution"]["comparator"] = "COUNT"
-    recovered["problem_json"] = json.dumps(recovered_problem)
-    provider = SequenceReasoningProvider([initial, recovered, pack])
+    provider = SequenceReasoningProvider([initial, pack])
     executor = PassingExecutor()
     service = _service(maker, provider, executor)
     try:
         created = await service.create(
             user_id=user_id,
             problem_text=COUNT_PAIRS_PROBLEM,
-            idempotency_key="stage9e-count-pairs-scalar-comparator",
+            idempotency_key="stage9e-count-pairs-source-execution",
         )
-        ready = await service.prepare(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY"
         assert ready.problem_version is not None
         assert [request.capability for request in provider.requests] == [
             "STANDARD_REASONING",
             "STRONG_REASONING",
-            "STRONG_REASONING",
         ]
-        assert provider.reasoning_efforts == ["medium", "medium", "medium"]
+        assert [request.purpose for request in provider.requests] == [
+            "custom_problem_normalization",
+            "custom_problem_pack_preparation",
+        ]
+        assert provider.reasoning_efforts == ["medium", "medium"]
         assert [request.timeout_seconds for request in provider.requests] == [
             90.0,
             90.0,
-            90.0,
         ]
-        recovery_input = json.loads(provider.requests[1].input_content)
-        assert recovery_input["normalization_recovery"]["artifact_issues"] == [
-            {
-                "code": "PROBLEM_SCHEMA_INVALID",
-                "field": "problem.execution.visible_cases",
-            }
-        ]
+        assert provider.requests[0].metadata["normalization_attempt"] == "initial"
+        assert "normalization_recovery" not in json.loads(provider.requests[0].input_content)
         assert [request.language for request in executor.requests] == [
             "cpp",
             "python",
             "java",
         ]
-        execution = cast(
-            dict[str, Any], ready.problem_version.io_schema_json["execution"]
-        )
+        execution = cast(dict[str, Any], ready.problem_version.io_schema_json["execution"])
         assert execution["method_name"] == "countPairs"
         assert execution["arguments"] == [
             {"name": "nums", "type": "int[]"},
@@ -1006,6 +990,17 @@ async def test_count_pairs_visible_case_recovery_canonicalizes_scalar_comparator
         ]
         assert execution["return_type"] == "int"
         assert execution["comparator"] == "EXACT"
+        assert execution["visible_cases"] == [
+            {
+                "arguments": {"nums": [1, 2, 3, 4], "target": 5},
+                "expected_output": 2,
+            },
+            {
+                "arguments": {"nums": [1, 1, 1], "target": 2},
+                "expected_output": 3,
+            },
+        ]
+        assert execution["custom_test_supported"] is True
     finally:
         await engine.dispose()
 
@@ -1018,12 +1013,12 @@ async def test_invalid_artifact_after_the_only_recovery_fails_without_a_third_ca
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     first = (
-        _invalid_count_pairs_normalization("wrong_method")
+        _invalid_count_pairs_normalization("private_argument_mismatch")
         if recovery_origin == "artifact"
         else _non_ready_output("NEEDS_CORRECTION", "MISSING_RETURN_BEHAVIOR")
     )
     provider = SequenceReasoningProvider(
-        [first, _invalid_count_pairs_normalization("wrong_method")]
+        [first, _invalid_count_pairs_normalization("private_argument_mismatch")]
     )
     executor = PassingExecutor()
     service = _service(maker, provider, executor)
@@ -1401,23 +1396,19 @@ async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflic
         created = await service.create(
             user_id=user_id,
             problem_text=COUNT_PAIRS_PROBLEM,
-            idempotency_key="stage9e-outdated-failed-v5",
+            idempotency_key="stage9e-outdated-failed-v6",
         )
         async with maker() as session, session.begin():
-            preparation = await session.get(
-                CustomProblemPreparation, created.preparation.id
-            )
+            preparation = await session.get(CustomProblemPreparation, created.preparation.id)
             assert preparation is not None
-            preparation.preparation_policy_version = "v5"
-            preparation.quality_gate_version = "stage9e.v5"
+            preparation.preparation_policy_version = "v6"
+            preparation.quality_gate_version = "stage9e.v6"
             preparation.operational_status = "FAILED"
             preparation.failure_category = "TIMEOUT"
             preparation.attempt_count = 2
             preparation.candidate_message = "The earlier preparation did not finish."
 
-        before = await service.get_owned(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        before = await service.get_owned(user_id=user_id, preparation_id=created.preparation.id)
         before_state = (
             before.preparation.preparation_policy_key,
             before.preparation.preparation_policy_version,
@@ -1431,9 +1422,7 @@ async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflic
         )
 
         with pytest.raises(CustomPreparationPolicyOutdated):
-            await service.prepare(
-                user_id=user_id, preparation_id=created.preparation.id
-            )
+            await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         with pytest.raises(HTTPException) as conflict:
             await prepare_custom_problem(
@@ -1449,9 +1438,7 @@ async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflic
             "category": "custom_problem_preparation_policy_outdated",
             "message": "This saved preparation must be recreated before it can continue.",
         }
-        after = await service.get_owned(
-            user_id=user_id, preparation_id=created.preparation.id
-        )
+        after = await service.get_owned(user_id=user_id, preparation_id=created.preparation.id)
         assert (
             after.preparation.preparation_policy_key,
             after.preparation.preparation_policy_version,
@@ -1585,7 +1572,12 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
 
 @pytest.mark.parametrize(
     ("policy_version", "gate_version"),
-    [("v3", "stage9e.v3"), ("v4", "stage9e.v4"), ("v5", "stage9e.v5")],
+    [
+        ("v3", "stage9e.v3"),
+        ("v4", "stage9e.v4"),
+        ("v5", "stage9e.v5"),
+        ("v6", "stage9e.v6"),
+    ],
 )
 async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(
     policy_version: str,

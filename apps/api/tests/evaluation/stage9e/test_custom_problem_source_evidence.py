@@ -6,6 +6,7 @@ from app.problems.custom_source_evidence import (
     contradicted_normalization_findings,
     derive_custom_problem_source_evidence,
     parse_supported_function_signature,
+    parse_supported_literal,
 )
 
 EXPECTED_ALL_ARGUMENT_TYPES = [
@@ -133,6 +134,12 @@ Output: 1
         "has_explicit_return_directive": True,
         "has_example_section": True,
         "has_expected_output_example": True,
+        "parsed_visible_cases": [
+            {
+                "arguments": {"nums": [1, 2], "target": 3},
+                "expected_output": 1,
+            }
+        ],
     }
     assert contradicted_normalization_findings(
         [
@@ -168,4 +175,119 @@ def test_example_heading_without_both_labeled_values_is_not_proof() -> None:
 
     assert evidence.has_example_section
     assert not evidence.has_expected_output_example
+    assert evidence.parsed_visible_cases == ()
     assert contradicted_normalization_findings(["MISSING_EXAMPLE"], evidence) == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "expected_arguments", "expected_output"),
+    [
+        (
+            """int countPairs(vector<int> nums, int target)
+Example 1:
+Input: nums = [1, 2, 3, 4], target = 5
+Output: 2
+""",
+            {"nums": [1, 2, 3, 4], "target": 5},
+            2,
+        ),
+        (
+            'bool accepts(string value)\nExample:\nInput: value = "ready"\nOutput: true\n',
+            {"value": "ready"},
+            True,
+        ),
+        (
+            "int countWords(vector<string> words)\n"
+            'Example:\nInput: words = ["a", "b"]\nOutput: 2\n',
+            {"words": ["a", "b"]},
+            2,
+        ),
+        (
+            "bool hasZero(vector<vector<int>> grid)\n"
+            "Example:\nInput: grid = [[1, 2], [0, 4]]\nOutput: True\n",
+            {"grid": [[1, 2], [0, 4]]},
+            True,
+        ),
+        (
+            "string join(string left, string right)\nExample:\n"
+            'Input: left = "a,b", right = "c"\nOutput: "a,b,c"\n',
+            {"left": "a,b", "right": "c"},
+            "a,b,c",
+        ),
+        (
+            "bool toggle(bool enabled)\nExample:\nInput: enabled = true\nOutput: false\n",
+            {"enabled": True},
+            False,
+        ),
+        (
+            "bool hasValue(vector<vector<string>> grid)\n"
+            'Example:\nInput: grid = [["a,b"], ["c"]]\nOutput: true\n',
+            {"grid": [["a,b"], ["c"]]},
+            True,
+        ),
+    ],
+)
+def test_source_examples_parse_supported_typed_literals(
+    source: str,
+    expected_arguments: dict[str, object],
+    expected_output: object,
+) -> None:
+    evidence = derive_custom_problem_source_evidence(source)
+
+    assert [case.to_payload() for case in evidence.parsed_visible_cases] == [
+        {"arguments": expected_arguments, "expected_output": expected_output}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("literal", "expected"),
+    [
+        ("-12", -12),
+        ("true", True),
+        ('"hello"', "hello"),
+        ("[1, 2]", [1, 2]),
+        ('["a", "b"]', ["a", "b"]),
+        ("[[1], [2, 3]]", [[1], [2, 3]]),
+        ('[["a"], ["b,c"]]', [["a"], ["b,c"]]),
+    ],
+)
+def test_literal_parser_covers_every_current_semantic_value_shape(
+    literal: str,
+    expected: object,
+) -> None:
+    assert parse_supported_literal(literal) == expected
+
+
+@pytest.mark.parametrize(
+    "literal",
+    [
+        "__import__('os').system('echo unsafe')",
+        "[1, 2",
+        '{"value": 1}',
+        "1.5",
+        "null",
+        "[1,]",
+        "[" * 10 + "1" + "]" * 10,
+        "1" * 4_097,
+    ],
+)
+def test_literal_parser_rejects_malformed_or_unsupported_input(literal: str) -> None:
+    assert parse_supported_literal(literal) is None
+
+
+def test_example_missing_output_produces_no_parsed_source_case() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        "int solve(vector<int> nums)\nExample:\nInput: nums = [1, 2]\n"
+    )
+
+    assert evidence.parsed_visible_cases == ()
+
+
+def test_example_arguments_must_exactly_match_the_source_signature() -> None:
+    evidence = derive_custom_problem_source_evidence(
+        "int solve(vector<int> nums, int target)\n"
+        "Example:\nInput: values = [1, 2], target = 3\nOutput: 1\n"
+    )
+
+    assert evidence.signature is not None
+    assert evidence.parsed_visible_cases == ()
