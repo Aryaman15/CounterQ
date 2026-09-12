@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 import pytest
@@ -276,6 +276,9 @@ async def test_outbox_fans_out_siblings_and_countermap_delivery_is_idempotent() 
                 initial_countermap_generation_key(session_id)
             )
             assert report_event.status == "PENDING"
+            # Keep a separately running local dispatcher from claiming this sibling
+            # while the test verifies that CounterMap consumption leaves it untouched.
+            report_event.available_at = datetime.now(UTC) + timedelta(hours=1)
             countermap_event.status = "PUBLISHED"
             countermap_event.attempt_count = 1
             countermap_event.published_at = datetime.now(UTC)

@@ -288,14 +288,26 @@ async def test_problem_concept_seed_rejects_conflicting_mapping(
     ontology, entries = validate_authored_content()
     service = CuratedProblemService(db_session)
     await service.seed_ontology(ontology)
-    await service.seed_problem(entries[0])
-    mapping = await db_session.scalar(select(ProblemConcept))
+    entry = entries[0]
+    await service.seed_problem(entry)
+    mapping = await db_session.scalar(
+        select(ProblemConcept)
+        .join(ProblemVersion, ProblemVersion.id == ProblemConcept.problem_version_id)
+        .join(Problem, Problem.id == ProblemVersion.problem_id)
+        .join(Concept, Concept.id == ProblemConcept.concept_id)
+        .where(
+            Problem.source_type == "CURATED",
+            Problem.slug == entry.problem.slug,
+            ProblemVersion.version == entry.problem.version,
+            Concept.canonical_key == entry.problem.problem_concepts[0].canonical_key,
+        )
+    )
     assert mapping is not None
     mapping.role = "OPTIONAL" if mapping.role != "OPTIONAL" else "PRIMARY"
     await db_session.flush()
 
     with pytest.raises(CuratedProblemError, match="immutable ProblemConcept mapping"):
-        await service.seed_problem(entries[0])
+        await service.seed_problem(entry)
 
 
 async def _row_counts(session: AsyncSession) -> tuple[int, ...]:
