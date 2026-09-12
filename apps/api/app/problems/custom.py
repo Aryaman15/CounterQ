@@ -50,6 +50,7 @@ from app.problems.custom_pack_validation import (
     validate_prepared_pack_artifacts,
 )
 from app.problems.custom_problem_assembly import (
+    CollectionComparator,
     CustomProblemAssemblyNeedsCorrection,
     build_custom_problem_content,
 )
@@ -71,8 +72,8 @@ logger = structlog.get_logger(__name__)
 
 MAX_CUSTOM_PROBLEM_CHARACTERS = 20_000
 CUSTOM_PREPARATION_POLICY_KEY = "stage9e_custom_problem_preparation"
-CUSTOM_PREPARATION_POLICY_VERSION = "v8"
-CUSTOM_QUALITY_GATE_VERSION = "stage9e.v8"
+CUSTOM_PREPARATION_POLICY_VERSION = "v9"
+CUSTOM_QUALITY_GATE_VERSION = "stage9e.v9"
 CUSTOM_REASONING_CALL_LIMIT = 3
 CUSTOM_PROCESSING_LEASE = timedelta(minutes=10)
 NORMALIZE_PURPOSE = "custom_problem_normalization"
@@ -91,6 +92,7 @@ TRUSTED_CUSTOM_PREPARATION_POLICY_GATES = frozenset(
         ("v5", "stage9e.v5"),
         ("v6", "stage9e.v6"),
         ("v7", "stage9e.v7"),
+        ("v8", "stage9e.v8"),
         (CUSTOM_PREPARATION_POLICY_VERSION, CUSTOM_QUALITY_GATE_VERSION),
     }
 )
@@ -105,7 +107,15 @@ language-specific types into the supported semantic types. In particular, C++ `v
 `int[]`, `vector<string>` maps to `string[]`, and `int` maps to `int`. Select only supplied active concepts.
 You may supply a concise title and bounded normalized statement or constraints only as fallbacks when
 software could not extract them. Do not author ProblemContent, schema/version/slug/catalog/review fields,
-execution, languages, starters, visible cases, examples, private cases, or comparator configuration.
+execution, languages, starters, visible cases, examples, or private cases. When and only when the output
+schema requests `collection_comparator`, select exactly `EXACT` or `UNORDERED_LIST` as a semantic ordering
+rule; this does not grant authority over the execution schema.
+
+For collection returns, use UNORDERED_LIST only when the candidate text explicitly permits arbitrary
+result order, such as "in any order", "return in any order", or "order does not matter". Use EXACT when
+ordering is significant or when the text does not explicitly permit arbitrary order. Never infer
+UNORDERED_LIST merely because the return type is an array. Scalar comparison is always software-owned
+EXACT, so scalar output schemas do not include `collection_comparator`.
 
 Return READY when the function behavior, argument names and semantic types, return type/behavior,
 expected outputs, at least one example, and constraints or equivalent semantics are sufficiently clear
@@ -119,7 +129,7 @@ outputs, missing constraints or equivalent semantics, materially ambiguous dupli
 supported function/method. Return REJECTED only when the content is not a coding problem or fundamentally
 requires an unsupported execution shape. Do not veto an otherwise complete normalized problem because
 the candidate omitted CounterQ's internal schema, language variants, title, pack, concepts, starter code,
-private cases, or comparator details.
+private cases, or internal comparator details.
 
 The input keeps candidate-authored `untrusted_problem_text` separate from trusted
 `software_source_evidence`. That evidence is authoritative only for the bounded syntactic facts it
@@ -246,6 +256,11 @@ class NormalizedProblemOutput(StrictReasoningOutputModel):
                 raise ValueError("READY normalization requires concept selections")
             if len(concept_keys) != len(set(concept_keys)):
                 raise ValueError("READY normalization concept selections must be unique")
+            if (
+                "collection_comparator" in type(self).model_fields
+                and self.__dict__.get("collection_comparator") is None
+            ):
+                raise ValueError("READY collection normalization requires an ordering semantic")
             return self
 
         if not codes:
@@ -255,6 +270,7 @@ class NormalizedProblemOutput(StrictReasoningOutputModel):
             or self.concept_selections
             or getattr(self, "normalized_statement", None) is not None
             or getattr(self, "normalized_constraints", None)
+            or getattr(self, "collection_comparator", None) is not None
         ):
             raise ValueError("Non-ready normalization cannot include semantic proposals")
         allowed_codes = (
@@ -278,6 +294,26 @@ class NormalizedProblemConstraintsFallbackOutput(NormalizedProblemOutput):
 class NormalizedProblemTextFallbackOutput(NormalizedProblemOutput):
     normalized_statement: str | None = Field(max_length=20_000)
     normalized_constraints: list[BoundedNormalizedConstraint] | None = Field(max_length=32)
+
+
+class NormalizedProblemCollectionOutput(NormalizedProblemOutput):
+    collection_comparator: Literal["EXACT", "UNORDERED_LIST"] | None
+
+
+class NormalizedProblemCollectionStatementFallbackOutput(
+    NormalizedProblemStatementFallbackOutput
+):
+    collection_comparator: Literal["EXACT", "UNORDERED_LIST"] | None
+
+
+class NormalizedProblemCollectionConstraintsFallbackOutput(
+    NormalizedProblemConstraintsFallbackOutput
+):
+    collection_comparator: Literal["EXACT", "UNORDERED_LIST"] | None
+
+
+class NormalizedProblemCollectionTextFallbackOutput(NormalizedProblemTextFallbackOutput):
+    collection_comparator: Literal["EXACT", "UNORDERED_LIST"] | None
 
 
 class PreparedPackOutput(StrictReasoningOutputModel):
@@ -516,6 +552,7 @@ class CustomProblemPreparationService:
                     title=normalized.title,
                     normalized_statement=_normalized_statement(normalized),
                     normalized_constraints=_normalized_constraints(normalized),
+                    collection_comparator=_normalized_collection_comparator(normalized),
                     problem_concepts=[
                         ProblemConceptDefinition.model_validate(
                             selection.model_dump(mode="json")
@@ -1040,6 +1077,18 @@ def _normalization_output_model(
 ) -> type[NormalizedProblemOutput]:
     statement_missing = source_evidence.statement is None
     constraints_missing = not source_evidence.constraints
+    collection_return = (
+        source_evidence.signature is not None
+        and source_evidence.signature.return_type.endswith("[]")
+    )
+    if collection_return:
+        if statement_missing and constraints_missing:
+            return NormalizedProblemCollectionTextFallbackOutput
+        if statement_missing:
+            return NormalizedProblemCollectionStatementFallbackOutput
+        if constraints_missing:
+            return NormalizedProblemCollectionConstraintsFallbackOutput
+        return NormalizedProblemCollectionOutput
     if statement_missing and constraints_missing:
         return NormalizedProblemTextFallbackOutput
     if statement_missing:
@@ -1065,6 +1114,13 @@ def _normalized_constraints(normalized: NormalizedProblemOutput) -> tuple[str, .
     ):
         return tuple(normalized.normalized_constraints or ())
     return ()
+
+
+def _normalized_collection_comparator(
+    normalized: NormalizedProblemOutput,
+) -> CollectionComparator | None:
+    value = getattr(normalized, "collection_comparator", None)
+    return cast(CollectionComparator, value) if value in {"EXACT", "UNORDERED_LIST"} else None
 
 
 def _normalization_input(

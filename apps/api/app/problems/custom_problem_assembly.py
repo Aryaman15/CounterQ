@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence, Set
+from typing import Literal, cast
 from uuid import UUID
 
 from app.problems.content import (
@@ -28,6 +29,11 @@ class CustomProblemAssemblyValidationError(ValueError):
     """A semantic normalization draft violated a trusted software constraint."""
 
 
+CollectionComparator = Literal["EXACT", "UNORDERED_LIST"]
+_SCALAR_RETURN_TYPES = frozenset({"int", "bool", "string"})
+_COLLECTION_RETURN_TYPES = frozenset({"int[]", "string[]", "int[][]", "string[][]"})
+
+
 def build_custom_problem_content(
     *,
     preparation_id: UUID,
@@ -35,6 +41,7 @@ def build_custom_problem_content(
     title: str | None,
     normalized_statement: str | None,
     normalized_constraints: Sequence[str],
+    collection_comparator: CollectionComparator | None,
     problem_concepts: Sequence[ProblemConceptDefinition],
     active_concept_keys: Set[str],
 ) -> ProblemContent:
@@ -75,7 +82,7 @@ def build_custom_problem_content(
             for argument in signature.arguments
         ],
         return_type=signature.return_type,
-        comparator="EXACT",
+        comparator=_validated_comparator(signature.return_type, collection_comparator),
         visible_cases=[
             VisibleCase(arguments=dict(example.arguments), expected_output=example.expected_output)
             for example in source_evidence.parsed_visible_cases
@@ -140,6 +147,21 @@ def execution_signature_conflicts_with_source(
 def _prepared_title(title: str | None, method_name: str) -> str:
     proposed = title.strip() if title is not None else ""
     return proposed or fallback_title_from_method(method_name)
+
+
+def _validated_comparator(
+    return_type: str,
+    collection_comparator: CollectionComparator | None,
+) -> CollectionComparator:
+    if return_type in _SCALAR_RETURN_TYPES:
+        return "EXACT"
+    if return_type not in _COLLECTION_RETURN_TYPES:
+        raise CustomProblemAssemblyValidationError("Return type does not support comparison")
+    if collection_comparator not in {"EXACT", "UNORDERED_LIST"}:
+        raise CustomProblemAssemblyValidationError(
+            "Collection return requires a bounded ordering semantic"
+        )
+    return cast(CollectionComparator, collection_comparator)
 
 
 def _bounded_fallback_statement(value: str | None) -> str | None:

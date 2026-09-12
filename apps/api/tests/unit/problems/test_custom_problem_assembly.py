@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from typing import cast
 from uuid import UUID
 
 import pytest
 
+from app.execution.harness import execution_request_for_problem
+from app.execution.provider import ExecutionRequest
 from app.problems.content import ProblemConceptDefinition, ProblemContent, load_curated_content
 from app.problems.custom_pack_validation import (
     PackArtifactValidationError,
@@ -11,6 +14,7 @@ from app.problems.custom_pack_validation import (
     validate_prepared_pack_artifacts,
 )
 from app.problems.custom_problem_assembly import (
+    CollectionComparator,
     CustomProblemAssemblyNeedsCorrection,
     CustomProblemAssemblyValidationError,
     build_custom_problem_content,
@@ -39,6 +43,42 @@ Example 2:
 Input: nums = [1, 1, 1], target = 2
 Output: 3
 """
+ORDERED_COLLECTION_SOURCE = """Return the values in their original order.
+
+Function signature:
+vector<int> solve(vector<int> nums)
+
+Constraints:
+1 <= nums.length <= 100
+
+Example:
+Input: nums = [3, 1, 2]
+Output: [3, 1, 2]
+"""
+UNORDERED_COLLECTION_SOURCE = """Return the duplicate values in any order.
+
+Function signature:
+vector<int> findDuplicates(vector<int> nums)
+
+Constraints:
+1 <= nums.length <= 100
+
+Example:
+Input: nums = [1, 2, 2, 3, 3]
+Output: [2, 3]
+"""
+UNORDERED_MATRIX_SOURCE = """Return the rows in any order while preserving values within each row.
+
+Function signature:
+vector<vector<int>> reorderRows(vector<vector<int>> grid)
+
+Constraints:
+1 <= grid.length <= 100
+
+Example:
+Input: grid = [[1, 2], [3, 4]]
+Output: [[3, 4], [1, 2]]
+"""
 
 
 def _concepts() -> list[ProblemConceptDefinition]:
@@ -54,8 +94,38 @@ def _problem(*, title: str | None = "Count Pairs") -> ProblemContent:
         title=title,
         normalized_statement=None,
         normalized_constraints=[],
+        collection_comparator=None,
         problem_concepts=concepts,
         active_concept_keys={item.canonical_key for item in concepts},
+    )
+
+
+def _collection_problem(
+    source: str,
+    comparator: CollectionComparator | None,
+) -> ProblemContent:
+    concepts = _concepts()
+    return build_custom_problem_content(
+        preparation_id=PREPARATION_ID,
+        source_evidence=derive_custom_problem_source_evidence(source),
+        title=None,
+        normalized_statement=None,
+        normalized_constraints=[],
+        collection_comparator=comparator,
+        problem_concepts=concepts,
+        active_concept_keys={item.canonical_key for item in concepts},
+    )
+
+
+def _execution_request(problem: ProblemContent) -> ExecutionRequest:
+    return execution_request_for_problem(
+        io_schema={"execution": problem.execution.model_dump(mode="json")},
+        language="python",
+        source_code=problem.languages["python"].starter_code,
+        compile_timeout_seconds=5,
+        run_timeout_seconds=5,
+        memory_limit_mb=256,
+        output_limit_bytes=65_536,
     )
 
 
@@ -106,6 +176,61 @@ def test_software_assembles_the_complete_strict_problem_from_source() -> None:
     assert all("Not implemented" in item.starter_code for item in problem.languages.values())
 
 
+def test_scalar_comparator_is_software_owned_exact() -> None:
+    concepts = _concepts()
+    problem = build_custom_problem_content(
+        preparation_id=PREPARATION_ID,
+        source_evidence=derive_custom_problem_source_evidence(SOURCE),
+        title=None,
+        normalized_statement=None,
+        normalized_constraints=[],
+        collection_comparator="UNORDERED_LIST",
+        problem_concepts=concepts,
+        active_concept_keys={item.canonical_key for item in concepts},
+    )
+
+    assert problem.execution.return_type == "int"
+    assert problem.execution.comparator == "EXACT"
+
+
+def test_ordered_collection_uses_exact_comparison() -> None:
+    problem = _collection_problem(ORDERED_COLLECTION_SOURCE, "EXACT")
+
+    assert problem.execution.return_type == "int[]"
+    assert problem.execution.comparator == "EXACT"
+    assert {case.comparator for case in _execution_request(problem).cases} == {"EXACT"}
+
+
+def test_unordered_collection_reaches_execution_request() -> None:
+    problem = _collection_problem(UNORDERED_COLLECTION_SOURCE, "UNORDERED_LIST")
+
+    assert problem.execution.return_type == "int[]"
+    assert problem.execution.comparator == "UNORDERED_LIST"
+    assert {case.comparator for case in _execution_request(problem).cases} == {
+        "UNORDERED_LIST"
+    }
+
+
+def test_unordered_matrix_uses_existing_outer_collection_contract() -> None:
+    problem = _collection_problem(UNORDERED_MATRIX_SOURCE, "UNORDERED_LIST")
+
+    assert problem.execution.return_type == "int[][]"
+    assert problem.execution.comparator == "UNORDERED_LIST"
+    assert {case.comparator for case in _execution_request(problem).cases} == {
+        "UNORDERED_LIST"
+    }
+
+
+def test_collection_comparator_is_required_and_rejects_arbitrary_values() -> None:
+    with pytest.raises(CustomProblemAssemblyValidationError):
+        _collection_problem(ORDERED_COLLECTION_SOURCE, None)
+    with pytest.raises(CustomProblemAssemblyValidationError):
+        _collection_problem(
+            UNORDERED_COLLECTION_SOURCE,
+            cast(CollectionComparator, "COUNT"),
+        )
+
+
 def test_title_falls_back_from_camel_case_method_name() -> None:
     assert fallback_title_from_method("countPairs") == "Count Pairs"
     assert _problem(title=None).title == "Count Pairs"
@@ -120,6 +245,7 @@ def test_source_text_wins_and_normalized_text_is_only_a_fallback() -> None:
         title="Count Pairs",
         normalized_statement="Model replacement statement.",
         normalized_constraints=["Model replacement constraint."],
+        collection_comparator=None,
         problem_concepts=concepts,
         active_concept_keys={item.canonical_key for item in concepts},
     )
@@ -141,6 +267,7 @@ Output: 7
         title=None,
         normalized_statement="Return the supplied integer.",
         normalized_constraints=["-100 <= value <= 100"],
+        collection_comparator=None,
         problem_concepts=concepts,
         active_concept_keys={item.canonical_key for item in concepts},
     )
@@ -161,6 +288,7 @@ def test_missing_source_and_fallback_content_produces_bounded_correction() -> No
             title=None,
             normalized_statement=None,
             normalized_constraints=[],
+            collection_comparator=None,
             problem_concepts=concepts,
             active_concept_keys={item.canonical_key for item in concepts},
         )
@@ -177,6 +305,7 @@ def test_concept_selection_must_be_unique_and_ontology_verified() -> None:
             title=None,
             normalized_statement=None,
             normalized_constraints=[],
+            collection_comparator=None,
             problem_concepts=[concepts[0], concepts[0]],
             active_concept_keys={item.canonical_key for item in concepts},
         )
@@ -188,6 +317,7 @@ def test_concept_selection_must_be_unique_and_ontology_verified() -> None:
             title=None,
             normalized_statement=None,
             normalized_constraints=[],
+            collection_comparator=None,
             problem_concepts=[invented],
             active_concept_keys={item.canonical_key for item in concepts},
         )

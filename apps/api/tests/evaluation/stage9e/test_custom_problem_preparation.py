@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -317,6 +318,25 @@ def _count_pairs_outputs() -> list[dict[str, Any]]:
     ]
 
 
+def _collection_outputs(
+    *,
+    comparator: Literal["EXACT", "UNORDERED_LIST"],
+    argument_name: str,
+    argument_value: object,
+    expected_output: object,
+) -> list[dict[str, Any]]:
+    outputs = deepcopy(_count_pairs_outputs())
+    outputs[0]["title"] = "Collection Result"
+    outputs[0]["collection_comparator"] = comparator
+    outputs[1]["private_cases"] = [
+        {
+            "arguments": [{"name": argument_name, "value": argument_value}],
+            "expected_output": expected_output,
+        }
+    ]
+    return outputs
+
+
 def _invalid_count_pairs_normalization() -> dict[str, Any]:
     output = deepcopy(_count_pairs_outputs()[0])
     output["concept_selections"][0]["canonical_key"] = "model_invented_concept"
@@ -510,8 +530,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v8"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v8"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v9"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v9"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -656,6 +676,148 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         assert pack.interview_session_id is None
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    (
+        "problem_text",
+        "comparator",
+        "argument_name",
+        "argument_value",
+        "expected_output",
+        "return_type",
+    ),
+    [
+        (
+            """Return the values in their original order.
+
+Function signature:
+vector<int> solve(vector<int> nums)
+
+Constraints:
+1 <= nums.length <= 100
+
+Example:
+Input: nums = [3, 1, 2]
+Output: [3, 1, 2]
+""",
+            "EXACT",
+            "nums",
+            [4, 2],
+            [4, 2],
+            "int[]",
+        ),
+        (
+            """Return the duplicate values in any order.
+
+Function signature:
+vector<int> findDuplicates(vector<int> nums)
+
+Constraints:
+1 <= nums.length <= 100
+
+Example:
+Input: nums = [1, 2, 2, 3, 3]
+Output: [2, 3]
+""",
+            "UNORDERED_LIST",
+            "nums",
+            [4, 4, 5, 5],
+            [4, 5],
+            "int[]",
+        ),
+        (
+            """Return the rows in any order while preserving values within each row.
+
+Function signature:
+vector<vector<int>> reorderRows(vector<vector<int>> grid)
+
+Constraints:
+1 <= grid.length <= 100
+
+Example:
+Input: grid = [[1, 2], [3, 4]]
+Output: [[3, 4], [1, 2]]
+""",
+            "UNORDERED_LIST",
+            "grid",
+            [[5, 6], [7, 8]],
+            [[7, 8], [5, 6]],
+            "int[][]",
+        ),
+    ],
+)
+async def test_collection_ordering_semantic_is_bounded_and_reaches_execution(
+    problem_text: str,
+    comparator: Literal["EXACT", "UNORDERED_LIST"],
+    argument_name: str,
+    argument_value: object,
+    expected_output: object,
+    return_type: str,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    provider = SequenceReasoningProvider(
+        _collection_outputs(
+            comparator=comparator,
+            argument_name=argument_name,
+            argument_value=argument_value,
+            expected_output=expected_output,
+        )
+    )
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=problem_text,
+            idempotency_key=f"stage9e-collection-{return_type}-{comparator}",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
+        assert ready.problem_version is not None
+        assert len(provider.requests) == 2
+        normalization_schema = provider.requests[0].output_json_schema
+        assert "collection_comparator" in normalization_schema["properties"]
+        assert "collection_comparator" in normalization_schema["required"]
+        execution = cast(dict[str, Any], ready.problem_version.io_schema_json["execution"])
+        assert execution["return_type"] == return_type
+        assert execution["comparator"] == comparator
+        assert all(
+            {case.comparator for case in request.cases} == {comparator}
+            for request in executor.requests
+        )
+
+        languages = cast(dict[str, Any], ready.problem_version.io_schema_json["languages"])
+        python = cast(dict[str, Any], languages["python"])
+        candidate_request = execution_request_for_problem(
+            io_schema=ready.problem_version.io_schema_json,
+            language="python",
+            source_code=cast(str, python["starter_code"]),
+            compile_timeout_seconds=5,
+            run_timeout_seconds=5,
+            memory_limit_mb=256,
+            output_limit_bytes=65_536,
+        )
+        assert {case.comparator for case in candidate_request.cases} == {comparator}
+    finally:
+        await engine.dispose()
+
+
+def test_normalization_contract_rejects_arbitrary_or_misplaced_comparators() -> None:
+    ready_output = _count_pairs_outputs()[0]
+    with pytest.raises(ValidationError):
+        NormalizedProblemOutput.model_validate(
+            {**ready_output, "collection_comparator": "UNORDERED_LIST"}
+        )
+    with pytest.raises(ValidationError):
+        custom_module.NormalizedProblemCollectionOutput.model_validate(
+            {**ready_output, "collection_comparator": "COUNT"}
+        )
+    with pytest.raises(ValidationError):
+        custom_module.NormalizedProblemCollectionOutput.model_validate(ready_output)
 
 
 async def test_count_pairs_false_missing_return_finding_recovers_to_ready() -> None:
@@ -1360,7 +1522,7 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
         await engine.dispose()
 
 
-async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
+async def test_outdated_v8_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
     user_id = await _candidate()
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -1371,13 +1533,13 @@ async def test_outdated_failed_preparation_is_unchanged_and_returns_safe_conflic
         created = await service.create(
             user_id=user_id,
             problem_text=COUNT_PAIRS_PROBLEM,
-            idempotency_key="stage9e-outdated-failed-v7",
+            idempotency_key="stage9e-outdated-failed-v8",
         )
         async with maker() as session, session.begin():
             preparation = await session.get(CustomProblemPreparation, created.preparation.id)
             assert preparation is not None
-            preparation.preparation_policy_version = "v7"
-            preparation.quality_gate_version = "stage9e.v7"
+            preparation.preparation_policy_version = "v8"
+            preparation.quality_gate_version = "stage9e.v8"
             preparation.operational_status = "FAILED"
             preparation.failure_category = "TIMEOUT"
             preparation.attempt_count = 2
@@ -1552,6 +1714,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         ("v5", "stage9e.v5"),
         ("v6", "stage9e.v6"),
         ("v7", "stage9e.v7"),
+        ("v8", "stage9e.v8"),
     ],
 )
 async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(
