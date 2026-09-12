@@ -383,7 +383,6 @@ def _semantic_pack_output(
             approach(item) for item in pack["alternative_approaches"]
         ],
         "primary_reference_solutions": primary_references,
-        "concepts": pack["concepts"],
         "invariants": [technical(item) for item in pack["invariants"]],
         "complexity_expectations": [
             technical(item) for item in pack["complexity_expectations"]
@@ -654,8 +653,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v10"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v10"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v11"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v11"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -752,6 +751,16 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         assert normalization_request.metadata["normalization_attempt"] == "initial"
         assert "C++ `vector<int>` maps to" in normalization_request.instructions
         assert "`int[]`" in normalization_request.instructions
+        pack_request = provider.requests[1]
+        pack_input = json.loads(pack_request.input_content)
+        expected_problem_concepts = [
+            selection["canonical_key"]
+            for selection in _count_pairs_outputs()[0]["concept_selections"]
+        ]
+        assert pack_input["problem_concept_allowlist"] == expected_problem_concepts
+        assert "active_concept_allowlist" not in pack_input
+        assert "problem_concept_allowlist" in pack_request.instructions
+        assert "Do not author a top-level concepts field" in pack_request.instructions
         normalization_properties = normalization_request.output_json_schema["properties"]
         assert set(normalization_properties) == {
             "recommendation",
@@ -763,16 +772,20 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         assert "private_cases_json" not in normalization_request.output_json_schema
         pack_schema = provider.requests[1].output_json_schema
         assert "pack_json" not in pack_schema["properties"]
+        assert "concepts" not in pack_schema["properties"]
         assert {
             "expected_approaches",
             "alternative_approaches",
             "primary_reference_solutions",
-            "concepts",
             "invariants",
             "counterexamples",
             "common_followups",
             "private_cases",
         }.issubset(pack_schema["properties"])
+        assert "concept_keys" in json.dumps(pack_schema, sort_keys=True)
+        assert "approach_id" not in pack_schema["properties"]
+        assert "counterexample_id" not in pack_schema["properties"]
+        assert "schema_version" not in pack_schema["properties"]
         validate_strict_reasoning_schema(pack_schema)
         assert normalization_request.policy.version == CUSTOM_PREPARATION_POLICY_VERSION
         assert normalization_request.policy.configuration == {
@@ -1253,6 +1266,129 @@ async def test_invalid_pack_private_case_fails_without_another_strong_call(
         await engine.dispose()
 
 
+async def test_pack_concept_closure_is_derived_from_nested_references_in_problem_order() -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    normalization, pack = _count_pairs_outputs()
+    problem_concepts = [
+        selection["canonical_key"] for selection in normalization["concept_selections"]
+    ]
+    first, second = problem_concepts[:2]
+    for approach in [*pack["expected_approaches"], *pack["alternative_approaches"]]:
+        approach["concept_keys"] = [first]
+    pack["expected_approaches"][0]["concept_keys"] = [second, first]
+    for collection_name in (
+        "invariants",
+        "complexity_expectations",
+        "common_misconceptions",
+        "failure_modes",
+        "edge_cases",
+        "constraint_mutations",
+        "probe_opportunities",
+    ):
+        for item in pack[collection_name]:
+            item["concept_keys"] = [first]
+    for followup in pack["common_followups"]:
+        followup["target_concepts"] = [first]
+
+    assert "concepts" not in pack
+    provider = SequenceReasoningProvider([normalization, pack])
+    executor = PassingExecutor()
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key="stage9e-software-concept-closure",
+        )
+        ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert ready.preparation.quality_outcome == "READY"
+        assert len(provider.requests) == 2
+        assert [request.purpose for request in provider.requests] == [
+            "custom_problem_normalization",
+            "custom_problem_pack_preparation",
+        ]
+        assert [request.language for request in executor.requests] == [
+            "cpp",
+            "python",
+            "java",
+        ]
+        assert ready.preparation.prepared_pack_version_id is not None
+        async with maker() as session:
+            stored_pack = await session.get(
+                InterviewPackVersion,
+                ready.preparation.prepared_pack_version_id,
+            )
+        assert stored_pack is not None
+        assert stored_pack.pack_json["concepts"] == [first, second]
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.parametrize("invalid_kind", ["active_but_unmapped", "invented"])
+async def test_invalid_nested_pack_concept_fails_at_specific_path_without_persistence(
+    invalid_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    normalization, pack = _count_pairs_outputs()
+    mapped = {
+        selection["canonical_key"] for selection in normalization["concept_selections"]
+    }
+    invalid_key = (
+        next(
+            concept.canonical_key
+            for concept in load_ontology().concepts
+            if concept.status == "ACTIVE" and concept.canonical_key not in mapped
+        )
+        if invalid_kind == "active_but_unmapped"
+        else "model_invented_concept"
+    )
+    pack["invariants"][0]["concept_keys"] = [invalid_key]
+    provider = SequenceReasoningProvider([normalization, pack])
+    executor = PassingExecutor()
+    captured_logs = CapturingLogger()
+    monkeypatch.setattr(custom_module, "logger", captured_logs)
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"stage9e-invalid-nested-concept-{invalid_kind}",
+        )
+        failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "PACK_ARTIFACT_INVALID"
+        assert failed.preparation.prepared_problem_version_id is None
+        assert failed.preparation.prepared_pack_version_id is None
+        assert custom_preparation_retryable(failed.preparation)
+        assert len(provider.requests) == 2
+        assert executor.requests == []
+        artifact_logs = [
+            fields
+            for event, fields in captured_logs.events
+            if event == "custom_problem_pack_artifact_invalid"
+        ]
+        assert len(artifact_logs) == 1
+        assert artifact_logs[0]["issue_codes"] == ["PACK_CONCEPT_INVALID"]
+        assert artifact_logs[0]["field_paths"] == [
+            "pack.invariants[0].concept_keys"
+        ]
+        async with maker() as session:
+            owned_problem_count = await session.scalar(
+                select(func.count()).select_from(Problem).where(Problem.owner_user_id == user_id)
+            )
+        assert owned_problem_count == 0
+    finally:
+        await engine.dispose()
+
+
 @pytest.mark.parametrize(
     ("reference_kind", "expected_path"),
     [
@@ -1719,7 +1855,7 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
         await engine.dispose()
 
 
-async def test_outdated_v9_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
+async def test_outdated_v10_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
     user_id = await _candidate()
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -1730,13 +1866,13 @@ async def test_outdated_v9_failed_preparation_is_unchanged_and_returns_safe_conf
         created = await service.create(
             user_id=user_id,
             problem_text=COUNT_PAIRS_PROBLEM,
-            idempotency_key="stage9e-outdated-failed-v9",
+            idempotency_key="stage9e-outdated-failed-v10",
         )
         async with maker() as session, session.begin():
             preparation = await session.get(CustomProblemPreparation, created.preparation.id)
             assert preparation is not None
-            preparation.preparation_policy_version = "v9"
-            preparation.quality_gate_version = "stage9e.v9"
+            preparation.preparation_policy_version = "v10"
+            preparation.quality_gate_version = "stage9e.v10"
             preparation.operational_status = "FAILED"
             preparation.failure_category = "TIMEOUT"
             preparation.attempt_count = 2
@@ -1913,6 +2049,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         ("v7", "stage9e.v7"),
         ("v8", "stage9e.v8"),
         ("v9", "stage9e.v9"),
+        ("v10", "stage9e.v10"),
     ],
 )
 async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(

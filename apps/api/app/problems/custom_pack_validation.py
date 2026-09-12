@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence, Set
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Literal
 
@@ -149,7 +149,6 @@ class PreparedInterviewPackDraft(StrictReasoningOutputModel):
     expected_approaches: list[PreparedApproachDraft] = Field(min_length=1, max_length=4)
     alternative_approaches: list[PreparedApproachDraft] = Field(max_length=4)
     primary_reference_solutions: PreparedPrimaryReferenceSolutions
-    concepts: list[BoundedConceptKey] = Field(min_length=1, max_length=8)
     invariants: list[PreparedTechnicalItemDraft] = Field(max_length=16)
     complexity_expectations: list[PreparedTechnicalItemDraft] = Field(max_length=16)
     common_misconceptions: list[PreparedTechnicalItemDraft] = Field(max_length=16)
@@ -200,13 +199,14 @@ def validate_prepared_pack_artifacts(
     semantic_pack: PreparedInterviewPackDraft,
     private_cases: Sequence[PreparedPrivateCase],
     problem: ProblemContent,
-    active_concept_keys: Set[str],
 ) -> tuple[InterviewPackContent, list[VisibleCase]]:
     """Validate the model output without logging or exposing its raw contents."""
 
     pack = build_custom_interview_pack(
         semantic_pack=semantic_pack,
-        active_concept_keys=active_concept_keys,
+        problem_concept_keys=tuple(
+            mapping.canonical_key for mapping in problem.problem_concepts
+        ),
     )
     try:
         CuratedContent(problem=problem, interview_pack=pack)
@@ -257,14 +257,11 @@ def validate_prepared_pack_artifacts(
 def build_custom_interview_pack(
     *,
     semantic_pack: PreparedInterviewPackDraft,
-    active_concept_keys: Set[str],
+    problem_concept_keys: Sequence[str],
 ) -> InterviewPackContent:
     """Assign storage mechanics and validate the final immutable pack in software."""
 
-    if not set(semantic_pack.concepts).issubset(active_concept_keys):
-        raise PackArtifactValidationError(
-            [PackArtifactIssue("PACK_CONCEPT_INVALID", "pack.concepts")]
-        )
+    concepts = _validated_concept_closure(semantic_pack, problem_concept_keys)
 
     expected_ids = [
         f"expected_approach_{index}"
@@ -303,7 +300,7 @@ def build_custom_interview_pack(
             semantic_pack.primary_reference_solutions,
             expected_ids[0],
         ),
-        "concepts": semantic_pack.concepts,
+        "concepts": concepts,
         "invariants": _technical_payloads(
             semantic_pack.invariants,
             namespace="invariant",
@@ -387,6 +384,62 @@ def build_custom_interview_pack(
         raise PackArtifactValidationError(
             [PackArtifactIssue("PACK_SCHEMA_INVALID", _validation_field("pack", exc))]
         ) from exc
+
+
+def _validated_concept_closure(
+    semantic_pack: PreparedInterviewPackDraft,
+    problem_concept_keys: Sequence[str],
+) -> list[str]:
+    """Validate nested references and derive closure in ProblemConcept order."""
+
+    allowed = set(problem_concept_keys)
+    referenced: set[str] = set()
+    issues: list[PackArtifactIssue] = []
+    for path, concept_keys in _nested_concept_references(semantic_pack):
+        referenced.update(concept_keys)
+        if any(concept_key not in allowed for concept_key in concept_keys):
+            issues.append(PackArtifactIssue("PACK_CONCEPT_INVALID", path))
+    if issues:
+        raise PackArtifactValidationError(issues)
+    return [concept_key for concept_key in problem_concept_keys if concept_key in referenced]
+
+
+def _nested_concept_references(
+    semantic_pack: PreparedInterviewPackDraft,
+) -> list[tuple[str, Sequence[str]]]:
+    references: list[tuple[str, Sequence[str]]] = []
+    for approach_collection_name, approaches in (
+        ("expected_approaches", semantic_pack.expected_approaches),
+        ("alternative_approaches", semantic_pack.alternative_approaches),
+    ):
+        references.extend(
+            (
+                f"pack.{approach_collection_name}[{index}].concept_keys",
+                approach.concept_keys,
+            )
+            for index, approach in enumerate(approaches)
+        )
+    for technical_collection_name, technical_items in (
+        ("invariants", semantic_pack.invariants),
+        ("complexity_expectations", semantic_pack.complexity_expectations),
+        ("common_misconceptions", semantic_pack.common_misconceptions),
+        ("failure_modes", semantic_pack.failure_modes),
+        ("edge_cases", semantic_pack.edge_cases),
+        ("constraint_mutations", semantic_pack.constraint_mutations),
+        ("probe_opportunities", semantic_pack.probe_opportunities),
+    ):
+        references.extend(
+            (
+                f"pack.{technical_collection_name}[{index}].concept_keys",
+                item.concept_keys,
+            )
+            for index, item in enumerate(technical_items)
+        )
+    references.extend(
+        (f"pack.common_followups[{index}].target_concepts", item.target_concepts)
+        for index, item in enumerate(semantic_pack.common_followups)
+    )
+    return references
 
 
 def _approach_payload(item: PreparedApproachDraft, approach_id: str) -> dict[str, object]:

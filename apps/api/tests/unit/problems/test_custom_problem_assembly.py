@@ -400,7 +400,6 @@ def _pack_output() -> PreparedPackOutput:
                 "python": {"source_code": "class Solution: pass", "implementation_notes": None},
                 "java": {"source_code": "class Solution {}", "implementation_notes": None},
             },
-            "concepts": [concept_key],
             "invariants": [duplicate_invariant, duplicate_invariant],
             "complexity_expectations": [
                 _technical(
@@ -476,12 +475,12 @@ def test_software_assembles_deterministic_pack_ids_and_references() -> None:
         semantic_pack=output,
         private_cases=output.private_cases,
         problem=problem,
-        active_concept_keys={item.canonical_key for item in problem.problem_concepts},
     )
 
     assert pack.schema_version == "interview-pack.v1"
     assert pack.version == "v1"
     assert pack.review_status == "REVIEWED"
+    assert pack.concepts == [_concepts()[0].canonical_key]
     assert [item.approach_id for item in pack.expected_approaches] == [
         "expected_approach_1",
         "expected_approach_2",
@@ -527,6 +526,8 @@ def test_pack_output_is_a_provider_strict_semantic_schema_without_storage_ids() 
     assert "expected_approaches" in schema["properties"]
     assert "primary_reference_solutions" in schema["properties"]
     assert "private_cases" in schema["properties"]
+    assert "concepts" not in schema["properties"]
+    assert "'concept_keys'" in serialized
     assert "'approach_id'" not in serialized
     assert "'counterexample_id'" not in serialized
     assert "'target_approach_id'" not in serialized
@@ -568,8 +569,7 @@ def test_pack_semantic_enums_are_rejected_by_the_typed_output_boundary(
     [
         ("invalid_approach_index", "PACK_SCHEMA_INVALID"),
         ("invalid_counterexample_index", "PACK_SCHEMA_INVALID"),
-        ("bad_nested_concept", "PACK_SCHEMA_INVALID"),
-        ("bad_concept", "PACK_CONCEPT_INVALID"),
+        ("bad_nested_concept", "PACK_CONCEPT_INVALID"),
         ("argument_mismatch", "PRIVATE_CASE_ARGUMENT_MISMATCH"),
         ("argument_type", "PRIVATE_CASE_VALUE_TYPE_INVALID"),
         ("output_type", "PRIVATE_CASE_EXPECTED_OUTPUT_TYPE_INVALID"),
@@ -581,7 +581,6 @@ def test_pack_and_private_failures_have_bounded_diagnostics(
     problem = _problem()
     output = _pack_output().model_copy(deep=True)
     private = _private_case()
-    active = {item.canonical_key for item in problem.problem_concepts}
     if mutation == "invalid_approach_index":
         output.invariants[0].approach_reference = PreparedApproachReference(
             approach_kind="EXPECTED",
@@ -591,8 +590,6 @@ def test_pack_and_private_failures_have_bounded_diagnostics(
         output.edge_cases[0].counterexample_index = 1
     elif mutation == "bad_nested_concept":
         output.expected_approaches[0].concept_keys = ["not_in_pack"]
-    elif mutation == "bad_concept":
-        active = set()
     elif mutation == "argument_mismatch":
         private = _private_case(
             [
@@ -615,9 +612,12 @@ def test_pack_and_private_failures_have_bounded_diagnostics(
             semantic_pack=output,
             private_cases=[private],
             problem=problem,
-            active_concept_keys=active,
         )
 
     assert expected_code in {issue.code for issue in caught.value.issues}
+    if mutation == "bad_nested_concept":
+        assert caught.value.issues[0].field == (
+            "pack.expected_approaches[0].concept_keys"
+        )
     assert 1 <= len(caught.value.issues) <= 8
     assert all(issue.field for issue in caught.value.issues)

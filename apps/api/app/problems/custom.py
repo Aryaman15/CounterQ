@@ -72,8 +72,8 @@ logger = structlog.get_logger(__name__)
 
 MAX_CUSTOM_PROBLEM_CHARACTERS = 20_000
 CUSTOM_PREPARATION_POLICY_KEY = "stage9e_custom_problem_preparation"
-CUSTOM_PREPARATION_POLICY_VERSION = "v10"
-CUSTOM_QUALITY_GATE_VERSION = "stage9e.v10"
+CUSTOM_PREPARATION_POLICY_VERSION = "v11"
+CUSTOM_QUALITY_GATE_VERSION = "stage9e.v11"
 CUSTOM_REASONING_CALL_LIMIT = 3
 CUSTOM_PROCESSING_LEASE = timedelta(minutes=10)
 NORMALIZE_PURPOSE = "custom_problem_normalization"
@@ -94,6 +94,7 @@ TRUSTED_CUSTOM_PREPARATION_POLICY_GATES = frozenset(
         ("v7", "stage9e.v7"),
         ("v8", "stage9e.v8"),
         ("v9", "stage9e.v9"),
+        ("v10", "stage9e.v10"),
         (CUSTOM_PREPARATION_POLICY_VERSION, CUSTOM_QUALITY_GATE_VERSION),
     }
 )
@@ -160,7 +161,7 @@ assigns all storage IDs and constructs the final InterviewPackContent.
 
 The first expected approach is the primary approach. Supply exactly one implementation for each fixed
 cpp, python and java field in primary_reference_solutions; each must implement the configured
-function/method and be executable by the existing harness. Use only supplied active concept keys and only
+function/method and be executable by the existing harness. Use only supplied problem concept keys and only
 the ProbeStrategy, level and stage enum values permitted by the schema. Where an item refers to an
 approach, use approach_kind plus a zero-based approach_index into the matching expected or alternative
 list. Where an item refers to a counterexample, use a zero-based counterexample_index. Use null when there
@@ -169,6 +170,11 @@ is no semantic reference. Counterexample input is a bounded human-readable input
 All semantic list fields are required; use an empty list when no items apply. Every non-null index must
 resolve to an item returned in the same output. CounterQ rejects out-of-range references rather than
 guessing.
+
+The problem_concept_allowlist is the exact concept set mapped to this normalized problem. Use only those
+keys in every nested concept_keys and target_concepts field. Do not author a top-level concepts field;
+CounterQ software validates all nested references and derives the final InterviewPackContent concept
+closure in the stable order of the normalized problem's ProblemConcept mappings.
 
 Also return at least one private validation case through the typed private_cases field. Every private case
 must use the exact configured argument names and semantic value types and the exact configured return type.
@@ -593,7 +599,7 @@ class CustomProblemPreparationService:
                     configuration={"quality_gate": CUSTOM_QUALITY_GATE_VERSION},
                 ),
                 instructions=PACK_INSTRUCTIONS,
-                input_content=_pack_input(problem, active_concepts),
+                input_content=_pack_input(problem),
                 output_model=PreparedPackOutput,
                 timeout_seconds=self._reasoning_timeout_seconds,
                 reasoning_effort_override=CUSTOM_PACK_REASONING_EFFORT,
@@ -610,7 +616,6 @@ class CustomProblemPreparationService:
                     semantic_pack=pack_result.parsed,
                     private_cases=pack_result.parsed.private_cases,
                     problem=problem,
-                    active_concept_keys=active_concepts.keys(),
                 )
             except PackArtifactValidationError as exc:
                 _log_pack_artifact_invalid(
@@ -1162,11 +1167,13 @@ def _normalization_input(
     )
 
 
-def _pack_input(problem: ProblemContent, concepts: dict[str, Concept]) -> str:
+def _pack_input(problem: ProblemContent) -> str:
     return json.dumps(
         {
             "normalized_problem": problem.model_dump(mode="json"),
-            "active_concept_allowlist": list(concepts),
+            "problem_concept_allowlist": [
+                mapping.canonical_key for mapping in problem.problem_concepts
+            ],
         },
         ensure_ascii=False,
         sort_keys=True,
