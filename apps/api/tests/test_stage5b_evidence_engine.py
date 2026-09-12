@@ -69,6 +69,7 @@ from app.interviews.models import (
 from app.interviews.runtime import AcceptEventCommand, InterviewRuntime
 from app.main import create_app
 from app.observation.models import InterviewEvent
+from app.outbox.models import OutboxEvent
 from app.problems.models import Concept, ProblemConcept
 from app.realtime.control_protocol import (
     CandidateCodeSnapshotMessage,
@@ -391,6 +392,21 @@ async def _attach_problem_concept(
     return concept
 
 
+async def _defer_test_finalization_dispatch(
+    session: AsyncSession, interview_session_id: UUID
+) -> None:
+    finalization = await session.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.interview_session_id == interview_session_id,
+            OutboxEvent.event_type == "FINALIZE_SESSION_EVIDENCE",
+        )
+    )
+    assert finalization is not None
+    # These tests invoke the coordinator directly. Keep an independently running
+    # local worker from racing that deterministic test-owned evaluation.
+    finalization.available_at = datetime.now(UTC) + timedelta(hours=1)
+
+
 async def _create_committed_response_session(
     sessions: async_sessionmaker[AsyncSession],
     *,
@@ -432,6 +448,7 @@ async def _create_committed_response_session(
             expected_state_version=dev.interview_session.state_version,
             idempotency_key=f"stage5-admission-complete:{dev.interview_session.id}",
         )
+        await _defer_test_finalization_dispatch(session, dev.interview_session.id)
         return dev.interview_session.id, dev.user.id, concept_key, concept.id
 
 
@@ -534,6 +551,7 @@ async def _create_committed_recovery_session(
             expected_state_version=dev.interview_session.state_version,
             idempotency_key=f"recovery-complete:{dev.interview_session.id}",
         )
+        await _defer_test_finalization_dispatch(session, dev.interview_session.id)
         return (
             dev.interview_session.id,
             dev.interview_session.user_id,
@@ -569,6 +587,7 @@ async def _create_committed_direct_code_session(
             expected_state_version=dev.interview_session.state_version,
             idempotency_key=f"direct-complete:{dev.interview_session.id}",
         )
+        await _defer_test_finalization_dispatch(session, dev.interview_session.id)
         return dev.interview_session.id, dev.user.id, concept_key, concept.id
 
 
@@ -2086,6 +2105,7 @@ async def test_two_live_calls_leave_capacity_for_seven_post_interview_units(
                 expected_state_version=dev.interview_session.state_version,
                 idempotency_key=f"browser-shape-complete:{dev.interview_session.id}",
             )
+            await _defer_test_finalization_dispatch(session, dev.interview_session.id)
             session_id = dev.interview_session.id
 
         provider = FakeReasoningProvider(output_data={"findings": []})
@@ -2337,6 +2357,7 @@ async def test_completed_simulation_e2e_is_idempotent_and_reconstructable(
                 expected_state_version=interview.state_version,
                 idempotency_key="stage5-e2e-complete",
             )
+            await _defer_test_finalization_dispatch(session, interview.id)
             session_id = interview.id
             user_id = dev.user.id
             concept_id = concept.id
@@ -2452,6 +2473,7 @@ async def test_completed_simulation_e2e_is_idempotent_and_reconstructable(
                 expected_state_version=later.interview_session.state_version,
                 idempotency_key="stage5-later-contradiction-complete",
             )
+            await _defer_test_finalization_dispatch(session, later.interview_session.id)
             later_session_id = later.interview_session.id
         positive_output = _analysis_output(concept_key=concept_key, polarity="POSITIVE")
         positive_finding = cast(list[dict[str, Any]], positive_output["findings"])[0]
