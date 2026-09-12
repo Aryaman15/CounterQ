@@ -34,6 +34,7 @@ from app.ai_gateway.provider import (
     ReasoningRequest,
     ReasoningUsage,
 )
+from app.ai_gateway.structured_output import validate_strict_reasoning_schema
 from app.auth.models import User
 from app.auth.principal import CurrentUser
 from app.auth.repository import CandidateProfileRepository, UserRepository
@@ -294,6 +295,19 @@ def _count_pairs_outputs() -> list[dict[str, Any]]:
     }
     for reference in pack["reference_solutions"]:
         reference["source_code"] = reference_sources[reference["language"]]
+    semantic_pack = _semantic_pack_output(
+        pack,
+        private_cases=[
+            {
+                "arguments": [
+                    {"name": "nums", "value": [1, 1, 1, 1]},
+                    {"name": "target", "value": 2},
+                ],
+                "expected_output": 6,
+            }
+        ],
+    )
+    semantic_pack["expected_approaches"][0]["summary"] = "Hash Map Frequency"
     return [
         {
             "recommendation": "READY",
@@ -303,19 +317,129 @@ def _count_pairs_outputs() -> list[dict[str, Any]]:
                 mapping.model_dump(mode="json") for mapping in entry.problem.problem_concepts
             ],
         },
-        {
-            "pack_json": json.dumps(pack),
-            "private_cases": [
-                {
-                    "arguments": [
-                        {"name": "nums", "value": [1, 1, 1, 1]},
-                        {"name": "target", "value": 2},
-                    ],
-                    "expected_output": 6,
-                }
-            ],
-        },
+        semantic_pack,
     ]
+
+
+def _semantic_pack_output(
+    pack: dict[str, Any],
+    *,
+    private_cases: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected_references = {
+        item["approach_id"]: {
+            "approach_kind": "EXPECTED",
+            "approach_index": index,
+        }
+        for index, item in enumerate(pack["expected_approaches"])
+    }
+    alternative_references = {
+        item["approach_id"]: {
+            "approach_kind": "ALTERNATIVE",
+            "approach_index": index,
+        }
+        for index, item in enumerate(pack["alternative_approaches"])
+    }
+    approach_references = {**expected_references, **alternative_references}
+    counterexample_indexes = {
+        item["id"]: index for index, item in enumerate(pack["counterexamples"])
+    }
+
+    def approach(item: dict[str, Any]) -> dict[str, Any]:
+        return {key: value for key, value in item.items() if key != "approach_id"}
+
+    def technical(item: dict[str, Any]) -> dict[str, Any]:
+        result = {
+            "concept_keys": item["concept_keys"],
+            "diagnostic_goal": item["diagnostic_goal"],
+            "counterexample_index": (
+                counterexample_indexes[item["counterexample_id"]]
+                if item["counterexample_id"] is not None
+                else None
+            ),
+            "approach_reference": (
+                approach_references[item["approach_id"]]
+                if item["approach_id"] is not None
+                else None
+            ),
+        }
+        if "relevant_strategies" in item:
+            result["relevant_strategies"] = item["relevant_strategies"]
+        return result
+
+    primary_approach_id = pack["expected_approaches"][0]["approach_id"]
+    primary_references = {
+        item["language"]: {
+            "source_code": item["source_code"],
+            "implementation_notes": item["implementation_notes"],
+        }
+        for item in pack["reference_solutions"]
+        if item["approach_id"] == primary_approach_id
+    }
+    assert set(primary_references) == {"cpp", "python", "java"}
+    return {
+        "expected_approaches": [approach(item) for item in pack["expected_approaches"]],
+        "alternative_approaches": [
+            approach(item) for item in pack["alternative_approaches"]
+        ],
+        "primary_reference_solutions": primary_references,
+        "concepts": pack["concepts"],
+        "invariants": [technical(item) for item in pack["invariants"]],
+        "complexity_expectations": [
+            technical(item) for item in pack["complexity_expectations"]
+        ],
+        "common_misconceptions": [
+            technical(item) for item in pack["common_misconceptions"]
+        ],
+        "failure_modes": [technical(item) for item in pack["failure_modes"]],
+        "edge_cases": [technical(item) for item in pack["edge_cases"]],
+        "counterexamples": [
+            {
+                "input": (
+                    item["input"]
+                    if isinstance(item["input"], str)
+                    else json.dumps(item["input"], sort_keys=True)
+                ),
+                "purpose": item["purpose"],
+            }
+            for item in pack["counterexamples"]
+        ],
+        "constraint_mutations": [
+            technical(item) for item in pack["constraint_mutations"]
+        ],
+        "probe_opportunities": [
+            technical(item) for item in pack["probe_opportunities"]
+        ],
+        "common_followups": [
+            {
+                "target_concepts": item["target_concepts"],
+                "approach_reference": (
+                    approach_references[item["target_approach_id"]]
+                    if item["target_approach_id"] is not None
+                    else None
+                ),
+                "trigger_cues": item["trigger_cues"],
+                "diagnostic_goal": item["diagnostic_goal"],
+                "relevant_strategies": item["relevant_strategies"],
+                "expected_good_signals": item["expected_good_signals"],
+                "weak_or_misconception_signals": item[
+                    "weak_or_misconception_signals"
+                ],
+                "counterexample_index": (
+                    counterexample_indexes[item["counterexample_id"]]
+                    if item["counterexample_id"] is not None
+                    else None
+                ),
+                "applicable_levels": item["applicable_levels"],
+                "applicable_stages": item["applicable_stages"],
+                "sample_phrasings": item["sample_phrasings"],
+            }
+            for item in pack["common_followups"]
+        ],
+        "level_considerations": pack["level_considerations"],
+        "reference_reasoning": pack["reference_reasoning"],
+        "private_cases": private_cases,
+    }
 
 
 def _collection_outputs(
@@ -530,8 +654,8 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         ready = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
 
         assert ready.preparation.quality_outcome == "READY", ready.preparation.failure_category
-        assert CUSTOM_PREPARATION_POLICY_VERSION == "v9"
-        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v9"
+        assert CUSTOM_PREPARATION_POLICY_VERSION == "v10"
+        assert CUSTOM_QUALITY_GATE_VERSION == "stage9e.v10"
         assert ready.preparation.preparation_policy_version == CUSTOM_PREPARATION_POLICY_VERSION
         assert ready.preparation.quality_gate_version == CUSTOM_QUALITY_GATE_VERSION
         assert ready.problem_version is not None
@@ -637,10 +761,19 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
         }
         assert "problem_json" not in normalization_request.output_json_schema
         assert "private_cases_json" not in normalization_request.output_json_schema
-        assert set(provider.requests[1].output_json_schema["properties"]) == {
-            "pack_json",
+        pack_schema = provider.requests[1].output_json_schema
+        assert "pack_json" not in pack_schema["properties"]
+        assert {
+            "expected_approaches",
+            "alternative_approaches",
+            "primary_reference_solutions",
+            "concepts",
+            "invariants",
+            "counterexamples",
+            "common_followups",
             "private_cases",
-        }
+        }.issubset(pack_schema["properties"])
+        validate_strict_reasoning_schema(pack_schema)
         assert normalization_request.policy.version == CUSTOM_PREPARATION_POLICY_VERSION
         assert normalization_request.policy.configuration == {
             "quality_gate": CUSTOM_QUALITY_GATE_VERSION
@@ -662,6 +795,18 @@ async def test_count_pairs_language_signature_normalizes_to_ready_without_clarif
                     )
                 )
             )
+            assert ready.preparation.prepared_pack_version_id is not None
+            stored_pack = await session.get(
+                InterviewPackVersion,
+                ready.preparation.prepared_pack_version_id,
+            )
+        assert stored_pack is not None
+        stored_expected = cast(
+            list[dict[str, object]],
+            stored_pack.pack_json["expected_approaches"],
+        )
+        assert stored_expected[0]["approach_id"] == "expected_approach_1"
+        assert stored_expected[0]["summary"] == "Hash Map Frequency"
         assert len(invocations) == 2
         by_purpose = {invocation.purpose: invocation for invocation in invocations}
         normalization = by_purpose["custom_problem_normalization"]
@@ -1108,6 +1253,60 @@ async def test_invalid_pack_private_case_fails_without_another_strong_call(
         await engine.dispose()
 
 
+@pytest.mark.parametrize(
+    ("reference_kind", "expected_path"),
+    [
+        ("approach", "pack.invariants[0].approach_reference"),
+        ("counterexample", "pack.edge_cases[0].counterexample_index"),
+    ],
+)
+async def test_invalid_semantic_pack_index_fails_as_bounded_pack_artifact(
+    reference_kind: str,
+    expected_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user_id = await _candidate()
+    engine = build_engine()
+    maker = async_sessionmaker(engine, expire_on_commit=False)
+    semantic, pack = _count_pairs_outputs()
+    if reference_kind == "approach":
+        pack["invariants"][0]["approach_reference"] = {
+            "approach_kind": "EXPECTED",
+            "approach_index": 31,
+        }
+    else:
+        pack["edge_cases"][0]["counterexample_index"] = 31
+    provider = SequenceReasoningProvider([semantic, pack])
+    executor = PassingExecutor()
+    captured_logs = CapturingLogger()
+    monkeypatch.setattr(custom_module, "logger", captured_logs)
+    service = _service(maker, provider, executor)
+    try:
+        created = await service.create(
+            user_id=user_id,
+            problem_text=COUNT_PAIRS_PROBLEM,
+            idempotency_key=f"stage9e-invalid-{reference_kind}-index",
+        )
+        failed = await service.prepare(user_id=user_id, preparation_id=created.preparation.id)
+
+        assert failed.preparation.operational_status == "FAILED"
+        assert failed.preparation.quality_outcome is None
+        assert failed.preparation.failure_category == "PACK_ARTIFACT_INVALID"
+        assert custom_preparation_retryable(failed.preparation)
+        assert len(provider.requests) == 2
+        assert executor.requests == []
+        artifact_logs = [
+            fields
+            for event, fields in captured_logs.events
+            if event == "custom_problem_pack_artifact_invalid"
+        ]
+        assert len(artifact_logs) == 1
+        assert artifact_logs[0]["issue_codes"] == ["PACK_SCHEMA_INVALID"]
+        assert artifact_logs[0]["field_paths"] == [expected_path]
+    finally:
+        await engine.dispose()
+
+
 async def test_unknown_semantic_concept_fails_before_pack_without_recovery() -> None:
     user_id = await _candidate()
     engine = build_engine()
@@ -1475,11 +1674,9 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
     outputs = _outputs()
-    prepared_pack = json.loads(outputs[1]["pack_json"])
     leaked_by_language = {
-        item["language"]: item["source_code"]
-        for item in prepared_pack["reference_solutions"]
-        if item["approach_id"] == prepared_pack["expected_approaches"][0]["approach_id"]
+        language: reference["source_code"]
+        for language, reference in outputs[1]["primary_reference_solutions"].items()
     }
     service = _service(maker, SequenceReasoningProvider(outputs), PassingExecutor())
     try:
@@ -1522,7 +1719,7 @@ async def test_model_authored_reference_solutions_never_become_candidate_starter
         await engine.dispose()
 
 
-async def test_outdated_v8_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
+async def test_outdated_v9_failed_preparation_is_unchanged_and_returns_safe_conflict() -> None:
     user_id = await _candidate()
     engine = build_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
@@ -1533,13 +1730,13 @@ async def test_outdated_v8_failed_preparation_is_unchanged_and_returns_safe_conf
         created = await service.create(
             user_id=user_id,
             problem_text=COUNT_PAIRS_PROBLEM,
-            idempotency_key="stage9e-outdated-failed-v8",
+            idempotency_key="stage9e-outdated-failed-v9",
         )
         async with maker() as session, session.begin():
             preparation = await session.get(CustomProblemPreparation, created.preparation.id)
             assert preparation is not None
-            preparation.preparation_policy_version = "v8"
-            preparation.quality_gate_version = "stage9e.v8"
+            preparation.preparation_policy_version = "v9"
+            preparation.quality_gate_version = "stage9e.v9"
             preparation.operational_status = "FAILED"
             preparation.failure_category = "TIMEOUT"
             preparation.attempt_count = 2
@@ -1715,6 +1912,7 @@ async def test_ready_preparation_is_immutable_owner_scoped_and_launches_normal_r
         ("v6", "stage9e.v6"),
         ("v7", "stage9e.v7"),
         ("v8", "stage9e.v8"),
+        ("v9", "stage9e.v9"),
     ],
 )
 async def test_allowlisted_historical_ready_preparation_remains_launchable_after_revalidation(

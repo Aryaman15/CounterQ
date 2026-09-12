@@ -4,12 +4,16 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from pydantic import ValidationError
 
+from app.ai_gateway.structured_output import validate_strict_reasoning_schema
 from app.execution.harness import execution_request_for_problem
 from app.execution.provider import ExecutionRequest
 from app.problems.content import ProblemConceptDefinition, ProblemContent, load_curated_content
 from app.problems.custom_pack_validation import (
     PackArtifactValidationError,
+    PreparedApproachReference,
+    PreparedPackOutput,
     PreparedPrivateCase,
     validate_prepared_pack_artifacts,
 )
@@ -336,17 +340,176 @@ def _private_case(arguments: list[dict[str, object]] | None = None) -> PreparedP
     )
 
 
-def test_pack_phase_validates_and_converts_typed_private_cases() -> None:
+def _approach(summary: str, concept_key: str) -> dict[str, object]:
+    return {
+        "summary": summary,
+        "concept_keys": [concept_key],
+        "applicability": "Use for the supplied Count Pairs constraints.",
+        "assumptions": [],
+        "key_invariants": ["Seen counts cover only prior values."],
+        "time_complexity": "O(n)",
+        "space_complexity": "O(n)",
+        "tradeoffs": [],
+        "common_implementation_variants": [],
+        "common_failure_modes": [],
+    }
+
+
+def _technical(
+    concept_key: str,
+    *,
+    goal: str,
+    approach_kind: str | None = None,
+    approach_index: int = 0,
+    counterexample_index: int | None = None,
+) -> dict[str, object]:
+    return {
+        "concept_keys": [concept_key],
+        "diagnostic_goal": goal,
+        "counterexample_index": counterexample_index,
+        "approach_reference": (
+            {
+                "approach_kind": approach_kind,
+                "approach_index": approach_index,
+            }
+            if approach_kind is not None
+            else None
+        ),
+    }
+
+
+def _pack_output() -> PreparedPackOutput:
+    concept_key = _concepts()[0].canonical_key
+    duplicate_invariant = _technical(
+        concept_key,
+        goal="Explain why every pair is counted exactly once.",
+        approach_kind="EXPECTED",
+    )
+    return PreparedPackOutput.model_validate(
+        {
+            "expected_approaches": [
+                _approach("Hash Map Frequency", concept_key),
+                _approach("Sort and scan", concept_key),
+            ],
+            "alternative_approaches": [
+                _approach("Brute force", concept_key),
+                _approach("Binary search", concept_key),
+            ],
+            "primary_reference_solutions": {
+                "cpp": {"source_code": "class Solution {};", "implementation_notes": None},
+                "python": {"source_code": "class Solution: pass", "implementation_notes": None},
+                "java": {"source_code": "class Solution {}", "implementation_notes": None},
+            },
+            "concepts": [concept_key],
+            "invariants": [duplicate_invariant, duplicate_invariant],
+            "complexity_expectations": [
+                _technical(
+                    concept_key,
+                    goal="Defend the sorting complexity.",
+                    approach_kind="EXPECTED",
+                    approach_index=1,
+                )
+            ],
+            "common_misconceptions": [
+                _technical(
+                    concept_key,
+                    goal="Contrast the brute-force alternative.",
+                    approach_kind="ALTERNATIVE",
+                )
+            ],
+            "failure_modes": [],
+            "edge_cases": [
+                _technical(
+                    concept_key,
+                    goal="Handle repeated equal values.",
+                    counterexample_index=0,
+                )
+            ],
+            "counterexamples": [
+                {
+                    "input": "nums = [1, 1, 1], target = 2",
+                    "purpose": "Expose multiplicity mistakes.",
+                }
+            ],
+            "constraint_mutations": [],
+            "probe_opportunities": [
+                {
+                    **_technical(
+                        concept_key,
+                        goal="Prove the one-pass invariant.",
+                        approach_kind="EXPECTED",
+                    ),
+                    "relevant_strategies": ["PROVE"],
+                }
+            ],
+            "common_followups": [
+                {
+                    "target_concepts": [concept_key],
+                    "approach_reference": {
+                        "approach_kind": "ALTERNATIVE",
+                        "approach_index": 1,
+                    },
+                    "trigger_cues": ["Candidate proposes sorting."],
+                    "diagnostic_goal": "Compare alternatives.",
+                    "relevant_strategies": ["TRADE_OFF"],
+                    "expected_good_signals": ["Explains time-space tradeoff."],
+                    "weak_or_misconception_signals": [],
+                    "counterexample_index": 0,
+                    "applicable_levels": ["NEW_GRAD"],
+                    "applicable_stages": ["APPROACH_DEFENSE"],
+                    "sample_phrasings": ["What changes if memory is constrained?"],
+                }
+            ],
+            "level_considerations": [
+                {"level": "NEW_GRAD", "guidance": "Expect complexity justification."}
+            ],
+            "reference_reasoning": "Count complements already observed in the prefix.",
+            "private_cases": [_private_case().model_dump(mode="json")],
+        }
+    )
+
+
+def test_software_assembles_deterministic_pack_ids_and_references() -> None:
     problem = _problem()
-    entry = next(item for item in load_curated_content() if item.problem.slug == "two-sum")
+    output = _pack_output()
     pack, private_cases = validate_prepared_pack_artifacts(
-        pack_json=entry.interview_pack.model_dump_json(),
-        private_cases=[_private_case()],
+        semantic_pack=output,
+        private_cases=output.private_cases,
         problem=problem,
         active_concept_keys={item.canonical_key for item in problem.problem_concepts},
     )
 
     assert pack.schema_version == "interview-pack.v1"
+    assert pack.version == "v1"
+    assert pack.review_status == "REVIEWED"
+    assert [item.approach_id for item in pack.expected_approaches] == [
+        "expected_approach_1",
+        "expected_approach_2",
+    ]
+    assert [item.approach_id for item in pack.alternative_approaches] == [
+        "alternative_approach_1",
+        "alternative_approach_2",
+    ]
+    assert {item.approach_id for item in pack.reference_solutions} == {
+        "expected_approach_1"
+    }
+    assert {item.language for item in pack.reference_solutions} == {"cpp", "python", "java"}
+    assert [item.id for item in pack.invariants] == ["invariant_1", "invariant_2"]
+    assert pack.invariants[0].diagnostic_goal == pack.invariants[1].diagnostic_goal
+    assert pack.complexity_expectations[0].id == "complexity_1"
+    assert pack.complexity_expectations[0].approach_id == "expected_approach_2"
+    assert pack.common_misconceptions[0].id == "misconception_1"
+    assert pack.common_misconceptions[0].approach_id == "alternative_approach_1"
+    assert pack.edge_cases[0].id == "edge_case_1"
+    assert pack.edge_cases[0].counterexample_id == "counterexample_1"
+    assert pack.probe_opportunities[0].id == "probe_1"
+    assert pack.counterexamples[0].id == "counterexample_1"
+    assert pack.common_followups[0].id == "followup_1"
+    assert pack.common_followups[0].target_approach_id == "alternative_approach_2"
+    assert pack.common_followups[0].counterexample_id == "counterexample_1"
+    assert "Hash Map Frequency" not in {
+        item.approach_id for item in pack.expected_approaches
+    }
     assert [item.model_dump(mode="json") for item in private_cases] == [
         {
             "arguments": {"nums": [1, 1, 1, 1], "target": 2},
@@ -355,11 +518,57 @@ def test_pack_phase_validates_and_converts_typed_private_cases() -> None:
     ]
 
 
+def test_pack_output_is_a_provider_strict_semantic_schema_without_storage_ids() -> None:
+    schema = PreparedPackOutput.model_json_schema()
+    validate_strict_reasoning_schema(schema)
+    serialized = str(schema)
+
+    assert "pack_json" not in schema["properties"]
+    assert "expected_approaches" in schema["properties"]
+    assert "primary_reference_solutions" in schema["properties"]
+    assert "private_cases" in schema["properties"]
+    assert "'approach_id'" not in serialized
+    assert "'counterexample_id'" not in serialized
+    assert "'target_approach_id'" not in serialized
+    assert "'review_status'" not in serialized
+    assert "'schema_version'" not in serialized
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("strategy", "MODEL_INVENTED_STRATEGY"),
+        ("level", "STAFF"),
+        ("stage", "SYSTEM_DESIGN"),
+        ("language", "ruby"),
+    ],
+)
+def test_pack_semantic_enums_are_rejected_by_the_typed_output_boundary(
+    field: str,
+    invalid_value: str,
+) -> None:
+    payload = _pack_output().model_dump(mode="json")
+    if field == "strategy":
+        payload["probe_opportunities"][0]["relevant_strategies"] = [invalid_value]
+    elif field == "level":
+        payload["common_followups"][0]["applicable_levels"] = [invalid_value]
+    elif field == "stage":
+        payload["common_followups"][0]["applicable_stages"] = [invalid_value]
+    else:
+        payload["primary_reference_solutions"][invalid_value] = payload[
+            "primary_reference_solutions"
+        ]["python"]
+
+    with pytest.raises(ValidationError):
+        PreparedPackOutput.model_validate(payload)
+
+
 @pytest.mark.parametrize(
     ("mutation", "expected_code"),
     [
-        ("bad_json", "PACK_JSON_INVALID"),
-        ("bad_schema", "PACK_SCHEMA_INVALID"),
+        ("invalid_approach_index", "PACK_SCHEMA_INVALID"),
+        ("invalid_counterexample_index", "PACK_SCHEMA_INVALID"),
+        ("bad_nested_concept", "PACK_SCHEMA_INVALID"),
         ("bad_concept", "PACK_CONCEPT_INVALID"),
         ("argument_mismatch", "PRIVATE_CASE_ARGUMENT_MISMATCH"),
         ("argument_type", "PRIVATE_CASE_VALUE_TYPE_INVALID"),
@@ -370,15 +579,18 @@ def test_pack_and_private_failures_have_bounded_diagnostics(
     mutation: str, expected_code: str
 ) -> None:
     problem = _problem()
-    entry = next(item for item in load_curated_content() if item.problem.slug == "two-sum")
-    pack: object = entry.interview_pack.model_dump(mode="json")
+    output = _pack_output().model_copy(deep=True)
     private = _private_case()
     active = {item.canonical_key for item in problem.problem_concepts}
-    if mutation == "bad_json":
-        pack = "{"
-    elif mutation == "bad_schema":
-        assert isinstance(pack, dict)
-        del pack["expected_approaches"]
+    if mutation == "invalid_approach_index":
+        output.invariants[0].approach_reference = PreparedApproachReference(
+            approach_kind="EXPECTED",
+            approach_index=3,
+        )
+    elif mutation == "invalid_counterexample_index":
+        output.edge_cases[0].counterexample_index = 1
+    elif mutation == "bad_nested_concept":
+        output.expected_approaches[0].concept_keys = ["not_in_pack"]
     elif mutation == "bad_concept":
         active = set()
     elif mutation == "argument_mismatch":
@@ -400,7 +612,7 @@ def test_pack_and_private_failures_have_bounded_diagnostics(
 
     with pytest.raises(PackArtifactValidationError) as caught:
         validate_prepared_pack_artifacts(
-            pack_json=pack if isinstance(pack, str) else __import__("json").dumps(pack),
+            semantic_pack=output,
             private_cases=[private],
             problem=problem,
             active_concept_keys=active,
